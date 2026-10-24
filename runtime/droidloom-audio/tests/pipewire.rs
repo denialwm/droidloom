@@ -408,6 +408,50 @@ fn playback_without_a_link_keeps_a_clock() {
 }
 
 #[test]
+fn stopped_playback_releases_the_dummy_clock() {
+    let pipewire = PipeWire::new();
+    let (mut playback, worker) = pipewire.connect(
+        &pipewire.directory.path().join("idle-clock.sock"),
+        Direction::Playback,
+    );
+    let driver_runs = |running: bool| {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            let state = pipewire
+                .ports()
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|object| object["info"]["props"]["node.name"] == "Test-Driver")
+                .unwrap()["info"]["state"]
+                .clone();
+            if (state == "running") == running {
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "Test-Driver {state}, expected running: {running}"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+    };
+    for stop in [STANDBY, PAUSE] {
+        playback.control(START).unwrap();
+        driver_runs(true);
+        let region = playback.acquire(1024).unwrap();
+        // SAFETY: the playback slot is exclusively held until submit.
+        unsafe {
+            std::slice::from_raw_parts_mut(region.pointer, region.frames as usize * 2).fill(0);
+        }
+        playback.submit(region.frames).unwrap();
+        playback.control(stop).unwrap();
+        driver_runs(false);
+    }
+    drop(playback);
+    let _ = worker.join().unwrap();
+}
+
+#[test]
 fn playback_without_devices_survives_session_policy() {
     let mut pipewire = PipeWire::new();
     pipewire.start_policy_without_sink();

@@ -165,7 +165,8 @@ int dl_pw_open(uint32_t direction, uint32_t rate, uint32_t channels, uint32_t by
         "adapter.auto-port-config", "{ mode = dsp }",
         PW_KEY_NODE_LATENCY, "256/48000", PW_KEY_NODE_PAUSE_ON_IDLE, "true", NULL);
     // Playback must keep its clock when the host has no output device. Let
-    // PipeWire schedule it on the dummy driver until a real sink is linked.
+    // PipeWire schedule it on the dummy driver until a real sink is linked;
+    // dl_pw_control() releases that clock while Android pauses or stands by.
     // Capture remains linked-device driven and does not synthesize microphone data.
     if (direction == 1) {
         pw_properties_set(props, PW_KEY_NODE_ALWAYS_PROCESS, "true");
@@ -361,6 +362,20 @@ int dl_pw_submit(struct dl_pw *p, uint32_t slot, uint32_t frames) {
     return result;
 }
 
+// PipeWire keeps a driver running for an always-process node even while the
+// node is inactive, so a lingering stream in standby would tick the dummy
+// driver forever. Change the property before pw_stream_set_active(), which
+// recalculates the graph.
+static int set_active(struct dl_pw *p, bool active) {
+    if (p->direction == 1) {
+        struct spa_dict_item item = SPA_DICT_ITEM_INIT(PW_KEY_NODE_ALWAYS_PROCESS,
+            active ? "true" : "false");
+        int result = pw_stream_update_properties(p->stream, &SPA_DICT_INIT(&item, 1));
+        if (result < 0) return result;
+    }
+    return pw_stream_set_active(p->stream, active);
+}
+
 int dl_pw_control(struct dl_pw *p, uint64_t command) {
     pw_thread_loop_lock(p->loop);
     int result = p->error ? -p->error : 0;
@@ -391,8 +406,8 @@ int dl_pw_control(struct dl_pw *p, uint64_t command) {
         }
     }
     if (!result) switch (command) {
-        case 1: result = pw_stream_set_active(p->stream, true); break;
-        case 2: result = pw_stream_set_active(p->stream, false); break;
+        case 1: result = set_active(p, true); break;
+        case 2: result = set_active(p, false); break;
         case 3: result = pw_stream_flush(p->stream, false); break;
         case 4: {
             p->drained = false;
@@ -404,7 +419,7 @@ int dl_pw_control(struct dl_pw *p, uint64_t command) {
                 if (pw_thread_loop_timed_wait_full(p->loop, &deadline) < 0) result = -ETIMEDOUT;
             if (p->error) result = -p->error;
         } break;
-        case 5: result = pw_stream_set_active(p->stream, false);
+        case 5: result = set_active(p, false);
             if (!result) result = pw_stream_flush(p->stream, false);
             break;
         default: result = -EINVAL;
