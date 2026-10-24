@@ -201,6 +201,16 @@ pub enum LinuxOperation {
         /// Cell permissions; host inode permissions remain unchanged.
         mode: u32,
     },
+    /// Recreate the host's media DMA heap with a private inode when the host
+    /// has one. Without it the cell starts and media decoding fails.
+    CreateOptionalMediaDevice {
+        /// Host device whose major/minor are preserved when it validates.
+        source: PathBuf,
+        /// Cell-private node path.
+        target: PathBuf,
+        /// Cell permissions; host inode permissions remain unchanged.
+        mode: u32,
+    },
     /// Add one private Binder context through binder-control.
     AddBinderDevice {
         /// Exact permitted Binder name.
@@ -556,9 +566,9 @@ fn mount_operations(spec: &CellSpec) -> Vec<LinuxOperation> {
         target: "/dev/dri/renderD128".into(),
         mode: 0o666,
     });
+    let auxiliary = spec.graphics_backend.auxiliary_devices();
     operations.extend(
-        spec.graphics_backend
-            .auxiliary_devices()
+        auxiliary
             .iter()
             .map(|path| LinuxOperation::CreateGraphicsDevice {
                 source: path.into(),
@@ -566,6 +576,13 @@ fn mount_operations(spec: &CellSpec) -> Vec<LinuxOperation> {
                 mode: 0o666,
             }),
     );
+    if !auxiliary.contains(&crate::MEDIA_DMA_HEAP) {
+        operations.push(LinuxOperation::CreateOptionalMediaDevice {
+            source: crate::MEDIA_DMA_HEAP.into(),
+            target: crate::MEDIA_DMA_HEAP.into(),
+            mode: 0o666,
+        });
+    }
     operations.push(mount(
         MountKind::FileBind,
         Some(spec.denial_socket.clone()),
@@ -1005,6 +1022,22 @@ mod tests {
             })
             .collect::<Vec<_>>();
         assert!(basic_devices.contains(&(Path::new("/dev/fuse"), 10, 229, 0o666)));
+    }
+
+    #[test]
+    fn media_heap_is_optional_unless_the_backend_allocates_from_it() {
+        let media_device = |spec: &CellSpec| {
+            build_linux_plan(spec)
+                .unwrap()
+                .construction
+                .iter()
+                .flat_map(|step| &step.operations)
+                .any(|op| matches!(op, LinuxOperation::CreateOptionalMediaDevice { .. }))
+        };
+        let mut spec = spec();
+        assert!(media_device(&spec));
+        spec.graphics_backend = crate::GraphicsBackend::DrmDmaHeap;
+        assert!(!media_device(&spec));
     }
 
     #[test]

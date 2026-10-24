@@ -62,6 +62,9 @@ for Android children. It does not rename the display driver or grant KMS access.
 Explicit `drm_dma_heap` selection exposes only `/dev/dma_heap/system` alongside
 the selected render node and uses the same linear image allocator. Mesa retains
 native driver selection; this supports Panthor hosts without forcing Zink.
+With `drm`, the cell gets `/dev/dma_heap/system` for Codec2 media buffers when
+the host has it, verified the same way. A host without it still starts the
+cell; apps then cannot decode audio or video.
 
 The image backend preserves minigbm's native-handle ABI, AIDL allocator and
 stable-C mapper. RGB, HDR, YUV and blob layouts share DMA-BUFs directly with

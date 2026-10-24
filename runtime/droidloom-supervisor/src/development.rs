@@ -1872,13 +1872,15 @@ fn create_private_dev(spec: &CellSpec, root: &Path) -> Result<(), DevelopmentErr
             .map_err(|source| io_error("create render-node minor compatibility alias", source))?;
     }
 
-    for path in spec.graphics_backend.auxiliary_devices() {
-        let path = Path::new(path);
-        let (major, minor) = auxiliary_graphics_device_numbers(path)?;
-        let target = root.join(path.strip_prefix("/").expect("fixed absolute device path"));
-        fs::create_dir_all(target.parent().expect("device parent"))
-            .map_err(|source| io_error("create private graphics device directory", source))?;
-        make_device_node(&target, "c", major, minor, "666")?;
+    let auxiliary = spec.graphics_backend.auxiliary_devices();
+    for path in auxiliary {
+        create_auxiliary_device(root, Path::new(path))?;
+    }
+    if !auxiliary.contains(&crate::MEDIA_DMA_HEAP) {
+        // Media decoding needs the heap, the cell does not: start without it.
+        if let Err(error) = create_auxiliary_device(root, Path::new(crate::MEDIA_DMA_HEAP)) {
+            eprintln!("droidloom-supervisor: no media DMA heap, apps cannot decode media: {error}");
+        }
     }
 
     let denial_target = root.join(ANDROID_DENIAL_SOCKET);
@@ -1931,6 +1933,14 @@ fn create_private_dev(spec: &CellSpec, root: &Path) -> Result<(), DevelopmentErr
         }
     }
     Ok(())
+}
+
+fn create_auxiliary_device(root: &Path, path: &Path) -> Result<(), DevelopmentError> {
+    let (major, minor) = auxiliary_graphics_device_numbers(path)?;
+    let target = root.join(path.strip_prefix("/").expect("fixed absolute device path"));
+    fs::create_dir_all(target.parent().expect("device parent"))
+        .map_err(|source| io_error("create private graphics device directory", source))?;
+    make_device_node(&target, "c", major, minor, "666")
 }
 
 fn auxiliary_graphics_device_numbers(path: &Path) -> Result<(u32, u32), DevelopmentError> {

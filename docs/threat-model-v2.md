@@ -51,7 +51,8 @@ and `droidloomd` remain trusted computing base.
    graphics backend's bounded auxiliary devices. `kgsl_dma_heap` adds only
    `/dev/kgsl-3d0` and `/dev/dma_heap/system`, while `drm_dma_heap` adds only
    `/dev/dma_heap/system`; their drivers become part of the
-   trusted kernel interface. Validate device identities and use private inodes
+   trusted kernel interface. Other backends get `/dev/dma_heap/system` for
+   Codec2 media buffers only when the host has it. Validate device identities and use private inodes
    so cell permissions cannot alter host nodes. DRM card/KMS and physical input
    nodes are forbidden.
 5. Put Android networking behind a private veth and host-owned policy. Android

@@ -132,6 +132,11 @@ pub enum GraphicsBackend {
     KgslDmaHeap,
 }
 
+/// System DMA heap that Codec2 allocates its linear media buffers from. Every
+/// cell gets it when the host has it; without it the cell still starts, but
+/// apps cannot decode audio or video.
+pub const MEDIA_DMA_HEAP: &str = "/dev/dma_heap/system";
+
 impl GraphicsBackend {
     /// Additional bounded device paths needed by this pairing.
     pub fn auxiliary_devices(self) -> &'static [&'static str] {

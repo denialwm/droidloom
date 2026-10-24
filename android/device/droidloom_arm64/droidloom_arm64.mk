@@ -88,8 +88,11 @@ PRODUCT_COPY_FILES += \
 # 1 ms, which Composer's vsync relies on; apps wake 9.33 ms before SF instead
 # of 15.67 ms, and 15.67 ms during early (transition) scheduling.
 # Android's stream volumes start at full scale; the host mixer owns loudness.
+# Codec2 clients use the AIDL software store: the cell has no hwservicemanager,
+# so the default HIDL selection leaves apps with the in-process audio codecs.
 PRODUCT_VENDOR_PROPERTIES += \
     debug.hwui.use_hint_manager=true \
+    media.c2.hal.selection=aidl \
     debug.sf.use_phase_offsets_as_durations=1 \
     debug.sf.late.app.duration=9333333 \
     debug.sf.early.app.duration=15666666 \

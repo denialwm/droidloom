@@ -76,8 +76,11 @@ PRODUCT_COPY_FILES += \
 # HWUI reports each frame's work to a hint session, which Droidloom's power
 # service turns into utilization floors for the UI thread and RenderThread.
 # Android's stream volumes start at full scale; the host mixer owns loudness.
+# Codec2 clients use the AIDL software store: the cell has no hwservicemanager,
+# so the default HIDL selection leaves apps with the in-process audio codecs.
 PRODUCT_VENDOR_PROPERTIES += \
     debug.hwui.use_hint_manager=true \
+    media.c2.hal.selection=aidl \
     persist.audio.normal_playback_period_ms=5 \
     ro.config.media_vol_default=15 \
     ro.config.vc_call_vol_default=15 \
