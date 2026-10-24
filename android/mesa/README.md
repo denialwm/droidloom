@@ -60,6 +60,11 @@ Runtime patches under `android/aosp-patches/`:
   collect with its sources, an array element keeps its array, element and
   mask. The copy used to name array 0, element 0: a wrong read, or a crash in
   DCE when array 0 was already gone (Wuthering Waves on the Pad 4).
+- `0019-mesa-turnip-a722-no-bv.patch`: the A722 has no BV pipe, so Turnip
+  registers no BV bin preamble and keeps concurrent binning off on it. The BV
+  amble replaced the BR one, which restores the CCU's GMEM state after a
+  preemption; resumed render passes then wrote tiles to address 0. Same
+  change as the Moto's host Mesa (Phonewave `mesa-a722` 0002).
 
 Validate a new host using real Android allocations, raw DMA-BUF and native
 Android EGL imports, GPU rendering/readback, native fences and synchronized CPU

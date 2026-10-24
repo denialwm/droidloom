@@ -1,0 +1,130 @@
+turnip: no BV pipe on the Adreno 722
+
+The A722 has no BV pipe for concurrent binning (the downstream driver
+treats gen7_17_0 as a no-CB part). Registering the BV bin preamble on it
+leaves the context without the BR one: after an L1 preemption with
+skipsaverestore the context resumed with the CCU still in the other
+context's mode, and GMEM writes went to system memory at their GMEM
+offsets, CCU write faults at iova 0x0-0x1240 and corrupted tiles.
+
+Add a has_bv property, set for every a7xx and a8xx except the A722, and use
+it for the BV bin preamble and for concurrent binning.
+
+--- a/src/freedreno/common/freedreno_dev_info.h
++++ b/src/freedreno/common/freedreno_dev_info.h
+@@ -113,6 +113,9 @@ struct fd_dev_info {
+ 
+       /* info for setting RB_CCU_CNTL */
+       bool concurrent_resolve;
++
++      /* Whether the CP has the BV pipe used for concurrent binning (a7xx+). */
++      bool has_bv;
+       bool has_z24uint_s8uint;
+ 
+       /* on a650, vertex shader <-> tess control io uses LDL/STL */
+--- a/src/freedreno/common/freedreno_devices.py
++++ b/src/freedreno/common/freedreno_devices.py
+@@ -777,6 +777,7 @@ add_gpus([
+ 
+ # Based on a6xx_base + a6xx_gen4
+ a7xx_base = GPUProps(
++        has_bv = True,
+         has_gmem_fast_clear = True,
+         has_hw_multiview = True,
+         has_fs_tex_prefetch = True,
+@@ -997,7 +998,7 @@ add_gpus([
+         GPUId(chip_id=0xffff43020100, name="Adreno (TM) 722"),
+     ], A6xxGPUInfo(
+         CHIP.A7XX,
+-        [a7xx_base, a7xx_gen1],
++        [a7xx_base, a7xx_gen1, GPUProps(has_bv = False)],
+         num_ccu = 1,
+         tile_align_w = 64,
+         tile_align_h = 16,
+--- a/src/freedreno/vulkan/tu_cmd_buffer.cc
++++ b/src/freedreno/vulkan/tu_cmd_buffer.cc
+@@ -441,7 +441,7 @@ tu_emit_cache_flush(struct tu_cmd_buffer *cmd_buffer)
+ 
+    if ((flushes & TU_CMD_FLAG_WAIT_FOR_BR) && CHIP >= A7XX &&
+        !(cmd_buffer->state.pass && cmd_buffer->state.renderpass_cb_disabled) &&
+-       cmd_buffer->device->instance->allow_concurrent_binning) {
++       tu_device_allows_concurrent_binning(cmd_buffer->device)) {
+       trace_start_concurrent_binning_barrier(&cmd_buffer->trace, cs, cmd_buffer);
+ 
+       /* Wait-for-BR when repeated a lot of times per frame can add up
+@@ -2309,7 +2309,7 @@ tu_init_bin_preamble(struct tu_device *device)
+ 
+    device->bin_preamble_entry = tu_cs_end_sub_stream(&device->sub_cs, &preamble_cs);
+ 
+-   if (device->physical_device->info->chip >= 7) {
++   if (device->physical_device->info->props.has_bv) {
+       result = tu_cs_begin_sub_stream(&device->sub_cs, 256, &preamble_cs);
+       if (result != VK_SUCCESS)
+          return vk_startup_errorf(device->instance, result, "bin restore");
+@@ -2448,16 +2448,21 @@ tu_init_hw(struct tu_cmd_buffer *cmd, struct tu_cs *cs)
+                   CP_SET_AMBLE_2_TYPE(BIN_PREAMBLE_AMBLE_TYPE));
+ 
+    if (CHIP >= A7XX) {
+-      tu7_thread_control(cs, CP_SET_THREAD_BV);
++      /* Without BV, the BV packets reach BR and this amble would replace
++       * the BR bin preamble, which restores the CCU state for GMEM.
++       */
++      if (cmd->device->physical_device->info->props.has_bv) {
++         tu7_thread_control(cs, CP_SET_THREAD_BV);
+ 
+-      tu_cs_emit_pkt7(cs, CP_SET_AMBLE, 3);
+-      tu_cs_emit_qw(cs, cmd->device->bin_preamble_bv_entry.bo->iova +
+-                        cmd->device->bin_preamble_bv_entry.offset);
+-      tu_cs_emit(cs, CP_SET_AMBLE_2_DWORDS(cmd->device->bin_preamble_bv_entry.size /
+-                                           sizeof(uint32_t)) |
+-                     CP_SET_AMBLE_2_TYPE(BIN_PREAMBLE_AMBLE_TYPE));
++         tu_cs_emit_pkt7(cs, CP_SET_AMBLE, 3);
++         tu_cs_emit_qw(cs, cmd->device->bin_preamble_bv_entry.bo->iova +
++                           cmd->device->bin_preamble_bv_entry.offset);
++         tu_cs_emit(cs, CP_SET_AMBLE_2_DWORDS(cmd->device->bin_preamble_bv_entry.size /
++                                              sizeof(uint32_t)) |
++                        CP_SET_AMBLE_2_TYPE(BIN_PREAMBLE_AMBLE_TYPE));
+ 
+-      tu7_thread_control(cs, CP_SET_THREAD_BOTH);
++         tu7_thread_control(cs, CP_SET_THREAD_BOTH);
++      }
+ 
+       tu7_set_pred_mask(cs, (1u << TU_PREDICATE_VTX_STATS_RUNNING) |
+                             (1u << TU_PREDICATE_VTX_STATS_NOT_RUNNING),
+@@ -3057,7 +3062,7 @@ tu7_emit_concurrent_binning_start(struct tu_cmd_buffer *cmd,
+        tu7_cb_disable_reason(
+           (!cmd->state.lrz.fast_clear && cmd->state.lrz.image_view), cmd,
+           "LRZ fast clear disabled") ||
+-       tu7_cb_disable_reason(!cmd->device->instance->allow_concurrent_binning, cmd,
++       tu7_cb_disable_reason(!tu_device_allows_concurrent_binning(cmd->device), cmd,
+                              "globally disabled")) {
+      tu_cs_emit_pkt7(cs, CP_THREAD_CONTROL, 1);
+      tu_cs_emit(cs, CP_THREAD_CONTROL_0_THREAD(CP_SET_THREAD_BR) |
+--- a/src/freedreno/vulkan/tu_device.h
++++ b/src/freedreno/vulkan/tu_device.h
+@@ -656,6 +656,14 @@ tu_physical_device_get_global_priority_properties(const struct tu_physical_devic
+ uint64_t
+ tu_device_ticks_to_ns(struct tu_device *dev, uint64_t ts);
+ 
++/* Concurrent binning runs the binning pass on BV, which not every a7xx has. */
++static inline bool
++tu_device_allows_concurrent_binning(const struct tu_device *dev)
++{
++   return dev->physical_device->info->props.has_bv &&
++          dev->instance->allow_concurrent_binning;
++}
++
+ static inline struct tu_bo *
+ tu_device_lookup_bo(struct tu_device *device, uint32_t handle)
+ {
+--- a/src/freedreno/vulkan/tu_queue.cc
++++ b/src/freedreno/vulkan/tu_queue.cc
+@@ -182,7 +182,7 @@ resolve_vis_stream_patchpoints(struct tu_queue *queue,
+     * streams and therefore should be avoided.
+     */
+    uint32_t min_vis_stream_count =
+-      (!dev->instance->allow_concurrent_binning || dev->physical_device->info->chip < 7) ?
++      !tu_device_allows_concurrent_binning(dev) ?
+       1 : MIN2(MAX2(rp_count, 1), TU_MAX_VIS_STREAMS);
+    uint32_t vis_stream_count;
+ 
