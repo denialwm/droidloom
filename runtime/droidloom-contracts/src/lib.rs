@@ -5,6 +5,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod applications;
 pub mod gapps;
 
 use std::collections::BTreeSet;

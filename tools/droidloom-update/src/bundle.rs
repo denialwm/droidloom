@@ -137,8 +137,8 @@ fn compatibility(root: &Path) -> Result<(String, u16)> {
         return fail("SystemUI.apk lacks the clipboard adapter");
     }
     if !systemui
-        .windows(b"DROIDLOOM_NOTIFICATIONS_ABI=2;".len())
-        .any(|w| w == b"DROIDLOOM_NOTIFICATIONS_ABI=2;")
+        .windows(b"DROIDLOOM_NOTIFICATIONS_ABI=3;".len())
+        .any(|w| w == b"DROIDLOOM_NOTIFICATIONS_ABI=3;")
     {
         return fail("SystemUI.apk lacks the notification adapter");
     }
@@ -195,7 +195,7 @@ fn compatibility(root: &Path) -> Result<(String, u16)> {
             return fail(format!("{name} lacks direct framework control ABI 1"));
         }
     }
-    let notifications_abi = b"DROIDLOOM_NOTIFICATIONS_ABI=2;";
+    let notifications_abi = b"DROIDLOOM_NOTIFICATIONS_ABI=3;";
     if !presenter
         .windows(notifications_abi.len())
         .any(|w| w == notifications_abi)
@@ -412,7 +412,7 @@ mod artifact_tests {
         elf[4] = 2;
         elf[5] = 1;
         elf[18] = 62;
-        elf.extend(format!("DROIDLOOM_FRAMEWORK_CONTROL_ABI=1;DROIDLOOM_NOTIFICATIONS_ABI=2;DROIDLOOM_INPUT_ABI={composer};DROIDLOOM_TASK_BACKEND_ABI=2;DROIDLOOM_DIRECT_INPUT_ABI=1;DROIDLOOM_NATIVE_INPUT_ABI=2;DROIDLOOM_HOST_CHANNELS_ABI=1;").bytes());
+        elf.extend(format!("DROIDLOOM_FRAMEWORK_CONTROL_ABI=1;DROIDLOOM_NOTIFICATIONS_ABI=3;DROIDLOOM_INPUT_ABI={composer};DROIDLOOM_TASK_BACKEND_ABI=2;DROIDLOOM_DIRECT_INPUT_ABI=1;DROIDLOOM_NATIVE_INPUT_ABI=2;DROIDLOOM_HOST_CHANNELS_ABI=1;").bytes());
         write(&root.join("usr/bin/droidloom-wayland"), &elf).unwrap();
         write(&root.join("usr/lib/droidloom/runtime/bin/android.hardware.graphics.composer3-service.droidloom"), &elf).unwrap();
         elf.extend(format!("DROIDLOOM_WINDOW_POLICY_ABI=1;DROIDLOOM_VULKAN_CAPABILITIES_ABI=2;DROIDLOOM_TASK_BACKEND_ABI=2;DROIDLOOM_NATIVE_INPUT_ABI=2;DROIDLOOM_INPUT_ABI={java};").bytes());
@@ -430,7 +430,7 @@ mod artifact_tests {
         }
         let d = tempfile::tempdir().unwrap();
         let payload = format!(
-            "DROIDLOOM_FRAMEWORK_CONTROL_ABI=1;DROIDLOOM_INPUT_ABI={java};DROIDLOOM_SYSTEMUI_ABI=1;DROIDLOOM_CLIPBOARD_ABI=1;DROIDLOOM_HOST_CHANNELS_ABI=1;DROIDLOOM_NOTIFICATIONS_ABI=2;DROIDLOOM_WINDOW_POLICY_ABI=1;DROIDLOOM_VULKAN_CAPABILITIES_ABI=2;DROIDLOOM_TASK_BACKEND_ABI=2;DROIDLOOM_NATIVE_INPUT_ABI=2;Lcom/android/server/wm/DroidloomApplicationCatalog;Lcom/android/droidloom/home/HomeActivity;ro.vendor.droidloom.surfaceflinger_tasks"
+            "DROIDLOOM_FRAMEWORK_CONTROL_ABI=1;DROIDLOOM_INPUT_ABI={java};DROIDLOOM_SYSTEMUI_ABI=1;DROIDLOOM_CLIPBOARD_ABI=1;DROIDLOOM_HOST_CHANNELS_ABI=1;DROIDLOOM_NOTIFICATIONS_ABI=3;DROIDLOOM_WINDOW_POLICY_ABI=1;DROIDLOOM_VULKAN_CAPABILITIES_ABI=2;DROIDLOOM_TASK_BACKEND_ABI=2;DROIDLOOM_NATIVE_INPUT_ABI=2;Lcom/android/server/wm/DroidloomApplicationCatalog;Lcom/android/droidloom/home/HomeActivity;ro.vendor.droidloom.surfaceflinger_tasks"
         );
         write(
             &d.path().join("classes.dex"),

@@ -90,7 +90,17 @@ fn note(version: &str) -> Note {
         urgency: 1,
         ongoing: false,
         clearable: true,
-        icon: vec![127; 48 * 48 * 4],
+        icon: "7f".repeat(48 * 48 * 4),
+        alert: true,
+        group: String::new(),
+        summary: false,
+        when: 1_700_000_000_000,
+        progress: -1,
+        category: String::new(),
+        user: 0,
+        component: String::new(),
+        large_icon: String::new(),
+        messages: vec![],
     }
 }
 async fn frame(socket: &Async<UnixStream>, value: serde_json::Value) {
@@ -172,13 +182,14 @@ fn dbus_and_android_socket_lifecycle() {
             .await
             .unwrap();
         let state = dir.path().join("state");
-        let bridge = serve(&listener, &state, conn, unsafe { libc::getuid() });
+        let grants = HostGrants::default();
+        let bridge = serve(&listener, &state, conn, unsafe { libc::getuid() }, &grants);
         let checks = async {
             let socket = Async::<UnixStream>::connect(&path).await.unwrap();
-            frame(&socket, serde_json::json!({"type":"hello","abi":2})).await;
+            frame(&socket, serde_json::json!({"type":"hello","abi":3})).await;
             assert_eq!(
                 reply(&socket).await,
-                serde_json::json!({"type":"hello","abi":2})
+                serde_json::json!({"type":"hello","abi":3})
             );
             snapshot(&socket, &[note("v1")]).await;
             match timeout(rx.recv()).await.unwrap() {
@@ -188,6 +199,8 @@ fn dbus_and_android_socket_lifecycle() {
                     assert_eq!(actions, ["default", "Open", "action-0", "Action"]);
                     assert!(hints.contains_key("image-data"));
                     assert!(bool::try_from(hints.get("suppress-sound").unwrap()).unwrap());
+                    // A snapshot replays what Android already showed.
+                    assert!(!bool::try_from(hints.get("x-denial-alert").unwrap()).unwrap());
                 }
                 other => panic!("{other:?}"),
             }
@@ -202,24 +215,34 @@ fn dbus_and_android_socket_lifecycle() {
                 serde_json::json!({"type":"post","notification":note("v2")}),
             )
             .await;
-            assert!(matches!(
-                timeout(rx.recv()).await.unwrap(),
-                Observed::Posted(100, 100, ..)
-            ));
-            server
-                .emit_signal(
-                    None::<&str>,
-                    PATH,
-                    NAME,
-                    "ActionInvoked",
-                    &(100u32, "action-0"),
-                )
-                .await
-                .unwrap();
+            match timeout(rx.recv()).await.unwrap() {
+                Observed::Posted(100, 100, _, _, hints, _) => {
+                    // A live post carries Android's own heads-up decision.
+                    assert!(bool::try_from(hints.get("x-denial-alert").unwrap()).unwrap());
+                    assert_eq!(
+                        i64::try_from(hints.get("x-denial-time").unwrap()).unwrap(),
+                        1_700_000_000_000
+                    );
+                    assert!(!hints.contains_key("desktop-entry"));
+                }
+                other => panic!("{other:?}"),
+            }
+            // The host's token for this tap goes to the app's next activation.
+            for (member, body) in [
+                ("ActivationToken", (100u32, "host-token")),
+                ("ActionInvoked", (100u32, "action-0")),
+            ] {
+                server
+                    .emit_signal(None::<&str>, PATH, NAME, member, &body)
+                    .await
+                    .unwrap();
+            }
             let action = reply(&socket).await;
             assert_eq!(action["type"], "action");
             assert_eq!(action["version"], "v2");
             assert_eq!(action["action"], "action-0");
+            assert_eq!(grants.take("test.app").as_deref(), Some("host-token"));
+            assert_eq!(grants.take("test.app"), None);
             // A different bus peer cannot forge notification-server actions.
             let stranger = zbus::connection::Builder::address(address.trim())
                 .unwrap()
@@ -276,10 +299,10 @@ fn dbus_and_android_socket_lifecycle() {
             // Reconnecting Android sends a snapshot without duplicating an unchanged item.
             drop(socket);
             let socket = Async::<UnixStream>::connect(&path).await.unwrap();
-            frame(&socket, serde_json::json!({"type":"hello","abi":2})).await;
+            frame(&socket, serde_json::json!({"type":"hello","abi":3})).await;
             assert_eq!(
                 reply(&socket).await,
-                serde_json::json!({"type":"hello","abi":2})
+                serde_json::json!({"type":"hello","abi":3})
             );
             snapshot(&socket, &[note("v4")]).await;
             quiet(&rx).await;
@@ -397,9 +420,13 @@ fn rejects_unbounded_or_invalid_frames() {
     );
     let mut n = note("v1");
     assert!(n.valid());
-    n.icon.push(0);
+    n.icon.push('0');
     assert!(!n.valid());
     n.icon.clear();
+    n.component = "other.app/.Main".into();
+    assert!(!n.valid());
+    n.component = "test.app/.Main".into();
+    assert!(n.valid());
     n.actions[0].key = "arbitrary-intent".into();
     assert!(!n.valid());
 }
@@ -421,7 +448,7 @@ fn deltas_require_sync_and_stale_removal_cannot_delete_newer_versions() {
         known: BTreeMap::new(),
         synced: false,
     };
-    peer.ingest(&encoded(serde_json::json!({"type":"hello","abi":2})))
+    peer.ingest(&encoded(serde_json::json!({"type":"hello","abi":3})))
         .unwrap();
     assert!(
         peer.ingest(&encoded(
@@ -495,4 +522,39 @@ fn deltas_require_sync_and_stale_removal_cannot_delete_newer_versions() {
         ))
         .is_err()
     );
+}
+
+#[test]
+fn launcher_activity_names_the_droidloom_desktop_entry_and_groups_cross() {
+    let mut n = note("v1");
+    n.component = "test.app/test.app.Main".into();
+    n.icon.clear();
+    n.large_icon = "ff".repeat(96 * 96 * 4);
+    n.group = "0|test.app|g:chat".into();
+    n.summary = true;
+    n.progress = 40;
+    n.clearable = false;
+    n.messages = vec![ChatMessage {
+        sender: "Ada".into(),
+        text: "Hi".into(),
+    }];
+    assert!(n.valid());
+    let (name, hints) = notify_hints(&n, false);
+    assert_eq!(name, "");
+    assert_eq!(
+        <&str>::try_from(hints.get("desktop-entry").unwrap()).unwrap(),
+        format!(
+            "droidloom-{}",
+            droidloom_contracts::applications::application_id(0, "test.app/test.app.Main")
+        )
+    );
+    assert_eq!(
+        <&str>::try_from(hints.get("x-denial-group").unwrap()).unwrap(),
+        "0|test.app|g:chat"
+    );
+    assert!(bool::try_from(hints.get("x-denial-group-summary").unwrap()).unwrap());
+    assert_eq!(i32::try_from(hints.get("value").unwrap()).unwrap(), 40);
+    assert!(hints.contains_key("image-data"));
+    assert!(hints.contains_key("x-denial-messages"));
+    assert!(!bool::try_from(hints.get("x-denial-clearable").unwrap()).unwrap());
 }

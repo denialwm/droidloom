@@ -1586,7 +1586,8 @@ impl App {
                         .get(&object)
                         .filter(|task| task.accepts_present())
                 {
-                    self.activation.request(qh, object, &task.package);
+                    let surface = task.window.as_ref().map(|window| window.wl_surface());
+                    self.activation.request(qh, object, &task.package, surface);
                 }
             }
             EndpointAction::BindLayerStream { object, sockets } => {
@@ -3062,8 +3063,11 @@ fn run() -> Result<(), PresenterError> {
     prepare_socket_path(&socket_path, &runtime_root, identity.uid())?;
     // The async reactor may be created synchronously by Bridge::start.
     droidloom_cpu_placement::current(droidloom_cpu_placement::Role::Background);
-    let notifications =
-        notifications::Bridge::start(socket_path.with_file_name("notifications.sock"));
+    let host_grants = activation::HostGrants::default();
+    let notifications = notifications::Bridge::start(
+        socket_path.with_file_name("notifications.sock"),
+        host_grants.clone(),
+    );
     droidloom_cpu_placement::current(droidloom_cpu_placement::Role::Graphics);
     let _notifications = notifications?;
 
@@ -3113,7 +3117,7 @@ fn run() -> Result<(), PresenterError> {
     let sync_manager: WpLinuxDrmSyncobjManagerV1 = globals.bind(&qh, 1..=1, ())?;
     let output_power_manager: ZwlrOutputPowerManagerV1 = globals.bind(&qh, 1..=1, ())?;
     let mut app = App {
-        activation: activation::Activation::new(&globals, &qh),
+        activation: activation::Activation::new(&globals, &qh, host_grants),
         layer_globals: layers::Globals {
             subcompositor: globals.bind(&qh, 1..=1, ())?,
             shm: globals.bind(&qh, 1..=1, ())?,

@@ -582,9 +582,10 @@ investigate first, not measured shares of CPU time or latency.
    [reconciliation](../runtime/droidloom-applications/src/lib.rs).
 
 4. **Notification deltas remove unchanged-entry encoding.**
-   Notification ABI 2 establishes a full snapshot per connection, then sends
+   Notification ABI 3 establishes a full snapshot per connection, then sends
    changed posts and versioned removals. Unchanged entries are not re-encoded.
-   Changed entries still include each 48-by-48 RGBA icon as 9,216 JSON numbers;
+   Changed entries still carry their pixels as RGBA hex: the 48-by-48 icon
+   when Android names no launcher activity, and the 96-by-96 large icon;
    reusable icon identities remain a possible improvement. Icon rendering is
    cached and the host avoids unchanged desktop Notify calls. Measure traffic and CPU
    while one notification updates among many unchanged entries. Sources:

@@ -10,11 +10,10 @@ repository.workspace = true
 [dependencies]
 droidloom-cpu-placement = { path = "../droidloom-cpu-placement" }
 clap.workspace = true
+droidloom-contracts = { path = "../droidloom-contracts" }
 droidloom-supervisor = { path = "../droidloom-supervisor" }
-hex.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-sha2.workspace = true
 tempfile.workspace = true
 thiserror.workspace = true
 

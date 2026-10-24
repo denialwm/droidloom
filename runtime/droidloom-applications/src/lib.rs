@@ -12,11 +12,11 @@ use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
+use droidloom_contracts::applications::application_id;
 use droidloom_supervisor::control::{
     AndroidApplication, ControlRequest, DEFAULT_CONTROL_SOCKET, parse_launch_resolution, request,
 };
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use tempfile::NamedTempFile;
 use thiserror::Error;
 
@@ -503,14 +503,6 @@ fn base64_value(byte: u8) -> Result<u8, CatalogError> {
             "base64 payload contains an invalid character".into(),
         )),
     }
-}
-
-fn application_id(user: u32, component: &str) -> String {
-    let mut digest = Sha256::new();
-    digest.update(user.to_le_bytes());
-    digest.update([0]);
-    digest.update(component.as_bytes());
-    hex::encode(digest.finalize())[..32].to_owned()
 }
 
 fn validate_applications(applications: &[AndroidApplication]) -> Result<(), CatalogError> {

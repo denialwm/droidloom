@@ -9,6 +9,7 @@ repository.workspace = true
 
 [dependencies]
 droidloom-timing = { path = "../../runtime/droidloom-timing" }
+droidloom-contracts = { path = "../../runtime/droidloom-contracts" }
 droidloom-cpu-placement = { path = "../../runtime/droidloom-cpu-placement" }
 droidloom-surface-bridge = { path = "../droidloom-surface-bridge" }
 drm-fourcc.workspace = true
@@ -19,6 +20,7 @@ droidloom-input-protocol = { path = "../droidloom-input-protocol" }
 droidloom-syncobj = { path = "../droidloom-syncobj" }
 droidloom-window-policy = { path = "../../runtime/droidloom-window-policy" }
 gbm.workspace = true
+hex.workspace = true
 libc.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true

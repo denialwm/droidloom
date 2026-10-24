@@ -1,4 +1,5 @@
 //! Android notifications on the desktop session bus. No work runs on the render loop.
+use crate::activation::HostGrants;
 use async_io::Async;
 use futures_lite::{
     StreamExt, future,
@@ -21,7 +22,8 @@ use std::{
 use zbus::{Connection, MatchRule, Message, MessageStream, Proxy, message::Type, zvariant::Value};
 const NAME: &str = "org.freedesktop.Notifications";
 const PATH: &str = "/org/freedesktop/Notifications";
-const MAX_FRAME: usize = 131072;
+// Room for a 96 px large icon in hex next to the longest texts.
+const MAX_FRAME: usize = 262144;
 const MAX_ACTIVE: usize = 256;
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
@@ -30,7 +32,7 @@ pub struct Bridge {
     path: PathBuf,
 }
 impl Bridge {
-    pub fn start(path: PathBuf) -> io::Result<Self> {
+    pub fn start(path: PathBuf, grants: HostGrants) -> io::Result<Self> {
         match fs::symlink_metadata(&path) {
             Ok(m) if m.file_type().is_socket() => fs::remove_file(&path)?,
             Ok(_) => return Err(io::Error::other("notification endpoint is not a socket")),
@@ -49,7 +51,7 @@ impl Bridge {
                 droidloom_cpu_placement::current(droidloom_cpu_placement::Role::Background);
                 future::block_on(async move {
                     loop {
-                        let result = future::race(run(&listener, &state_path), async {
+                        let result = future::race(run(&listener, &state_path, &grants), async {
                             let mut b = [0];
                             let _ = (&stopped).read(&mut b).await;
                             Ok(())
@@ -79,7 +81,7 @@ impl Bridge {
                     }
                 });
             })?;
-        eprintln!("DROIDLOOM_NOTIFICATIONS_ABI=2;");
+        eprintln!("DROIDLOOM_NOTIFICATIONS_ABI=3;");
         Ok(Self { stop, path })
     }
 }
@@ -108,7 +110,35 @@ struct Note {
     urgency: u8,
     ongoing: bool,
     clearable: bool,
-    icon: Vec<u8>,
+    /// The 48 px app icon as RGBA hex, only when Android names no launcher
+    /// activity; otherwise the desktop entry carries the icon.
+    icon: String,
+    /// Android's heads-up decision for this post.
+    alert: bool,
+    /// Android's group key; empty when the notification is not grouped.
+    group: String,
+    summary: bool,
+    /// Milliseconds since the epoch.
+    when: i64,
+    /// Percent, or -1 without a determinate progress bar.
+    progress: i32,
+    category: String,
+    user: u32,
+    /// The launcher activity, `package/class`, or empty.
+    component: String,
+    /// The 96 px large icon (a contact photo, say) as RGBA hex, or empty.
+    large_icon: String,
+    /// The last MessagingStyle messages, oldest first.
+    messages: Vec<ChatMessage>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct ChatMessage {
+    sender: String,
+    text: String,
+}
+fn rgba_hex(hex: &str, size: usize) -> bool {
+    hex.is_empty() || (hex.len() == size * size * 8 && hex.bytes().all(|b| b.is_ascii_hexdigit()))
 }
 impl Note {
     fn valid(&self) -> bool {
@@ -128,7 +158,27 @@ impl Note {
                 .iter()
                 .all(|s| !s.contains('\0'))
             && self.urgency <= 2
-            && (self.icon.is_empty() || self.icon.len() == 48 * 48 * 4)
+            && rgba_hex(&self.icon, 48)
+            && rgba_hex(&self.large_icon, 96)
+            && self.group.len() <= 512
+            && self.category.len() <= 64
+            && (-1..=100).contains(&self.progress)
+            && (self.component.is_empty()
+                || (self.component.len() <= 511
+                    && self
+                        .component
+                        .strip_prefix(&self.package)
+                        .is_some_and(|class| class.len() > 1 && class.starts_with('/'))))
+            && [&self.group, &self.category, &self.component]
+                .iter()
+                .all(|s| !s.contains('\0'))
+            && self.messages.len() <= 5
+            && self.messages.iter().all(|m| {
+                m.sender.len() <= 1024
+                    && m.text.len() <= 4096
+                    && !m.sender.contains('\0')
+                    && !m.text.contains('\0')
+            })
             && self.actions.len() <= 17
             && self.actions.iter().all(|a| {
                 (a.key == "default"
@@ -180,7 +230,7 @@ impl Peer {
             let frame: Frame = serde_json::from_slice(&self.buffer[4..length + 4])?;
             self.buffer.drain(..length + 4);
             match frame {
-                Frame::Hello { abi: 2 } if !self.hello => self.hello = true,
+                Frame::Hello { abi: 3 } if !self.hello => self.hello = true,
                 Frame::Begin if self.hello && self.snapshot.is_none() => {
                     self.snapshot = Some(BTreeMap::new())
                 }
@@ -296,7 +346,10 @@ struct Desktop<'a> {
     capabilities: Vec<String>,
 }
 impl Desktop<'_> {
-    async fn notify(&self, n: &Note, replaces: u32) -> zbus::Result<u32> {
+    /// `quiet` marks a replay of what Android already showed: Denial adds or
+    /// updates the card without a banner. Other desktops ignore the `x-denial`
+    /// hints.
+    async fn notify(&self, n: &Note, replaces: u32, quiet: bool) -> zbus::Result<u32> {
         let actions: Vec<&str> = if self.capabilities.iter().any(|c| c == "actions") {
             n.actions
                 .iter()
@@ -305,17 +358,7 @@ impl Desktop<'_> {
         } else {
             vec![]
         };
-        let mut hints: HashMap<&str, Value<'_>> = HashMap::new();
-        hints.insert("urgency", Value::from(n.urgency));
-        hints.insert("resident", Value::from(n.ongoing));
-        // Android retains sound policy, including channel preferences and DND.
-        hints.insert("suppress-sound", Value::from(true));
-        if !n.icon.is_empty() {
-            hints.insert(
-                "image-data",
-                Value::from((48i32, 48i32, 192i32, true, 8i32, 4i32, n.icon.clone())),
-            );
-        }
+        let (icon, hints) = notify_hints(n, quiet);
         let body = if self.capabilities.iter().any(|c| c == "body-markup") {
             escape_markup(&n.body)
         } else {
@@ -327,7 +370,7 @@ impl Desktop<'_> {
                 &(
                     &n.app,
                     replaces,
-                    "application-x-executable",
+                    icon,
                     if n.title.is_empty() { &n.app } else { &n.title },
                     &body,
                     actions,
@@ -342,6 +385,67 @@ impl Desktop<'_> {
     async fn close(&self, id: u32) {
         let _: zbus::Result<()> = self.proxy.call("CloseNotification", &(id,)).await;
     }
+}
+/// The Notify icon name and hints for one Android notification. The desktop
+/// entry names the icon when Android named a launcher activity.
+fn notify_hints(n: &Note, quiet: bool) -> (&'static str, HashMap<&'static str, Value<'_>>) {
+    let mut hints: HashMap<&'static str, Value<'_>> = HashMap::new();
+    hints.insert("urgency", Value::from(n.urgency));
+    hints.insert("resident", Value::from(n.ongoing));
+    hints.insert("x-denial-clearable", Value::from(n.clearable));
+    // Android retains sound policy, including channel preferences and DND.
+    hints.insert("suppress-sound", Value::from(true));
+    hints.insert("x-denial-alert", Value::from(n.alert && !quiet));
+    let desktop_entry = (!n.component.is_empty()).then(|| {
+        format!(
+            "droidloom-{}",
+            droidloom_contracts::applications::application_id(n.user, &n.component)
+        )
+    });
+    if let Some(entry) = &desktop_entry {
+        hints.insert("desktop-entry", Value::from(entry.clone()));
+    }
+    // Content artwork when Android has it, else the app icon itself.
+    let (size, pixels) = if n.large_icon.is_empty() {
+        (48i32, &n.icon)
+    } else {
+        (96, &n.large_icon)
+    };
+    if let Ok(pixels) = hex::decode(pixels)
+        && !pixels.is_empty()
+    {
+        hints.insert(
+            "image-data",
+            Value::from((size, size, size * 4, true, 8i32, 4i32, pixels)),
+        );
+    }
+    if n.progress >= 0 {
+        hints.insert("value", Value::from(n.progress));
+    }
+    if !n.category.is_empty() {
+        hints.insert("category", Value::from(n.category.as_str()));
+    }
+    if !n.group.is_empty() {
+        hints.insert("x-denial-group", Value::from(n.group.as_str()));
+    }
+    if n.summary {
+        hints.insert("x-denial-group-summary", Value::from(true));
+    }
+    hints.insert("x-denial-time", Value::from(n.when));
+    if !n.messages.is_empty() {
+        let messages: Vec<(&str, &str)> = n
+            .messages
+            .iter()
+            .map(|m| (m.sender.as_str(), m.text.as_str()))
+            .collect();
+        hints.insert("x-denial-messages", Value::from(messages));
+    }
+    let icon = if desktop_entry.is_some() {
+        ""
+    } else {
+        "application-x-executable"
+    };
+    (icon, hints)
 }
 fn escape_markup(text: &str) -> String {
     text.replace('&', "&amp;")
@@ -367,11 +471,17 @@ async fn reconcile(
         }
     }
     for (key, note) in snapshot {
-        upsert(state, key, note, desktop).await?;
+        upsert(state, key, note, desktop, true).await?;
     }
     Ok(())
 }
-async fn upsert(state: &mut State, key: String, note: Note, desktop: &Desktop<'_>) -> Result<()> {
+async fn upsert(
+    state: &mut State,
+    key: String,
+    note: Note,
+    desktop: &Desktop<'_>,
+    quiet: bool,
+) -> Result<()> {
     let record = state.records.entry(key).or_default();
     if record.version != note.version {
         record.hidden = false;
@@ -380,7 +490,7 @@ async fn upsert(state: &mut State, key: String, note: Note, desktop: &Desktop<'_
     record.version = note.version.clone();
     record.note = Some(note.clone());
     if !state.owner.is_empty() && !record.hidden && (changed || record.id.is_none()) {
-        record.id = Some(desktop.notify(&note, record.id.unwrap_or(0)).await?);
+        record.id = Some(desktop.notify(&note, record.id.unwrap_or(0), quiet).await?);
     }
     Ok(())
 }
@@ -403,18 +513,23 @@ async fn read_peer(peer: Option<&Peer>) -> Event {
         Err(e) => Err(e),
     })
 }
-async fn run(listener: &Async<UnixListener>, state_path: &PathBuf) -> Result<()> {
+async fn run(
+    listener: &Async<UnixListener>,
+    state_path: &PathBuf,
+    grants: &HostGrants,
+) -> Result<()> {
     let conn = zbus::connection::Builder::session()?
         .method_timeout(Duration::from_secs(3))
         .build()
         .await?;
-    serve(listener, state_path, conn, 1000).await
+    serve(listener, state_path, conn, 1000, grants).await
 }
 async fn serve(
     listener: &Async<UnixListener>,
     state_path: &PathBuf,
     conn: Connection,
     peer_uid: u32,
+    grants: &HostGrants,
 ) -> Result<()> {
     let rule = MatchRule::builder()
         .msg_type(Type::Signal)
@@ -457,6 +572,8 @@ async fn serve(
     }
     state.owner(owner);
     let mut peer: Option<Peer> = None;
+    // Denial emits ActivationToken right before ActionInvoked for one tap.
+    let mut activation: Option<(u32, String)> = None;
     loop {
         let event = future::race(
             future::race(
@@ -492,7 +609,7 @@ async fn serve(
                             if peer
                                 .as_ref()
                                 .unwrap()
-                                .send(serde_json::json!({"type":"hello","abi":2}))
+                                .send(serde_json::json!({"type":"hello","abi":3}))
                                 .await
                                 .is_err()
                             {
@@ -507,7 +624,8 @@ async fn serve(
                                     reconcile(&mut state, snapshot, &desktop).await?
                                 }
                                 Update::Post(note) => {
-                                    upsert(&mut state, note.key.clone(), note, &desktop).await?
+                                    upsert(&mut state, note.key.clone(), note, &desktop, false)
+                                        .await?
                                 }
                                 Update::Remove { key, version } => {
                                     if state
@@ -563,8 +681,18 @@ async fn serve(
                     continue;
                 }
                 match message.header().member().map(|s| s.as_str()) {
+                    Some("ActivationToken") => {
+                        let (id, token): (u32, String) = message.body().deserialize()?;
+                        if !token.is_empty() && token.len() <= 1024 {
+                            activation = Some((id, token));
+                        }
+                    }
                     Some("ActionInvoked") => {
                         let (id, action): (u32, String) = message.body().deserialize()?;
+                        let token = activation
+                            .take()
+                            .filter(|(token_id, _)| *token_id == id)
+                            .map(|(_, token)| token);
                         if let Some(note) = state
                             .records
                             .values()
@@ -572,6 +700,9 @@ async fn serve(
                             .and_then(|r| r.note.as_ref())
                         {
                             if note.actions.iter().any(|a| a.key == action) {
+                                if let Some(token) = token {
+                                    grants.grant(&note.package, token);
+                                }
                                 if let Some(p) = peer.as_ref() {
                                     if p.command(note, Some(&action)).await.is_err() {
                                         peer = None;

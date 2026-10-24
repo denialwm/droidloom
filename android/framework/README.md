@@ -275,9 +275,11 @@ up to 32. Failed requests retry with backoff; reconnects take a full snapshot.
 Linux never parses APK manifests or resources.
 
 Framework control ABI 1 pairs services, InputFlinger, the lifecycle daemon and
-host catalog. Notification ABI 2 pairs SystemUI with the presenter: a full
+host catalog. Notification ABI 3 pairs SystemUI with the presenter: a full
 snapshot establishes each connection, followed by changed posts and versioned
-removals. Unchanged notifications and their icons are not encoded again.
+removals. Unchanged notifications and their icons are not encoded again. Each
+post carries Android's heads-up decision, group key and summary flag, `when`,
+progress, launcher activity, large icon and last MessagingStyle messages.
 Framework readiness waits for both WMS policy and the ATMS backend, in either
 callback order. The startup gate has a host Java regression test:
 

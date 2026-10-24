@@ -39,7 +39,7 @@ Services, InputFlinger and Composer also require native input ABI 2; services,
 SystemUI, IME and the presenter require host channels ABI 1. The standalone input
 bridge process, launcher and byte-copy relays are removed.
 Services, InputFlinger, the host daemon and catalog require framework control
-ABI 1; SystemUI and the presenter require notification ABI 2.
+ABI 1; SystemUI and the presenter require notification ABI 3.
 SurfaceFlinger and the presenter negotiate asynchronous layer commits and bounded
 allocation imports separately.
 

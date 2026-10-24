@@ -458,12 +458,11 @@ name = "droidloom-applications"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "droidloom-contracts",
  "droidloom-cpu-placement",
  "droidloom-supervisor",
- "hex",
  "serde",
  "serde_json",
- "sha2",
  "tempfile",
  "thiserror",
 ]
@@ -788,6 +787,7 @@ dependencies = [
  "async-channel",
  "async-io",
  "drm-fourcc",
+ "droidloom-contracts",
  "droidloom-cpu-placement",
  "droidloom-denial-endpoint",
  "droidloom-denial-ipc",
@@ -799,6 +799,7 @@ dependencies = [
  "droidloom-window-policy",
  "futures-lite",
  "gbm",
+ "hex",
  "libc",
  "serde",
  "serde_json",

@@ -7,6 +7,7 @@ import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.content.ComponentName;
 import android.content.Context;
+import android.content.Intent;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.drawable.Drawable;
@@ -33,12 +34,16 @@ import org.json.JSONObject;
 public final class NotificationBridge extends NotificationListenerService implements AutoCloseable {
     private static final String TAG = "DroidloomNotifications";
     private static final int MAX_ACTIVE = 256;
-    private static final int MAX_FRAME = 131072;
+    // Room for a 96 px large icon in hex next to the longest texts.
+    private static final int MAX_FRAME = 262144;
     private final Context context;
     private final Handler main;
     private final Object lock = new Object();
     private final LinkedHashMap<String, Entry> active = new LinkedHashMap<>();
-    private final LruCache<String, JSONArray> icons = new LruCache<>(32);
+    // Keys whose latest post should alert and has not reached the host yet.
+    private final HashSet<String> alerting = new HashSet<>();
+    private final LruCache<String, String> icons = new LruCache<>(32);
+    private final LruCache<String, String> components = new LruCache<>(32);
     private final String session = UUID.randomUUID().toString();
     private long generation;
     private boolean dirty;
@@ -56,16 +61,16 @@ public final class NotificationBridge extends NotificationListenerService implem
     public void start() {
         try {
             registerAsSystemService(context, new ComponentName(context, NotificationBridge.class), UserHandle.USER_SYSTEM);
-            Log.i(TAG, "DROIDLOOM_NOTIFICATIONS_ABI=2;");
+            Log.i(TAG, "DROIDLOOM_NOTIFICATIONS_ABI=3;");
             Thread worker = new Thread(this::connect, "droidloom-notifications");
             worker.setDaemon(true); worker.start();
         } catch (Exception e) { Log.e(TAG, "Notification listener registration failed: " + e.getClass().getSimpleName()); }
     }
     @Override public void onListenerConnected() {
         synchronized (lock) {
-            active.clear(); listening=true;
+            active.clear(); alerting.clear(); listening=true;
             StatusBarNotification[] all=getActiveNotifications();
-            if (all!=null) for (StatusBarNotification sbn:all) put(sbn, getCurrentRanking());
+            if (all!=null) for (StatusBarNotification sbn:all) put(sbn, getCurrentRanking(), false);
             dirty=true; lock.notifyAll();
         }
     }
@@ -74,22 +79,29 @@ public final class NotificationBridge extends NotificationListenerService implem
         disconnect();
     }
     @Override public void onNotificationPosted(StatusBarNotification sbn, RankingMap ranking) {
-        synchronized(lock) { put(sbn,ranking); dirty=true; lock.notifyAll(); }
+        synchronized(lock) { put(sbn,ranking,true); dirty=true; lock.notifyAll(); }
     }
     @Override public void onNotificationRemoved(StatusBarNotification sbn) {
-        synchronized(lock) { active.remove(sbn.getKey()); dirty=true; lock.notifyAll(); }
+        synchronized(lock) { active.remove(sbn.getKey()); alerting.remove(sbn.getKey()); dirty=true; lock.notifyAll(); }
     }
-    private void put(StatusBarNotification sbn, RankingMap map) {
+    private void put(StatusBarNotification sbn, RankingMap map, boolean live) {
         Ranking rank = new Ranking();
-        int importance=NotificationManager.IMPORTANCE_DEFAULT;
-        if (map!=null && map.getRanking(sbn.getKey(),rank)) {
-            importance=rank.getImportance();
-            if (rank.isSuspended() || importance==NotificationManager.IMPORTANCE_NONE) { active.remove(sbn.getKey()); return; }
+        boolean ranked = map!=null && map.getRanking(sbn.getKey(),rank);
+        int importance=ranked?rank.getImportance():NotificationManager.IMPORTANCE_DEFAULT;
+        if (ranked && (rank.isSuspended() || importance==NotificationManager.IMPORTANCE_NONE)) {
+            active.remove(sbn.getKey()); alerting.remove(sbn.getKey()); return;
         }
-        // Group summaries duplicate their children on desktops without Android grouping.
-        if ((sbn.getNotification().flags & Notification.FLAG_GROUP_SUMMARY)!=0) { active.remove(sbn.getKey()); return; }
-        if (!active.containsKey(sbn.getKey()) && active.size()>=MAX_ACTIVE) active.remove(active.keySet().iterator().next());
+        boolean update=active.containsKey(sbn.getKey());
+        if (!update && active.size()>=MAX_ACTIVE) { String oldest=active.keySet().iterator().next(); active.remove(oldest); alerting.remove(oldest); }
         active.put(sbn.getKey(),new Entry(sbn,session+"-"+(++generation),importance));
+        if (live && alerts(sbn,rank,ranked,importance,update)) alerting.add(sbn.getKey());
+    }
+    /** SystemUI's heads-up decision: HIGH importance, and the post says something new. */
+    private static boolean alerts(StatusBarNotification sbn, Ranking rank, boolean ranked, int importance, boolean update) {
+        Notification n=sbn.getNotification();
+        if (importance<NotificationManager.IMPORTANCE_HIGH || n.isGroupSummary() || n.suppressAlertingDueToGrouping()) return false;
+        if (update && (n.flags & Notification.FLAG_ONLY_ALERT_ONCE)!=0) return false;
+        return !ranked || ((rank.getSuppressedVisualEffects() & NotificationManager.Policy.SUPPRESSED_EFFECT_PEEK)==0 && rank.isTextChanged());
     }
     private void connect() {
         com.android.droidloom.runtime.CpuPlacement.background();
@@ -97,14 +109,14 @@ public final class NotificationBridge extends NotificationListenerService implem
             try (HostChannel current = HostChannel.open(HostChannel.NOTIFICATIONS)) {
                 socket=current;
                 DataOutputStream out=new DataOutputStream(current.getOutputStream());
-                send(out,new JSONObject().put("type","hello").put("abi",2));
+                send(out,new JSONObject().put("type","hello").put("abi",3));
                 current.setSoTimeout(5000);
                 DataInputStream input=new DataInputStream(current.getInputStream());
                 int helloLength=input.readInt();
                 if(helloLength<=0 || helloLength>4096) throw new IllegalArgumentException();
                 byte[] helloBytes=new byte[helloLength]; input.readFully(helloBytes);
                 JSONObject hello=new JSONObject(new String(helloBytes,StandardCharsets.UTF_8));
-                if(!"hello".equals(hello.optString("type")) || hello.optInt("abi")!=2) throw new IllegalArgumentException();
+                if(!"hello".equals(hello.optString("type")) || hello.optInt("abi")!=3) throw new IllegalArgumentException();
                 current.setSoTimeout(0);
                 connected=true;
                 Thread writer=new Thread(() -> writeSnapshots(current,out),"droidloom-notifications-out");
@@ -136,10 +148,12 @@ public final class NotificationBridge extends NotificationListenerService implem
         try {
             while(!stopped && connected) {
                 ArrayList<Entry> entries;
+                HashSet<String> alerts;
                 synchronized(lock) {
                     while(!stopped && connected && (!dirty || !listening)) lock.wait();
                     if(stopped || !connected) return;
                     entries=new ArrayList<>(active.values()); dirty=false;
+                    alerts=new HashSet<>(alerting); alerting.clear();
                 }
                 LinkedHashMap<String,String> next = new LinkedHashMap<>();
                 if(initial) send(out,new JSONObject().put("type","begin"));
@@ -157,7 +171,7 @@ public final class NotificationBridge extends NotificationListenerService implem
                         next.put(key,entry.version); continue;
                     }
                     try {
-                        send(out,new JSONObject().put("type","post").put("notification",encode(entry)));
+                        send(out,new JSONObject().put("type","post").put("notification",encode(entry,alerts.contains(key))));
                         next.put(key,entry.version);
                     } catch(org.json.JSONException | android.content.pm.PackageManager.NameNotFoundException e) {
                         // Preserve the acknowledged version so a later event retries this entry.
@@ -170,7 +184,7 @@ public final class NotificationBridge extends NotificationListenerService implem
             }
         } catch(Exception e) { closeSocket(current); }
     }
-    private JSONObject encode(Entry entry) throws Exception {
+    private JSONObject encode(Entry entry, boolean alert) throws Exception {
         StatusBarNotification sbn=entry.sbn; Notification n=sbn.getNotification(); Bundle extras=n.extras;
         String title=text(extras.getCharSequence(Notification.EXTRA_TITLE),2048);
         CharSequence big=extras.getCharSequence(Notification.EXTRA_BIG_TEXT);
@@ -179,14 +193,19 @@ public final class NotificationBridge extends NotificationListenerService implem
             CharSequence[] lines=extras.getCharSequenceArray(Notification.EXTRA_TEXT_LINES);
             if(lines!=null) body=text(android.text.TextUtils.join("\n",lines),8192);
         }
+        String component=component(sbn);
         JSONArray actions=new JSONArray();
-        if(n.contentIntent!=null) actions.put(new JSONObject().put("key","default").put("label","Open"));
+        // Without a content intent, a tap still opens the app at its launcher activity.
+        if(n.contentIntent!=null || !component.isEmpty()) actions.put(new JSONObject().put("key","default").put("label","Open"));
         if(n.actions!=null) for(int i=0;i<Math.min(n.actions.length,16);i++) {
             Notification.Action action=n.actions[i];
             // The standard D-Bus interface has no portable inline-reply field.
             if(action.actionIntent!=null && action.getRemoteInputs()==null)
                 actions.put(new JSONObject().put("key","action-"+i).put("label",text(action.title,256)));
         }
+        int max=extras.getInt(Notification.EXTRA_PROGRESS_MAX,0), value=extras.getInt(Notification.EXTRA_PROGRESS,0);
+        int progress=max>0 && !extras.getBoolean(Notification.EXTRA_PROGRESS_INDETERMINATE)
+                ? (int)Math.max(0,Math.min(100,(long)value*100/max)) : -1;
         String label=context.getPackageManager().getApplicationLabel(context.getPackageManager().getApplicationInfo(sbn.getPackageName(),0)).toString();
         return new JSONObject().put("key",sbn.getKey()).put("version",entry.version).put("package",sbn.getPackageName())
                 .put("app",text(label,256)).put("title",title).put("body",body).put("actions",actions)
@@ -194,20 +213,58 @@ public final class NotificationBridge extends NotificationListenerService implem
                 // desktop event that must remain visible until explicitly dismissed.
                 .put("urgency",entry.importance<=NotificationManager.IMPORTANCE_LOW?0:1)
                 .put("ongoing",sbn.isOngoing()).put("clearable",sbn.isClearable())
-                .put("icon",icon(sbn.getPackageName()));
+                .put("alert",alert)
+                // Ungrouped notifications get a unique group key; the host groups those by app.
+                .put("group",sbn.isGroup()?text(sbn.getGroupKey(),512):"")
+                .put("summary",n.isGroupSummary())
+                .put("when",n.when!=0?n.when:sbn.getPostTime())
+                .put("progress",progress)
+                .put("category",n.category==null?"":text(n.category,64))
+                .put("user",sbn.getUserId()).put("component",component)
+                // The host names the app icon through its desktop entry when it has one.
+                .put("icon",component.isEmpty()?icon(sbn.getPackageName()):"")
+                .put("large_icon",largeIcon(n))
+                .put("messages",messages(extras));
     }
-    private JSONArray icon(String pkg) {
-        JSONArray cached=icons.get(pkg); if(cached!=null) return cached;
-        JSONArray bytes=new JSONArray();
-        try {
-            Drawable drawable=context.getPackageManager().getApplicationIcon(pkg);
-            Bitmap bitmap=Bitmap.createBitmap(48,48,Bitmap.Config.ARGB_8888);
-            drawable.setBounds(0,0,48,48); drawable.draw(new Canvas(bitmap));
-            int[] pixels=new int[48*48]; bitmap.getPixels(pixels,0,48,0,0,48,48); bitmap.recycle();
-            for(int pixel:pixels) { bytes.put((pixel>>16)&255); bytes.put((pixel>>8)&255); bytes.put(pixel&255); bytes.put((pixel>>>24)&255); }
-        } catch(Exception ignored) { }
-        icons.put(pkg,bytes); return bytes;
+    /** The launcher activity Droidloom's desktop entry for this package names, or "". */
+    private String component(StatusBarNotification sbn) {
+        String cached=components.get(sbn.getPackageName()); if(cached!=null) return cached;
+        Intent launch=launchIntent(sbn);
+        String component=launch==null || launch.getComponent()==null ? "" : launch.getComponent().flattenToString();
+        components.put(sbn.getPackageName(),component); return component;
     }
+    private String icon(String pkg) {
+        String cached=icons.get(pkg); if(cached!=null) return cached;
+        String pixels="";
+        try { pixels=pixels(context.getPackageManager().getApplicationIcon(pkg),48); } catch(Exception ignored) { }
+        icons.put(pkg,pixels); return pixels;
+    }
+    private String largeIcon(Notification n) {
+        if(n.getLargeIcon()==null) return "";
+        try { return pixels(n.getLargeIcon().loadDrawable(context),96); } catch(Exception e) { return ""; }
+    }
+    private static JSONArray messages(Bundle extras) throws org.json.JSONException {
+        JSONArray messages=new JSONArray();
+        android.os.Parcelable[] raw=extras.getParcelableArray(Notification.EXTRA_MESSAGES);
+        if(raw==null) return messages;
+        java.util.List<Notification.MessagingStyle.Message> all=Notification.MessagingStyle.Message.getMessagesFromBundleArray(raw);
+        for(int i=Math.max(0,all.size()-5);i<all.size();i++) {
+            Notification.MessagingStyle.Message message=all.get(i);
+            CharSequence sender=message.getSenderPerson()!=null?message.getSenderPerson().getName():message.getSender();
+            messages.put(new JSONObject().put("sender",text(sender,256)).put("text",text(message.getText(),1024)));
+        }
+        return messages;
+    }
+    /** RGBA8888 as hex: half the size of a JSON number array. */
+    private static String pixels(Drawable drawable,int size) {
+        Bitmap bitmap=Bitmap.createBitmap(size,size,Bitmap.Config.ARGB_8888);
+        drawable.setBounds(0,0,size,size); drawable.draw(new Canvas(bitmap));
+        int[] pixels=new int[size*size]; bitmap.getPixels(pixels,0,size,0,0,size,size); bitmap.recycle();
+        StringBuilder out=new StringBuilder(size*size*8);
+        for(int pixel:pixels) { hex(out,(pixel>>16)&255); hex(out,(pixel>>8)&255); hex(out,pixel&255); hex(out,(pixel>>>24)&255); }
+        return out.toString();
+    }
+    private static void hex(StringBuilder out,int value) { out.append(Character.forDigit(value>>4,16)).append(Character.forDigit(value&15,16)); }
     private static String text(CharSequence source,int max) {
         if(source==null) return "";
         String value=source.toString().replace("\u0000","");
@@ -230,11 +287,20 @@ public final class NotificationBridge extends NotificationListenerService implem
                 int index=Integer.parseInt(action.substring(7));
                 if(index>=0 && index<n.actions.length && n.actions[index].getRemoteInputs()==null) intent=n.actions[index].actionIntent;
             }
-            if(intent==null) return;
             ActivityOptions options=ActivityOptions.makeBasic().setPendingIntentBackgroundActivityStartMode(ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED);
+            if(intent==null) {
+                Intent launch=action.equals("default")?launchIntent(entry.sbn):null;
+                if(launch!=null) context.startActivityAsUser(launch,options.toBundle(),entry.sbn.getUser());
+                return;
+            }
             intent.send(context,0,null,null,null,null,options.toBundle());
             if(action.equals("default") && (n.flags & Notification.FLAG_AUTO_CANCEL)!=0 && entry.sbn.isClearable()) cancelNotification(entry.sbn.getKey());
         } catch(Exception e) { Log.w(TAG,"Notification action unavailable: "+e.getClass().getSimpleName()); }
+    }
+    private Intent launchIntent(StatusBarNotification sbn) {
+        Intent launch=context.getPackageManager().getLaunchIntentForPackage(sbn.getPackageName());
+        if(launch!=null) launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK|Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED);
+        return launch;
     }
     private static void send(DataOutputStream out,JSONObject message) throws Exception {
         byte[] bytes=message.toString().getBytes(StandardCharsets.UTF_8);
@@ -248,5 +314,5 @@ public final class NotificationBridge extends NotificationListenerService implem
     }
     private void disconnect() { connected=false; HostChannel current=socket; if(current!=null) closeSocket(current); synchronized(lock) { lock.notifyAll(); } }
     @Override public void close() { stopped=true; disconnect(); try { unregisterAsSystemService(); } catch(Exception ignored) { } }
-    public void dump(PrintWriter out) { synchronized(lock) { out.println("DROIDLOOM_NOTIFICATIONS_ABI=2; notificationsListening="+listening+" notificationsConnected="+connected+" activeNotifications="+active.size()); } }
+    public void dump(PrintWriter out) { synchronized(lock) { out.println("DROIDLOOM_NOTIFICATIONS_ABI=3; notificationsListening="+listening+" notificationsConnected="+connected+" activeNotifications="+active.size()); } }
 }

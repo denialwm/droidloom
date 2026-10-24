@@ -326,5 +326,5 @@ header, with 16 KiB requests and 8 MiB replies. Catalog event descriptors carry
 big-endian u64 generations; connection always emits an initial generation.
 Only the authorized cell owner receives a descriptor. Healthy subscriptions
 block on events; reconnects resnapshot. Framework ABI 1 binds services,
-InputFlinger, the daemon and catalog. Notification ABI 2 binds SystemUI and
+InputFlinger, the daemon and catalog. Notification ABI 3 binds SystemUI and
 presenter and requires a snapshot before accepting versioned deltas.

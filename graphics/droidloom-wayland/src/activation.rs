@@ -3,6 +3,7 @@ use crate::{App, TaskObjectId};
 use smithay_client_toolkit::shell::WaylandSurface;
 use std::{
     collections::{BTreeMap, BTreeSet},
+    sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 use wayland_client::{
@@ -19,6 +20,35 @@ pub(super) struct Activation {
     manager: Option<XdgActivationV1>,
     input: Option<(u32, WlSeat, WlSurface, Instant)>,
     tokens: Tokens,
+    host_grants: HostGrants,
+}
+
+/// Matches Denial's activation token lifetime.
+const HOST_GRANT_LIFETIME: Duration = Duration::from_secs(10);
+
+/// Activation tokens the host shell handed over with a notification tap, by
+/// Android package. The notification bridge stores one before it forwards the
+/// tap to Android; the task Android then brings forward spends it.
+#[derive(Clone, Default)]
+pub(crate) struct HostGrants(Arc<Mutex<BTreeMap<String, (String, Instant)>>>);
+
+impl HostGrants {
+    pub(crate) fn grant(&self, package: &str, token: String) {
+        let mut grants = self.lock();
+        grants.retain(|_, (_, at)| at.elapsed() <= HOST_GRANT_LIFETIME);
+        grants.insert(package.to_owned(), (token, Instant::now()));
+    }
+    pub(crate) fn take(&self, package: &str) -> Option<String> {
+        self.lock()
+            .remove(package)
+            .filter(|(_, at)| at.elapsed() <= HOST_GRANT_LIFETIME)
+            .map(|(token, _)| token)
+    }
+    fn lock(&self) -> std::sync::MutexGuard<'_, BTreeMap<String, (String, Instant)>> {
+        self.0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
 }
 
 #[derive(Default)]
@@ -71,11 +101,16 @@ impl Tokens {
 }
 
 impl Activation {
-    pub(super) fn new(globals: &GlobalList, qh: &QueueHandle<App>) -> Self {
+    pub(super) fn new(
+        globals: &GlobalList,
+        qh: &QueueHandle<App>,
+        host_grants: HostGrants,
+    ) -> Self {
         Self {
             manager: globals.bind(qh, 1..=1, ()).ok(),
             input: None,
             tokens: Tokens::default(),
+            host_grants,
         }
     }
     pub(super) fn supported(&self) -> bool {
@@ -84,7 +119,13 @@ impl Activation {
     pub(super) fn input(&mut self, serial: u32, seat: &WlSeat, surface: &WlSurface) {
         self.input = Some((serial, seat.clone(), surface.clone(), Instant::now()));
     }
-    pub(super) fn request(&mut self, qh: &QueueHandle<App>, object: TaskObjectId, app_id: &str) {
+    pub(super) fn request(
+        &mut self,
+        qh: &QueueHandle<App>,
+        object: TaskObjectId,
+        app_id: &str,
+        surface: Option<&WlSurface>,
+    ) {
         let Some(manager) = &self.manager else {
             return;
         };
@@ -94,6 +135,21 @@ impl Activation {
         let Some(generation) = self.tokens.request(object) else {
             return;
         };
+        // A notification tap in the host shell already proved the user asked
+        // for this app. Android input never reached the host, so a token
+        // minted here would carry no serial and be denied.
+        if let Some(token) = self.host_grants.take(app_id) {
+            if let Some(token) = self.tokens.complete(object, generation, token)
+                && let Some(surface) = surface
+            {
+                manager.activate(token, surface);
+            }
+            eprintln!(
+                "Droidloom used the host's notification activation: task object={} package={app_id}",
+                object.0
+            );
+            return;
+        }
         let token = manager.get_activation_token(qh, (object, generation));
         token.set_app_id(app_id.to_owned());
         if let Some((serial, seat, surface, at)) = &self.input
