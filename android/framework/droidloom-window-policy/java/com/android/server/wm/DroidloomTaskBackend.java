@@ -1,6 +1,9 @@
 /* Copyright 2026 Droidloom. SPDX-License-Identifier: GPL-3.0-or-later */
 package com.android.server.wm;
 
+import static android.view.WindowManager.TRANSIT_TO_BACK;
+import static android.view.WindowManager.TRANSIT_TO_FRONT;
+
 import android.app.ActivityManager;
 import android.app.ActivityOptions;
 import android.app.WaitResult;
@@ -213,6 +216,8 @@ final class DroidloomTaskBackend {
                     || !Long.valueOf(command[2]).equals(mIncarnations.get(task))) return;
             switch ((int) command[4]) {
                 case 1:
+                    // Host focus implies the window is shown.
+                    setHostHidden(task, false);
                     mHostFocused = task;
                     mService.setFocusedTask(task.mTaskId, null /* touchedActivity */);
                     if (!task.isFocused()) mHostFocused = null;
@@ -230,11 +235,43 @@ final class DroidloomTaskBackend {
                 case 3:
                     mService.removeTask(task, "droidloom-host-close");
                     break;
+                case 4:
+                case 5:
+                    setHostHidden(task, command[4] == 4);
+                    break;
                 default:
                     throw new IllegalArgumentException("Unknown host window command");
             }
         }
         schedule();
+    }
+
+    /**
+     * A minimized host window stops its task, like leaving an app on a phone:
+     * activities pause and stop, and stay stopped even if Android reorders tasks.
+     * Restoring makes the task visible again; host focus brings it to the front.
+     */
+    private void setHostHidden(Task task, boolean hidden) {
+        final int flag = TaskFragment.FLAG_FORCE_HIDDEN_FOR_TASK_ORG;
+        if (((task.mForceHiddenFlags & flag) != 0) == hidden) return;
+        // Same transition handling as ATMS.setFocusedTask.
+        final ActionChain chain = mService.mChainTracker.startTransit("droidloom-host-visibility");
+        final TransitionController transitions = mService.getTransitionController();
+        final Transition transition = !chain.isCollecting()
+                && transitions.isShellTransitionsEnabled()
+                ? transitions.createTransition(hidden ? TRANSIT_TO_BACK : TRANSIT_TO_FRONT) : null;
+        if (transition != null) {
+            chain.attachTransition(transition);
+            transition.setReady(task, true /* ready */);
+        }
+        chain.collect(task);
+        task.setForceHidden(flag, hidden);
+        if (transition != null) {
+            transitions.requestStartTransition(transition, task, null /* remote */, null /* display */);
+        }
+        mService.mRootWindowContainer.ensureActivitiesVisible();
+        mService.mRootWindowContainer.resumeFocusedTasksTopActivities();
+        mService.mChainTracker.end();
     }
 
     /** Launch through the real ActivityStarter; retain the exact completed record. */

@@ -22,6 +22,10 @@ pub enum TaskAction {
     },
     /// Finish/remove the task through normal Android lifecycle handling.
     Close,
+    /// The host minimized the window: Android stops the task's activities.
+    Hide,
+    /// The host restored the window.
+    Show,
 }
 
 /// A host command bound to one registered native window, not just a task ID.
@@ -84,7 +88,7 @@ pub struct CommandQueue {
 }
 
 impl CommandQueue {
-    /// Coalesce superseded resizes/focus transitions; close supersedes its object's work.
+    /// Coalesce superseded resizes/focus/visibility transitions; close supersedes its object's work.
     ///
     /// An object's first resize is delivered at once: the task still has
     /// Android's provisional launch bounds, and its window is not presented
@@ -108,6 +112,10 @@ impl CommandQueue {
             TaskAction::Resize { .. } => {
                 !(entry.command.object == command.object
                     && matches!(entry.command.action, TaskAction::Resize { .. }))
+            }
+            TaskAction::Hide | TaskAction::Show => {
+                !(entry.command.object == command.object
+                    && matches!(entry.command.action, TaskAction::Hide | TaskAction::Show))
             }
         });
         if self.pending.len() >= MAX_PENDING {
@@ -289,5 +297,29 @@ mod tests {
         queue.push(command(7, TaskAction::Focus), now).unwrap();
         queue.push(command(8, TaskAction::Focus), now).unwrap();
         assert_eq!(queue.ready(now).unwrap().command.object, 8);
+    }
+
+    #[test]
+    fn latest_visibility_wins_and_restore_precedes_its_focus() {
+        let mut queue = CommandQueue::default();
+        let now = Instant::now();
+        queue.push(command(7, TaskAction::Hide), now).unwrap();
+        queue.push(command(8, TaskAction::Hide), now).unwrap();
+        queue.push(command(7, TaskAction::Show), now).unwrap();
+        queue.push(command(7, TaskAction::Focus), now).unwrap();
+        let order: Vec<_> = std::iter::from_fn(|| {
+            let entry = queue.ready(now)?;
+            queue.acknowledge(entry.serial);
+            Some((entry.command.object, entry.command.action))
+        })
+        .collect();
+        assert_eq!(
+            order,
+            [
+                (8, TaskAction::Hide),
+                (7, TaskAction::Show),
+                (7, TaskAction::Focus)
+            ]
+        );
     }
 }

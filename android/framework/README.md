@@ -168,7 +168,7 @@ base activity supplies task ownership even when another package owns its top
 permission or authentication activity. Incarnations protect against reused task
 IDs; Composer ignores retirement from a superseded SurfaceFlinger channel.
 
-Task-control protocol 3.2 retains separate activation intent, so reconnecting
+Task-control protocol 3.3 retains separate activation intent, so reconnecting
 background tasks cannot request focus. Registrations are idempotent; explicit
 reopens and foreground changes request
 host activation. The host compositor retains focus authority. Reconnects
@@ -176,16 +176,19 @@ revalidate cached bindings; the five-second connection-health check does not
 enumerate Android tasks while connected and idle. Failed publication retries
 stop at the first transport failure in each pass.
 
-Host focus, resize and close use a dedicated command subscription on the same
-root/system-only task-control endpoint. The Composer event pump only queues
+Host focus, resize, close, hide and show use a dedicated command subscription
+on the same root/system-only task-control endpoint. The Composer event pump only queues
 commands; socket waits run on its subscription thread. Each command carries the
 native object and framework incarnation captured at publication. Rust validates
 both against its current registration. A separate system-server receiver checks the actual attached task,
 incarnation, user and display under WMS's lock, then calls ATMS's normal focus,
 resize/transition and removal paths. Socket reads/acknowledgements never hold
-that lock. This control path makes no task-list query or reflective call.
+that lock. A window Denial minimizes (xdg `suspended`) hides its task with the
+task-organizer force-hidden flag, so the app pauses and stops as when leaving
+an app on a phone and stays stopped if Android reorders tasks. Show and host
+focus clear the flag; focus brings the task forward. This control path makes no task-list query or reflective call.
 
-The bounded command queue coalesces resize and focus updates, preserves the
+The bounded command queue coalesces resize, focus and hide/show updates, preserves the
 existing 80 ms resize debounce and retains each command until acknowledged.
 Close invalidates its window's pending resize/focus operations. Reconnects can
 retry an unacknowledged command, while old object/task incarnations are ignored.

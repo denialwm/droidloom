@@ -219,6 +219,8 @@ impl Backend {
             TaskAction::Focus => (1, 0, 0),
             TaskAction::Resize { width, height } => (2, u64::from(width), u64::from(height)),
             TaskAction::Close => (3, 0, 0),
+            TaskAction::Hide => (4, 0, 0),
+            TaskAction::Show => (5, 0, 0),
         };
         Some(CommandBinding {
             serial,

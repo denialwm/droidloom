@@ -50,6 +50,7 @@ use smithay_client_toolkit::output::{OutputHandler, OutputState};
 use smithay_client_toolkit::presentation_time::{
     PresentTime, PresentationTimeHandler, PresentationTimeState,
 };
+use smithay_client_toolkit::reexports::csd_frame::WindowState;
 use smithay_client_toolkit::registry::{ProvidesRegistryState, RegistryState};
 use smithay_client_toolkit::registry_handlers;
 use smithay_client_toolkit::seat::keyboard::{
@@ -245,6 +246,8 @@ struct TaskWindow {
     applied_opaque: Option<bool>,
     composed_root: bool,
     focused: bool,
+    /// Denial minimized the window (xdg `suspended`): Android stops the task.
+    suspended: bool,
     unmap_requested: bool,
     closing: bool,
 }
@@ -256,6 +259,14 @@ impl TaskWindow {
 
     fn accepts_present(&self) -> bool {
         !self.headless() && self.window.is_some() && !self.unmap_requested && !self.closing
+    }
+
+    fn visibility(&self) -> Visibility {
+        if self.suspended {
+            Visibility::Hidden
+        } else {
+            Visibility::Visible
+        }
     }
 
     fn surface(&self) -> Option<&wl_surface::WlSurface> {
@@ -700,11 +711,10 @@ impl App {
                 content_opaque: false,
                 applied_opaque: None,
                 composed_root: false,
-                presentation_audit: droidloom_timing::traced(
-                    droidloom_timing::Diagnostic::Audit,
-                )
-                .then(presentation_audit::Audit::default),
+                presentation_audit: droidloom_timing::traced(droidloom_timing::Diagnostic::Audit)
+                    .then(presentation_audit::Audit::default),
                 focused: false,
+                suspended: false,
                 unmap_requested: false,
                 closing: false,
             },
@@ -1940,7 +1950,7 @@ impl App {
         {
             task.focused = false;
             if let Some(endpoint) = self.endpoint.as_ref() {
-                endpoint.send_visibility(previous, Visibility::Visible, false)?;
+                endpoint.send_visibility(previous, task.visibility(), false)?;
             }
         }
         self.focused = object;
@@ -1950,7 +1960,7 @@ impl App {
         {
             task.focused = true;
             if let Some(endpoint) = self.endpoint.as_ref() {
-                endpoint.send_visibility(object, Visibility::Visible, true)?;
+                endpoint.send_visibility(object, task.visibility(), true)?;
             }
         }
         Ok(())
@@ -2112,10 +2122,22 @@ impl WindowHandler for App {
         let Some(object) = object else {
             return;
         };
-        let task = self.tasks.get(&object).expect("surface has a task");
+        let task = self.tasks.get_mut(&object).expect("surface has a task");
         if !task.accepts_present() {
             return;
         }
+        let suspended = configure.state.contains(WindowState::SUSPENDED);
+        if task.suspended != suspended {
+            task.suspended = suspended;
+            let (visibility, focused) = (task.visibility(), task.focused);
+            if let Some(endpoint) = self.endpoint.as_ref()
+                && let Err(error) = endpoint.send_visibility(object, visibility, focused)
+            {
+                self.fail(&error);
+                return;
+            }
+        }
+        let task = &self.tasks[&object];
         let package = task.package.clone();
         let previous = task.resize.logical_size(task.logical_size);
         let requested_width = configure.new_size.0.map(NonZeroU32::get);

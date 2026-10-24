@@ -18,7 +18,7 @@ use droidloom_composer_aidl::minigbm::MinigbmBufferAdapter;
 use droidloom_composer_aidl::service::{ComposerLifecycle, ComposerService, SharedSession};
 use droidloom_denial_ipc::{ProtocolSocket, SeqPacket, SeqPacketListener};
 use droidloom_denial_protocol::{
-    AndroidMessage, DenialMessage, PROTOCOL_MAJOR, TaskObjectId, capability,
+    AndroidMessage, DenialMessage, PROTOCOL_MAJOR, TaskObjectId, Visibility, capability,
 };
 use droidloom_syncobj::SyncobjDevice;
 
@@ -379,15 +379,24 @@ fn dispatch_event(
             }
         }
         AppliedDenialEvent::Presented(_) => {}
-        AppliedDenialEvent::Visibility { focused, .. } => {
-            if focused && coordinator.is_direct_task(object) {
-                if let Err(error) = coordinator
-                    .queue_window_command(object, droidloom_task_control::TaskAction::Focus)
-                {
-                    eprintln!(
-                        "Droidloom deferred Android object {} keyboard focus: {error}",
-                        object.0
-                    );
+        AppliedDenialEvent::Visibility {
+            visibility,
+            focused,
+        } => {
+            if coordinator.is_direct_task(object) {
+                use droidloom_task_control::TaskAction;
+                // A minimized window stops its Android task; Android ignores
+                // repeats, so every report is mirrored without local state.
+                let hidden = visibility == Visibility::Hidden;
+                let focus = (focused && !hidden).then_some(TaskAction::Focus);
+                let show = if hidden { TaskAction::Hide } else { TaskAction::Show };
+                for action in std::iter::once(show).chain(focus) {
+                    if let Err(error) = coordinator.queue_window_command(object, action) {
+                        eprintln!(
+                            "Droidloom deferred Android object {} {action:?}: {error}",
+                            object.0
+                        );
+                    }
                 }
             }
         }

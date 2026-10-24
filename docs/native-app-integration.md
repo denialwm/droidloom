@@ -54,8 +54,8 @@ windows until detached; HOME, recents,
 organizer containers and other users/displays are excluded. A five-second
 connection-health check does not enumerate tasks while connected and idle.
 
-Host focus, resize and close now travel over a dedicated subscription on the
-existing root/system task-control endpoint (protocol 3.2). Rust validates the
+Host focus, resize, close, hide and show now travel over a dedicated
+subscription on the existing root/system task-control endpoint (protocol 3.3). Rust validates the
 native window object and the incarnation captured when the command was queued
 against the current registration. ATMS rechecks
 that incarnation, attachment, user and display under WMS's global lock, then

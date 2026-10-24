@@ -11,8 +11,8 @@ task buffers, lifecycle and input over private Unix sockets. The presenter uses
 DMA-BUFs and explicit synchronization. Compositor geometry is sent back to Android;
 there is no combined Android desktop window or compositor plugin.
 
-Host focus, resize and close use the existing authenticated Composer task-control
-endpoint to reach the Rust backend inside system_server. ATMS/WMS validate the
+Host focus, resize, close and minimize use the existing authenticated Composer
+task-control endpoint to reach the Rust backend inside system_server. ATMS/WMS validate the
 registered task incarnation and apply normal Android window/lifecycle operations
 directly. A bounded acknowledged queue coalesces obsolete updates; socket waits
 stay outside the WMS lock. A task's first resize skips the 80 ms debounce: it

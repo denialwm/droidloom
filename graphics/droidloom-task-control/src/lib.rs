@@ -18,7 +18,7 @@ pub const MAGIC: [u8; 4] = *b"DLTC";
 /// Supported protocol major.
 pub const PROTOCOL_MAJOR: u16 = 3;
 /// Supported protocol minor.
-pub const PROTOCOL_MINOR: u16 = 2;
+pub const PROTOCOL_MINOR: u16 = 3;
 /// Fixed bytes before the opcode-specific payload.
 pub const HEADER_BYTES: usize = 24;
 /// Maximum complete task-control record.
@@ -514,6 +514,8 @@ pub fn encode_response(response: &ControlResponse) -> Result<Vec<u8>, CodecError
                 TaskAction::Focus => (1, 0, 0),
                 TaskAction::Resize { width, height } => (2, width, height),
                 TaskAction::Close => (3, 0, 0),
+                TaskAction::Hide => (4, 0, 0),
+                TaskAction::Show => (5, 0, 0),
             };
             payload.u32(kind);
             payload.u32(width);
@@ -601,6 +603,8 @@ pub fn decode_response(record: &[u8]) -> Result<ControlResponse, CodecError> {
                 (1, 0, 0) => TaskAction::Focus,
                 (2, width, height) => TaskAction::Resize { width, height },
                 (3, 0, 0) => TaskAction::Close,
+                (4, 0, 0) => TaskAction::Hide,
+                (5, 0, 0) => TaskAction::Show,
                 _ => return Err(CodecError::InvalidValue("task command action")),
             };
             let command = TaskCommand {
@@ -881,6 +885,8 @@ mod tests {
                 height: 600,
             },
             TaskAction::Close,
+            TaskAction::Hide,
+            TaskAction::Show,
         ] {
             let response = ControlResponse::TaskCommand {
                 request_id: 9,
@@ -894,7 +900,7 @@ mod tests {
             };
             let mut bytes = encode_response(&response).unwrap();
             assert_eq!(decode_response(&bytes).unwrap(), response);
-            bytes[HEADER_BYTES + 28..HEADER_BYTES + 32].copy_from_slice(&4_u32.to_le_bytes());
+            bytes[HEADER_BYTES + 28..HEADER_BYTES + 32].copy_from_slice(&6_u32.to_le_bytes());
             assert!(decode_response(&bytes).is_err());
         }
         for command in [
