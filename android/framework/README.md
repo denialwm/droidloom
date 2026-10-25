@@ -89,6 +89,12 @@ Run the driver-independent native fixtures and Java failure-boundary checks with
 `cargo test --locked -j 1 -p droidloom-update --test vulkan_capabilities -- --ignored`.
 These checks require the prepared AOSP Vulkan headers and a host JDK/C++ compiler.
 
+`0008-droidloom-skip-absent-virtualization.patch` does not start AVF's
+`VirtualizationSystemService` when `virtualizationservice` is absent, as it is in
+the classpath-only `com.android.virt` projection (see `android/apex-compat`).
+The service would wait forever for its maintenance binder, in the daily idle
+job and after every package removal.
+
 `droidloom-window-policy` implements the Droidloom replacement for
 PhoneWindowManager. `0004-droidloom-window-policy.patch` selects it at the existing
 SystemServer policy injection point only for the Droidloom task-window product.

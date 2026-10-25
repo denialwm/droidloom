@@ -307,6 +307,10 @@ const PATCHES: &[(&str, &str)] = &[
         "frameworks/base",
         "android/framework/0007-droidloom-detected-vulkan-capabilities.patch",
     ),
+    (
+        "frameworks/base",
+        "android/framework/0008-droidloom-skip-absent-virtualization.patch",
+    ),
 ];
 #[derive(Serialize, Deserialize)]
 struct Original {

@@ -1,0 +1,51 @@
+From fe1982a7212eeea0e335b67b1b38129062b2e122 Mon Sep 17 00:00:00 2001
+From: Doctor Logix <doctor.logix@gmail.com>
+Date: Sun, 25 Oct 2026 23:05:28 +0100
+Subject: [PATCH] frameworks/base: skip AVF's system service without
+ virtualizationservice
+
+Droidloom projects only the classpath of com.android.virt; its
+virtualizationservice is absent. VirtualizationSystemService then waits
+forever for android.system.virtualizationmaintenance: in its daily idle
+job servicemanager retried the lazy start three times a second, and every
+package removal would block the shared background thread.
+---
+ .../java/com/android/server/SystemServer.java     | 15 +++++++++++++++
+ 1 file changed, 15 insertions(+)
+
+diff --git a/services/java/com/android/server/SystemServer.java b/services/java/com/android/server/SystemServer.java
+index 008da3d75..90c1b9c1e 100644
+--- a/services/java/com/android/server/SystemServer.java
++++ b/services/java/com/android/server/SystemServer.java
+@@ -3679,6 +3679,11 @@ public final class SystemServer implements Dumpable {
+         t.traceEnd();
+     }
+ 
++    private static final String VIRTUALIZATION_SYSTEM_SERVICE_CLASS =
++            "com.android.system.virtualmachine.VirtualizationSystemService";
++    private static final String VIRTUALIZATION_SERVICE_PATH =
++            "/apex/com.android.virt/bin/virtualizationservice";
++
+     /**
+      * Starts system services defined in apexes.
+      *
+@@ -3700,6 +3705,16 @@ public final class SystemServer implements Dumpable {
+         for (ApexSystemServiceInfo info : services) {
+             String name = info.getName();
+             String jarPath = info.getJarPath();
++            if (name.equals(VIRTUALIZATION_SYSTEM_SERVICE_CLASS)
++                    && !new File(VIRTUALIZATION_SERVICE_PATH).exists()) {
++                // A classpath-only com.android.virt carries AVF's framework half
++                // without virtualizationservice. Its system service would wait
++                // forever for the maintenance service, in the daily idle job and
++                // on the shared background thread after every package removal.
++                Slog.i(TAG, "Not starting " + name + ": " + VIRTUALIZATION_SERVICE_PATH
++                        + " is absent");
++                continue;
++            }
+             t.traceBegin("starting " + name);
+             if (TextUtils.isEmpty(jarPath)) {
+                 mSystemServiceManager.startService(name);
+-- 
+2.55.0
+
