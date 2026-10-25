@@ -46,20 +46,16 @@ it. Package builds use rootless Podman and need no host sudo.
 
 ## Phone release loop
 
-ARM64 phones (aston, roadstr, iceland) get a release built on this workstation.
-Run each step under the workspace's `tools/buildwatch`; caches make repeats
-incremental. `.work` is the main checkout's: from a worktree, give its absolute
-path (`/mnt/development/denial-os/droidloom/.work`).
+ARM64 phones (aston, roadstr, iceland) get a release built on this workstation
+from main's last commit, only through the workspace's build tool: merge into
+main first (workspace AGENTS.md, "Building for a phone"), then
+`/mnt/development/denial-os/tools/build start droidloom DEVICE` and
+`tools/build wait DEVICE`. It runs android-build, host-build and bundle-stage
+with this checkout's `.work` caches, so repeats are incremental. Never run
+those steps by hand. STAGE is `/mnt/development/denial-os/builds/DEVICE/droidloom/latest`,
+the newest build that verified.
 
-```console
-cargo run --locked -j 1 -p droidloom-update -- --jobs $(($(nproc) - 2)) android-build --work .work/arch/build --product droidloom_arm64
-cargo run --locked -j 1 -p droidloom-update -- host-build --work .work/arch/build --sysroot ~/.cache/denial/tablet-arm64-20261009/sysroot
-cargo run --locked -j 1 -p droidloom-update -- bundle-stage --work .work/arch/build --product droidloom_arm64 --host .work/arch/build/cargo-aarch64-unknown-linux-gnu/aarch64-unknown-linux-gnu/release --base .work/arm64-base-15885347/images --device DEVICE --destination .work/stage/DEVICE
-```
-
-Each device has one stage, `.work/stage/DEVICE`; `bundle-stage` replaces the
-previous bundle there once the new one verifies, and ends with `Verified
-cross-built bundle ID: STAGE`. Send it over the phone's one stage,
+Send `STAGE/` (the slash follows the link) over the phone's one stage,
 `/var/lib/droidloom/stage/current`, with
 `rsync -a --sparse --delete --compress --compress-choice=zstd`: the previous
 content is the delta basis, so only changed files travel. Run
