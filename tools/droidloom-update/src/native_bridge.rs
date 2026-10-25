@@ -66,7 +66,10 @@ cc_library_headers {
 }
 "#,
     )?;
-    let link = vendor.join("android/native-bridge/link");
+    // Outside the mirrored android/native-bridge, which rsync --delete would
+    // empty on every build. Unchanged bytes keep their timestamps, so Soong
+    // need not analyze the tree again when nothing changed.
+    let link = vendor.join("native-bridge-link");
     fs::create_dir_all(&link)?;
     let mut blueprint =
         String::from("package { default_applicable_licenses: [\"Android-Apache-2.0\"], }\n");
@@ -83,6 +86,7 @@ cc_library_headers {
                 .prefix("native-bridge-apex-")
                 .tempdir_in(work)?;
             let payload = scratch.path().join("payload.img");
+            let extracted = scratch.path().join(format!("{name}.so"));
             run(Command::new("unzip")
                 .args(["-p"])
                 .arg(&apex)
@@ -94,11 +98,10 @@ cc_library_headers {
                 .arg("-R")
                 .arg(format!("cat /lib64/{name}.so"))
                 .arg(&payload)
-                .stdout(std::process::Stdio::from(fs::File::create(
-                    link.join(format!("{name}.so")),
-                )?)))?;
+                .stdout(std::process::Stdio::from(fs::File::create(&extracted)?)))?;
+            write(&link.join(format!("{name}.so")), fs::read(&extracted)?)?;
         } else {
-            copy(&library, &link.join(format!("{name}.so")))?;
+            write(&link.join(format!("{name}.so")), fs::read(&library)?)?;
         }
         let bytes = fs::read(link.join(format!("{name}.so")))?;
         if bytes.len() < 20
