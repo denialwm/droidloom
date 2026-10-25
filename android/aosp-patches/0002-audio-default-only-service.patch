@@ -199,7 +199,7 @@ index 6f37f0b..b3a5006 100644
      return ndk::ScopedAStatus::ok();
  }
 diff --git a/audio/aidl/default/ModulePrimary.cpp b/audio/aidl/default/ModulePrimary.cpp
-index 9e4e9e7..8c38746 100644
+index 9e4e9e7..b0aa42c 100644
 --- a/audio/aidl/default/ModulePrimary.cpp
 +++ b/audio/aidl/default/ModulePrimary.cpp
 @@ -59,6 +59,14 @@ ndk::ScopedAStatus ModulePrimary::calculateBufferSizeFrames(
@@ -377,7 +377,7 @@ index f4aeaa4..d9921da 100644
      // data than just total frame count. For example, the driver may correctly account
      // for any intermediate buffers.
 diff --git a/audio/aidl/default/include/core-impl/StreamPrimary.h b/audio/aidl/default/include/core-impl/StreamPrimary.h
-index 87dcc3b..ad2e934 100644
+index 87dcc3b..a717d36 100644
 --- a/audio/aidl/default/include/core-impl/StreamPrimary.h
 +++ b/audio/aidl/default/include/core-impl/StreamPrimary.h
 @@ -24,6 +24,9 @@
@@ -402,11 +402,14 @@ index 87dcc3b..ad2e934 100644
  
      // Overridden methods of 'StreamCommonImpl', called on a Binder thread.
      ndk::ScopedAStatus setConnectedDevices(const ConnectedDevices& devices) override;
-@@ -71,6 +79,13 @@ class StreamPrimary : public StreamAlsaMonoPipe {
+@@ -71,6 +79,16 @@ class StreamPrimary : public StreamAlsaMonoPipe {
      bool isStubStreamOnWorker() const { return mCurrAlsaDeviceId == kStubDeviceId; }
  
      DriverStubImpl mStubDriver;
 +#ifdef DROIDLOOM_AUDIO_DEFAULT_ONLY
++    void dropHost(const char* operation, int status);
++    bool hostControl(uint64_t command);
++
 +    void* mHostAudio = nullptr;
 +    void* mHostBuffer = nullptr;
 +    uint32_t mHostBufferFrames = 0;
@@ -417,45 +420,44 @@ index 87dcc3b..ad2e934 100644
      AlsaDeviceId mAlsaDeviceId GUARDED_BY(mLock) = kStubDeviceId;
  
 diff --git a/audio/aidl/default/primary/StreamPrimary.cpp b/audio/aidl/default/primary/StreamPrimary.cpp
-index ac0d302..9316062 100644
+index ac0d302..2b823f9 100644
 --- a/audio/aidl/default/primary/StreamPrimary.cpp
 +++ b/audio/aidl/default/primary/StreamPrimary.cpp
-@@ -52,10 +52,17 @@ StreamPrimary::StreamPrimary(StreamContext* context, const Metadata& metadata)
+@@ -52,10 +52,16 @@ StreamPrimary::StreamPrimary(StreamContext* context, const Metadata& metadata)
  }
  
  ::android::status_t StreamPrimary::drain(StreamDescriptor::DrainMode mode) {
 +#ifdef DROIDLOOM_AUDIO_DEFAULT_ONLY
-+    if (mHostAudio) return dl_audio_control(mHostAudio,
-+            mIsInput ? DL_AUDIO_FLUSH : DL_AUDIO_DRAIN);
++    if (hostControl(mIsInput ? DL_AUDIO_FLUSH : DL_AUDIO_DRAIN)) return ::android::OK;
 +#endif
      return isStubStreamOnWorker() ? mStubDriver.drain(mode) : StreamAlsaMonoPipe::drain(mode);
  }
  
  ::android::status_t StreamPrimary::flush() {
 +#ifdef DROIDLOOM_AUDIO_DEFAULT_ONLY
-+    if (mHostAudio) return dl_audio_control(mHostAudio, DL_AUDIO_FLUSH);
++    if (hostControl(DL_AUDIO_FLUSH)) return ::android::OK;
 +#endif
      RETURN_STATUS_IF_ERROR(isStubStreamOnWorker() ? mStubDriver.flush()
                                                    : StreamAlsaMonoPipe::flush());
      // TODO(b/372951987): consider if this needs to be done from 'StreamInWorkerLogic::cycle'.
-@@ -63,10 +70,16 @@ StreamPrimary::StreamPrimary(StreamContext* context, const Metadata& metadata)
+@@ -63,10 +69,16 @@ StreamPrimary::StreamPrimary(StreamContext* context, const Metadata& metadata)
  }
  
  ::android::status_t StreamPrimary::pause() {
 +#ifdef DROIDLOOM_AUDIO_DEFAULT_ONLY
-+    if (mHostAudio) return dl_audio_control(mHostAudio, DL_AUDIO_PAUSE);
++    if (hostControl(DL_AUDIO_PAUSE)) return ::android::OK;
 +#endif
      return isStubStreamOnWorker() ? mStubDriver.pause() : StreamAlsaMonoPipe::pause();
  }
  
  ::android::status_t StreamPrimary::standby() {
 +#ifdef DROIDLOOM_AUDIO_DEFAULT_ONLY
-+    if (mHostAudio) return dl_audio_control(mHostAudio, DL_AUDIO_STANDBY);
++    if (hostControl(DL_AUDIO_STANDBY)) return ::android::OK;
 +#endif
      return isStubStreamOnWorker() ? mStubDriver.standby() : StreamAlsaMonoPipe::standby();
  }
  
-@@ -83,6 +96,21 @@ StreamPrimary::StreamPrimary(StreamContext* context, const Metadata& metadata)
+@@ -83,6 +95,23 @@ StreamPrimary::StreamPrimary(StreamContext* context, const Metadata& metadata)
          StreamAlsaMonoPipe::shutdown();  // Close currently opened ALSA devices.
      }
      if (isStub) {
@@ -465,19 +467,21 @@ index ac0d302..9316062 100644
 +                    mIsInput ? DL_AUDIO_CAPTURE : DL_AUDIO_PLAYBACK,
 +                    mContext.getSampleRate(), mFrameSizeBytes / sizeof(int16_t),
 +                    mIsInput ? 1024 : 8192, &mHostAudio);
-+            // An older host or a denied microphone retains the timing-only
-+            // fallback. A failed live transport is reported, never retried blind.
-+            if (status != 0 && status != -ENOENT && status != -ECONNREFUSED && status != -EACCES) {
-+                return status;
++            // An older host or a denied microphone keeps the timing-only
++            // fallback quietly. Any other failure is reported, then the
++            // stream plays timing-only until its next start.
++            if (status == 0) {
++                mHostFrameOffset = mContext.getFrameCount();
++            } else if (status != -ENOENT && status != -ECONNREFUSED && status != -EACCES) {
++                LOG(WARNING) << __func__ << ": host open failed: " << status;
 +            }
-+            mHostFrameOffset = mContext.getFrameCount();
 +        }
-+        if (mHostAudio) return dl_audio_control(mHostAudio, DL_AUDIO_START);
++        if (hostControl(DL_AUDIO_START)) return ::android::OK;
 +#endif
          return mStubDriver.start();
      }
      RETURN_STATUS_IF_ERROR(StreamAlsaMonoPipe::start());
-@@ -94,6 +122,30 @@ StreamPrimary::StreamPrimary(StreamContext* context, const Metadata& metadata)
+@@ -94,6 +123,30 @@ StreamPrimary::StreamPrimary(StreamContext* context, const Metadata& metadata)
  
  ::android::status_t StreamPrimary::transfer(void* buffer, size_t frameCount,
                                              size_t* actualFrameCount, int32_t* latencyMs) {
@@ -508,7 +512,7 @@ index ac0d302..9316062 100644
      if (isStubStreamOnWorker()) {
          return mStubDriver.transfer(buffer, frameCount, actualFrameCount, latencyMs);
      }
-@@ -130,17 +182,53 @@ StreamPrimary::StreamPrimary(StreamContext* context, const Metadata& metadata)
+@@ -130,17 +183,80 @@ StreamPrimary::StreamPrimary(StreamContext* context, const Metadata& metadata)
      return ::android::OK;
  }
  
@@ -517,8 +521,10 @@ index ac0d302..9316062 100644
 +#ifdef DROIDLOOM_AUDIO_DEFAULT_ONLY
 +    if (mHostAudio) {
 +        struct dl_audio_position host;
-+        const int status = dl_audio_position(mHostAudio, &host);
-+        if (status) return status;
++        if (const int status = dl_audio_position(mHostAudio, &host); status) {
++            dropHost("position", status);
++            return ::android::OK;
++        }
 +        position->frames = mHostFrameOffset + host.frames;
 +        position->timeNs = host.monotonic_ns;
 +        return ::android::OK;
@@ -545,7 +551,11 @@ index ac0d302..9316062 100644
 +    if (!mHostAudio) return ::android::INVALID_OPERATION;
 +    const int status = dl_audio_acquire(mHostAudio, std::min<size_t>(*frameCount, mIsInput ? 1024 : 256),
 +            buffer, &mHostBufferFrames);
-+    if (status) return status;
++    if (status) {
++        // The scratch path then hands this burst to the stub driver.
++        dropHost("acquire", status);
++        return ::android::INVALID_OPERATION;
++    }
 +    mHostBuffer = *buffer;
 +    mHostTransferredFrames = 0;
 +    *frameCount = mHostBufferFrames;
@@ -556,14 +566,35 @@ index ac0d302..9316062 100644
 +    if (!mHostAudio || !mHostBuffer) return ::android::OK;
 +    const int status = dl_audio_submit(mHostAudio, mHostTransferredFrames);
 +    mHostBuffer = nullptr;
-+    return status;
++    if (status) dropHost("submit", status);
++    return ::android::OK;
++}
++
++// A failed host transport must not leave the stream in ERROR: Android would
++// retry its bursts forever and never finish the track. Play the rest of this
++// run timing-only, so tracks end and the mixer reaches standby; the next start
++// connects again.
++void StreamPrimary::dropHost(const char* operation, int status) {
++    LOG(WARNING) << __func__ << ": host " << operation << " failed: " << status
++                 << "; timing-only until the next start";
++    dl_audio_close(mHostAudio);
++    mHostAudio = mHostBuffer = nullptr;
++    mStubDriver.start();
++}
++
++bool StreamPrimary::hostControl(uint64_t command) {
++    if (!mHostAudio) return false;
++    const int status = dl_audio_control(mHostAudio, command);
++    if (status == 0) return true;
++    dropHost("control", status);
++    return false;
 +}
 +#endif
 +
  ndk::ScopedAStatus StreamPrimary::setConnectedDevices(const ConnectedDevices& devices) {
      LOG(DEBUG) << __func__ << ": " << ::android::internal::ToString(devices);
      if (devices.size() > 1) {
-@@ -203,9 +291,11 @@ bool StreamPrimary::useStubStream(
+@@ -203,9 +319,11 @@ bool StreamPrimary::useStubStream(
      if (isInput) {
          return kSimulateInput || device.type.type == AudioDeviceType::IN_TELEPHONY_RX ||
                 device.type.type == AudioDeviceType::IN_FM_TUNER ||
