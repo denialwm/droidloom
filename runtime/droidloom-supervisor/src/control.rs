@@ -45,6 +45,9 @@ use lifecycle_wait::WaitSources;
 mod cell_watch;
 pub use cell_watch::supervise_cell;
 
+#[path = "media_scan.rs"]
+mod media_scan;
+
 use progress::{LOG_HINT, Reporter};
 
 /// Default root-owned lifecycle socket.
@@ -376,6 +379,8 @@ struct ActiveCell {
     cell: DevelopmentCell,
     ready_init: std::cell::Cell<Option<u32>>,
     started: Instant,
+    /// Tells `MediaProvider` about host changes in the shared folders.
+    _media: Option<media_scan::MediaWatch>,
 }
 impl ActiveCell {
     fn ready_init(&self, progress: &Reporter) -> Result<u32, ControlError> {
@@ -519,6 +524,7 @@ impl Daemon {
             cell,
             ready_init: std::cell::Cell::new(None),
             started: Instant::now(),
+            _media: media_scan::start(&spec),
         });
         self.last_exit = None;
         Ok(ControlResponse {

@@ -184,6 +184,7 @@ public final class DroidloomFrameworkControl {
                 display.put("initial_dpi", service.mWindowManager.getInitialDisplayDensity(0));
                 return display.toString();
             }
+            case 8: return DroidloomMediaScan.queue(service.mContext, request.getJSONArray("paths"));
             default: throw new IllegalArgumentException("Unknown framework operation");
         }
     }

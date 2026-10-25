@@ -20,6 +20,8 @@ pub const PACKAGE: u16 = 5;
 pub const PACKAGE_ACTION: u16 = 6;
 /// Read the built-in display's density and the one it started with.
 pub const DISPLAY: u16 = 7;
+/// Ask MediaProvider to rescan shared-storage paths the host changed.
+pub const MEDIA_SCAN: u16 = 8;
 /// Error bit in a response opcode.
 pub const ERROR: u16 = 0x8000;
 

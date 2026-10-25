@@ -157,6 +157,11 @@ links.
   are found at each start; a folder is shared while it is a real directory
   owned by the user and the user's primary group, and gets the setgid bit
   before the cell starts. Android keeps its own folder for the others.
+  Host writes to shared folders bypass MediaProvider's FUSE layer, so while
+  the cell runs `droidloomd` watches them with inotify and sends each changed
+  path, batched after 250 ms of quiet, to the framework's control socket;
+  system_server asks MediaProvider to scan it, which indexes a new file and
+  drops a removed one.
 - per-user application integration: managed `.desktop` files below
   `$XDG_DATA_HOME/applications` with `droidloom-` names, rendered icons below the user's
   hicolor icon tree, and reconciliation state below `$XDG_STATE_HOME/droidloom`.
