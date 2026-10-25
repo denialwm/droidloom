@@ -54,3 +54,35 @@
                  mWaitingActivityLaunched.remove(i);
                  changed = true;
              }
+--- a/services/core/java/com/android/server/wm/DisplayContent.java
++++ b/services/core/java/com/android/server/wm/DisplayContent.java
+@@ -831,6 +831,9 @@
+      */
+     private WindowState mTmpHoldScreenWindow;
+ 
++    /** Droidloom's per-task keep-screen-on, set for the default display's surface placement. */
++    private DroidloomTaskBackend mDroidloomTasks;
++
+     /** Last window that obscures all windows below. */
+     private WindowState mObscuringWindow;
+ 
+@@ -1137,6 +1140,7 @@
+             // Take care of the window being ready to display.
+             w.mWinAnimator.commitFinishDrawingLocked();
+         }
++        if (mDroidloomTasks != null) mDroidloomTasks.placeWindow(w);
+ 
+         // Update effect.
+         w.mObscured = mTmpApplySurfaceChangesTransactionState.obscured;
+@@ -1382,9 +1386,11 @@
+     private void beginHoldScreenUpdate() {
+         mTmpHoldScreenWindow = null;
+         mObscuringWindow = null;
++        mDroidloomTasks = isDefaultDisplay ? mWmService.mAtmService.mDroidloomTasks : null;
+     }
+ 
+     private void finishHoldScreenUpdate() {
++        if (mDroidloomTasks != null) mDroidloomTasks.windowsPlaced();
+         final boolean hold = mTmpHoldScreenWindow != null;
+         if (hold && mTmpHoldScreenWindow != mHoldScreenWindow) {
+             mHoldScreenWakeLock.setWorkSource(new WorkSource(mTmpHoldScreenWindow.mSession.mUid,

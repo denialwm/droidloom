@@ -113,6 +113,7 @@ pub struct DenialPresentationSink {
     compositor: Arc<Mutex<Option<LayerCompositor>>>,
     activation_requests: bool,
     lazy_render_targets: bool,
+    keep_screen_on: bool,
 }
 
 impl DenialPresentationSink {
@@ -125,6 +126,7 @@ impl DenialPresentationSink {
             compositor: Arc::new(Mutex::new(None)),
             activation_requests: false,
             lazy_render_targets: false,
+            keep_screen_on: false,
         }
     }
 
@@ -140,6 +142,39 @@ impl DenialPresentationSink {
     pub fn with_lazy_render_targets(mut self, enabled: bool) -> Self {
         self.lazy_render_targets = enabled;
         self
+    }
+
+    /// Record whether this host keeps its displays on for a task.
+    #[must_use]
+    pub fn with_keep_screen_on(mut self, enabled: bool) -> Self {
+        self.keep_screen_on = enabled;
+        self
+    }
+
+    /// Tell the host whether a shown window of the task has Android's
+    /// `FLAG_KEEP_SCREEN_ON`. Only changes are sent.
+    ///
+    /// # Errors
+    /// Returns unknown-display or transport errors; older hosts remain usable.
+    pub fn set_keep_screen_on(&self, display: DisplayId, keep: bool) -> Result<(), DenialSinkError> {
+        if !self.keep_screen_on {
+            return Ok(());
+        }
+        let mut tasks = self.lock_tasks()?;
+        let channel = tasks
+            .get_mut(&display)
+            .ok_or(DenialSinkError::UnknownDisplay(display))?;
+        if channel.keep_screen_on != keep {
+            self.socket.send_android(
+                &AndroidMessage::SetKeepScreenOn {
+                    object: channel.binding.object(),
+                    keep,
+                },
+                &[],
+            )?;
+            channel.keep_screen_on = keep;
+        }
+        Ok(())
     }
 
     /// Request host activation of an already bound task when supported.
@@ -214,6 +249,7 @@ impl DenialPresentationSink {
                 frame_targets: BTreeMap::new(),
                 trace_fences: BTreeMap::new(),
                 content_opaque: None,
+                keep_screen_on: false,
                 surfaceflinger_present_fence: None,
                 headless_completion: None,
                 android_display_extent: None,
@@ -1006,6 +1042,8 @@ struct TaskChannel {
     trace_fences: BTreeMap<droidloom_transport::FrameId, std::os::fd::OwnedFd>,
     /// Last opaque-coverage proof sent to the host for this task.
     content_opaque: Option<bool>,
+    /// Last keep-screen-on state sent to the host for this task.
+    keep_screen_on: bool,
     /// SurfaceFlinger's GPU completion fence awaiting Composer3 present reply.
     surfaceflinger_present_fence: Option<std::os::fd::OwnedFd>,
     /// Dedicated completion timeline and last point for frames without GPU work.

@@ -34,7 +34,7 @@ catalog JAR are retired. This validates authoritative ActivityTaskManager
 publication, direct framework focus/resize/close handling and layer commits
 without building images or installing anything. Their Droidloom shared-library
 dependencies are rebuilt and staged with them. All task-control peers
-(services, InputFlinger and Composer) must carry task-backend ABI 2.
+(services, InputFlinger and Composer) must carry task-backend ABI 3.
 Services, InputFlinger and Composer also require native input ABI 2; services,
 SystemUI, IME and the presenter require host channels ABI 1. The standalone input
 bridge process, launcher and byte-copy relays are removed.

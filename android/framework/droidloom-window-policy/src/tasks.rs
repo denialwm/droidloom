@@ -21,6 +21,19 @@ pub struct Task {
     pub user: u32,
     pub display: u32,
     pub package: String,
+    /// A shown window of the task has `FLAG_KEEP_SCREEN_ON`.
+    pub keep_screen_on: bool,
+}
+
+impl Task {
+    /// The same framework task incarnation; its state may differ.
+    fn same_identity(&self, other: &Self) -> bool {
+        self.id == other.id
+            && self.incarnation == other.incarnation
+            && self.user == other.user
+            && self.display == other.display
+            && self.package == other.package
+    }
 }
 
 /// Stable identities acknowledged by Composer.
@@ -292,7 +305,7 @@ impl Backend {
             if known == &task && self.epoch == *epoch && !activate {
                 return Ok(*binding);
             }
-            if known != &task {
+            if !known.same_identity(&task) {
                 self.retire(known.id, known.incarnation)?;
             }
         }
@@ -319,6 +332,7 @@ impl Backend {
             android_display: task.display,
             incarnation: task.incarnation,
             activate,
+            keep_screen_on: task.keep_screen_on,
         })? {
             ControlResponse::Bound {
                 request_id: actual,
@@ -417,6 +431,14 @@ mod tests {
         socket
     }
     fn register(socket: &SeqPacket, object: u64, expected_activation: bool) {
+        register_state(socket, object, expected_activation, false);
+    }
+    fn register_state(
+        socket: &SeqPacket,
+        object: u64,
+        expected_activation: bool,
+        expected_keep_screen_on: bool,
+    ) {
         let ControlRequest::PublishFramework {
             request_id,
             task,
@@ -424,12 +446,14 @@ mod tests {
             package,
             activate,
             incarnation,
+            keep_screen_on,
         } = receive(socket)
         else {
             panic!("expected registration")
         };
         assert_eq!(package, "org.example.app");
         assert_eq!(activate, expected_activation);
+        assert_eq!(keep_screen_on, expected_keep_screen_on);
         assert!(incarnation > 0);
         send(
             socket,
@@ -456,7 +480,29 @@ mod tests {
             user: 0,
             display: 0,
             package: "org.example.app".into(),
+            keep_screen_on: false,
         }
+    }
+
+    #[test]
+    fn keep_screen_on_republishes_the_same_window() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("control");
+        let listener = SeqPacketListener::bind(&path).unwrap();
+        let server = thread::spawn(move || {
+            let socket = hello(&listener);
+            register_state(&socket, 100, false, false);
+            register_state(&socket, 100, false, true); // No removal before it.
+            register_state(&socket, 100, false, false);
+        });
+        let mut backend = Backend::new(path);
+        let first = backend.register(task(1)).unwrap();
+        let mut held = task(1);
+        held.keep_screen_on = true;
+        assert_eq!(backend.register(held.clone()).unwrap(), first);
+        assert_eq!(backend.register(held).unwrap(), first); // Unchanged: no I/O.
+        assert_eq!(backend.register(task(1)).unwrap(), first);
+        server.join().unwrap();
     }
 
     #[test]

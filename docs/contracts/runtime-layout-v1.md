@@ -63,7 +63,7 @@ compiler filter, profile and app image the base used for each. The result, with
 the base's other oat files unchanged, replaces `/system/framework/oat/<isa>`. The package
 must contain window-policy ABI 1 metadata in both compiled artifacts; native
 architecture must match the cell, and JNI checks the ABI again before WMS starts.
-The framework task backend additionally requires task-backend ABI 2 metadata
+The framework task backend additionally requires task-backend ABI 3 metadata
 in services, InputFlinger and Composer. Native input ABI 2
 pairs services, InputFlinger and Composer; host channels ABI 1 pairs services,
 SystemUI, IME and the presenter. The standalone input support process and its

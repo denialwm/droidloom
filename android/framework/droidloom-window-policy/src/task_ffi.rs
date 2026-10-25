@@ -7,7 +7,7 @@ static BACKEND: OnceLock<Mutex<Backend>> = OnceLock::new();
 static COMMANDS: OnceLock<Mutex<CommandStream>> = OnceLock::new();
 
 #[unsafe(no_mangle)]
-pub static DROIDLOOM_TASK_BACKEND_ABI: [u8; 29] = *b"DROIDLOOM_TASK_BACKEND_ABI=2;";
+pub static DROIDLOOM_TASK_BACKEND_ABI: [u8; 29] = *b"DROIDLOOM_TASK_BACKEND_ABI=3;";
 
 fn with_backend<T>(f: impl FnOnce(&mut Backend) -> T) -> T {
     let mut backend = BACKEND
@@ -19,7 +19,7 @@ fn with_backend<T>(f: impl FnOnce(&mut Backend) -> T) -> T {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn droidloom_task_version() -> i32 {
-    2
+    3
 }
 
 fn with_commands<T>(f: impl FnOnce(&mut CommandStream) -> T) -> T {
@@ -88,6 +88,7 @@ pub unsafe extern "C" fn droidloom_task_register(
     length: usize,
     out: *mut Binding,
     activate: bool,
+    keep_screen_on: bool,
 ) -> bool {
     if id <= 0
         || incarnation <= 0
@@ -120,6 +121,7 @@ pub unsafe extern "C" fn droidloom_task_register(
         user,
         display,
         package: package.to_owned(),
+        keep_screen_on,
     };
     with_backend(|b| {
         match if activate {

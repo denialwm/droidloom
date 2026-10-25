@@ -20,7 +20,7 @@ pub const MAGIC: [u8; 4] = *b"DLOM";
 /// Protocol major implemented by this crate.
 pub const PROTOCOL_MAJOR: u16 = 1;
 /// Protocol minor implemented by this crate.
-pub const PROTOCOL_MINOR: u16 = 9;
+pub const PROTOCOL_MINOR: u16 = 10;
 /// Wire version retained by existing records, including initial negotiation.
 pub const BASE_PROTOCOL_MINOR: u16 = 3;
 /// Wire version introducing task activation.
@@ -74,6 +74,8 @@ pub mod capability {
     pub const SCENE_PRESENTATION: u64 = 1 << 12;
     /// The host forwards its compositor frame grants as Android's vsync.
     pub const HOST_CLOCK: u64 = 1 << 13;
+    /// Android tells the host which tasks keep the screen on.
+    pub const KEEP_SCREEN_ON: u64 = 1 << 14;
 
     /// Capabilities required for every protocol-v1 session.
     pub const REQUIRED_V1: u64 = TASK_WINDOWS
@@ -255,6 +257,14 @@ pub enum AndroidMessage {
     RequestActivation {
         /// Existing task to activate.
         object: TaskObjectId,
+    },
+    /// A shown window of the task has Android's `FLAG_KEEP_SCREEN_ON`.
+    /// Requires negotiated `KEEP_SCREEN_ON`.
+    SetKeepScreenOn {
+        /// Owning task.
+        object: TaskObjectId,
+        /// Whether the host keeps its displays on while the task is visible.
+        keep: bool,
     },
     /// Answer a host liveness probe.
     Pong {
@@ -1210,6 +1220,7 @@ const OP_REQUEST_ACTIVATION: u16 = 0x000e;
 const OP_BIND_INPUT_CHANNEL: u16 = 0x000f;
 const OP_BIND_INPUT_ROUTE: u16 = 0x0010;
 const OP_REQUEST_RENDER_TARGETS: u16 = 0x0011;
+const OP_SET_KEEP_SCREEN_ON: u16 = 0x0012;
 
 const OP_SERVER_HELLO: u16 = 0x8001;
 const OP_FORMAT_FEEDBACK: u16 = 0x8002;
@@ -1406,6 +1417,10 @@ pub fn encode_android(message: &AndroidMessage) -> Result<EncodedPacket, WireErr
         }
         AndroidMessage::RequestActivation { object } => {
             (OP_REQUEST_ACTIVATION, valid_object(*object)?, Vec::new())
+        }
+        AndroidMessage::SetKeepScreenOn { object, keep } => {
+            payload.u32(u32::from(*keep));
+            (OP_SET_KEEP_SCREEN_ON, valid_object(*object)?, Vec::new())
         }
         AndroidMessage::Pong { cookie } => {
             payload.u64(*cookie);
@@ -1627,6 +1642,20 @@ pub fn decode_android(
         OP_REQUEST_ACTIVATION => {
             valid_object(object)?;
             (AndroidMessage::RequestActivation { object }, Vec::new())
+        }
+        OP_SET_KEEP_SCREEN_ON => {
+            valid_object(object)?;
+            let keep = match payload.u32()? {
+                0 => false,
+                1 => true,
+                value => {
+                    return Err(WireError::InvalidEnum {
+                        field: "keep screen on",
+                        value: u64::from(value),
+                    });
+                }
+            };
+            (AndroidMessage::SetKeepScreenOn { object, keep }, Vec::new())
         }
         OP_PONG => {
             require_connection(header.object)?;
@@ -2289,6 +2318,7 @@ fn finish_packet(
         OP_REQUEST_RENDER_TARGETS => 7,
         OP_SCENE_PRESENTED => 8,
         OP_FRAME_GRANT => 9,
+        OP_SET_KEEP_SCREEN_ON => 10,
         _ => BASE_PROTOCOL_MINOR,
     };
     bytes.extend_from_slice(&minor.to_le_bytes());
@@ -2844,6 +2874,10 @@ mod tests {
             },
             AndroidMessage::DestroyTask { object: OBJECT },
             AndroidMessage::RequestActivation { object: OBJECT },
+            AndroidMessage::SetKeepScreenOn {
+                object: OBJECT,
+                keep: true,
+            },
             AndroidMessage::Pong { cookie: 99 },
         ] {
             round_trip_android(&message);

@@ -76,6 +76,10 @@ use wayland_protocols::wp::fractional_scale::v1::client::{
     wp_fractional_scale_manager_v1::WpFractionalScaleManagerV1,
     wp_fractional_scale_v1::{self, WpFractionalScaleV1},
 };
+use wayland_protocols::wp::idle_inhibit::zv1::client::{
+    zwp_idle_inhibit_manager_v1::ZwpIdleInhibitManagerV1,
+    zwp_idle_inhibitor_v1::ZwpIdleInhibitorV1,
+};
 use wayland_protocols::wp::linux_dmabuf::zv1::client::{
     zwp_linux_buffer_params_v1, zwp_linux_dmabuf_feedback_v1,
 };
@@ -248,6 +252,9 @@ struct TaskWindow {
     focused: bool,
     /// Denial minimized the window (xdg `suspended`): Android stops the task.
     suspended: bool,
+    /// Held while a shown Android window has `FLAG_KEEP_SCREEN_ON`. Denial
+    /// keeps its displays on only while this window is visible.
+    idle_inhibitor: Option<ZwpIdleInhibitorV1>,
     unmap_requested: bool,
     closing: bool,
 }
@@ -318,6 +325,7 @@ struct App {
     output_state: OutputState,
     output_power_manager: ZwlrOutputPowerManagerV1,
     output_power: Vec<OutputPowerState>,
+    idle_inhibit_manager: Option<ZwpIdleInhibitManagerV1>,
     host_display_powered: Option<bool>,
     published_display_power: Option<bool>,
     presentation_time: PresentationTimeState,
@@ -715,6 +723,7 @@ impl App {
                     .then(presentation_audit::Audit::default),
                 focused: false,
                 suspended: false,
+                idle_inhibitor: None,
                 unmap_requested: false,
                 closing: false,
             },
@@ -1432,6 +1441,9 @@ impl App {
             if let Some(surface) = task.sync_surface.take() {
                 surface.destroy();
             }
+            if let Some(inhibitor) = task.idle_inhibitor.take() {
+                inhibitor.destroy();
+            }
             for (_, target) in task.targets {
                 if let Some(buffer) = target.wayland {
                     buffer.destroy();
@@ -1479,6 +1491,9 @@ impl App {
         }
         if let Some(sync_surface) = task.sync_surface.take() {
             sync_surface.destroy();
+        }
+        if let Some(inhibitor) = task.idle_inhibitor.take() {
+            inhibitor.destroy();
         }
         // Window is reference counted by SCTK. Taking our handle below does
         // not guarantee that WindowInner is dropped here, so relying on Drop
@@ -1589,6 +1604,23 @@ impl App {
                     });
                 }
             }
+            EndpointAction::SetKeepScreenOn { object, keep } => {
+                let task = self
+                    .tasks
+                    .get_mut(&object)
+                    .ok_or(PresenterError::UnknownTask(object))?;
+                if !keep {
+                    if let Some(inhibitor) = task.idle_inhibitor.take() {
+                        inhibitor.destroy();
+                    }
+                } else if task.idle_inhibitor.is_none()
+                    && task.accepts_present()
+                    && let (Some(manager), Some(window)) =
+                        (self.idle_inhibit_manager.as_ref(), task.window.as_ref())
+                {
+                    task.idle_inhibitor = Some(manager.create_inhibitor(window.wl_surface(), qh, ()));
+                }
+            }
             EndpointAction::RequestActivation { object } => {
                 if self.focused != Some(object)
                     && let Some(task) = self
@@ -1676,6 +1708,11 @@ impl App {
                     .with_direct_input()
                     .with_lazy_render_targets()
                     .with_scene_presentation();
+                let endpoint = if self.idle_inhibit_manager.is_some() {
+                    endpoint.with_keep_screen_on()
+                } else {
+                    endpoint
+                };
                 // Android takes Denial's grants as its vsync only when they
                 // can be compared with the private protocol's clock.
                 let endpoint = if self.frame_timeline_manager.is_some()
@@ -3050,6 +3087,8 @@ wayland_client::delegate_noop!(App: ignore WpFractionalScaleManagerV1);
 wayland_client::delegate_noop!(App: ignore WpViewporter);
 wayland_client::delegate_noop!(App: ignore WpViewport);
 wayland_client::delegate_noop!(App: ignore ZwlrOutputPowerManagerV1);
+wayland_client::delegate_noop!(App: ignore ZwpIdleInhibitManagerV1);
+wayland_client::delegate_noop!(App: ignore ZwpIdleInhibitorV1);
 
 fn main() {
     eprintln!("DROIDLOOM_DIRECT_INPUT_ABI=1;");
@@ -3159,6 +3198,7 @@ fn run() -> Result<(), PresenterError> {
         output_state: OutputState::new(&globals, &qh),
         output_power_manager,
         output_power: Vec::new(),
+        idle_inhibit_manager: globals.bind(&qh, 1..=1, ()).ok(),
         host_display_powered: None,
         published_display_power: None,
         presentation_time,

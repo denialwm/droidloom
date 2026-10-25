@@ -399,6 +399,7 @@ impl TaskCoordinator {
                 android_display,
                 None,
                 true,
+                None,
             ),
             ControlRequest::PublishDirect {
                 request_id,
@@ -413,6 +414,7 @@ impl TaskCoordinator {
                 android_display,
                 None,
                 activate,
+                None,
             ),
             ControlRequest::PublishFramework {
                 request_id,
@@ -421,6 +423,7 @@ impl TaskCoordinator {
                 android_display,
                 incarnation,
                 activate,
+                keep_screen_on,
             } => self.register_direct(
                 request_id,
                 package,
@@ -428,6 +431,7 @@ impl TaskCoordinator {
                 android_display,
                 Some(incarnation),
                 activate,
+                Some(keep_screen_on),
             ),
             ControlRequest::Remove { request_id, object } => {
                 self.remove(request_id, TaskObjectId(object))
@@ -554,6 +558,7 @@ impl TaskCoordinator {
         android_display: u32,
         incarnation: Option<u64>,
         activate: bool,
+        keep_screen_on: Option<bool>,
     ) -> Result<ControlResponse, ControlFailure> {
         if android_display > i32::MAX as u32 {
             return Err((
@@ -568,6 +573,11 @@ impl TaskCoordinator {
             self.sink.socket().send_android(&droidloom_denial_protocol::AndroidMessage::BindInputRoute {
                 object, display: input_display, incarnation: input_incarnation,
             }, &[]).map_err(|error| backend(error.to_string()))?;
+        }
+        if let Some(keep) = keep_screen_on {
+            self.sink
+                .set_keep_screen_on(display, keep)
+                .map_err(|error| backend(error.to_string()))?;
         }
         if activate {
             self.sink.request_activation(display).map_err(|error| backend(error.to_string()))?;

@@ -40,12 +40,12 @@ fn main() {
         .expect("input compatibility marker is ASCII");
     if std::env::args().any(|arg| arg == "--compatibility") {
         println!(
-            "{compatibility} DROIDLOOM_TASK_BACKEND_ABI=2; DROIDLOOM_DIRECT_INPUT_ABI=1; DROIDLOOM_NATIVE_INPUT_ABI=2;"
+            "{compatibility} DROIDLOOM_TASK_BACKEND_ABI=3; DROIDLOOM_DIRECT_INPUT_ABI=1; DROIDLOOM_NATIVE_INPUT_ABI=2;"
         );
         return;
     }
     eprintln!(
-        "Droidloom Composer {compatibility} DROIDLOOM_TASK_BACKEND_ABI=2; DROIDLOOM_DIRECT_INPUT_ABI=1; DROIDLOOM_NATIVE_INPUT_ABI=2;"
+        "Droidloom Composer {compatibility} DROIDLOOM_TASK_BACKEND_ABI=3; DROIDLOOM_DIRECT_INPUT_ABI=1; DROIDLOOM_NATIVE_INPUT_ABI=2;"
     );
     if let Err(error) = run() {
         eprintln!("Droidloom Composer fatal: {error}");
@@ -72,7 +72,8 @@ fn run() -> Result<(), String> {
 
     let sink = DenialPresentationSink::new(socket, SyncobjDevice::from_file(render_file))
         .with_activation_requests(capabilities & capability::TASK_ACTIVATION != 0)
-        .with_lazy_render_targets(capabilities & capability::LAZY_RENDER_TARGETS != 0);
+        .with_lazy_render_targets(capabilities & capability::LAZY_RENDER_TARGETS != 0)
+        .with_keep_screen_on(capabilities & capability::KEEP_SCREEN_ON != 0);
     let session: SharedSession = Arc::new(Mutex::new(Session::default()));
     let factory_sink = sink.clone();
     let service = ComposerService::new(
@@ -186,7 +187,8 @@ fn handshake(socket: &ProtocolSocket) -> Result<u64, String> {
                     | capability::DIRECT_INPUT
                     | capability::LAZY_RENDER_TARGETS
                     | capability::SCENE_PRESENTATION
-                    | capability::HOST_CLOCK,
+                    | capability::HOST_CLOCK
+                    | capability::KEEP_SCREEN_ON,
             },
             &[],
         )

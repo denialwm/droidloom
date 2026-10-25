@@ -147,6 +147,13 @@ pub enum EndpointAction {
         /// Existing task object.
         object: TaskObjectId,
     },
+    /// Whether the host keeps its displays on while the task is visible.
+    SetKeepScreenOn {
+        /// Existing task object.
+        object: TaskObjectId,
+        /// A shown Android window of the task has `FLAG_KEEP_SCREEN_ON`.
+        keep: bool,
+    },
     /// Android answered a host liveness probe.
     Pong {
         /// Cookie from the corresponding `Ping`.
@@ -329,6 +336,7 @@ pub struct DenialEndpoint {
     lazy_render_targets: bool,
     scene_presentation: bool,
     host_clock: bool,
+    keep_screen_on: bool,
     tasks: BTreeMap<TaskObjectId, TaskEndpoint>,
 }
 
@@ -352,6 +360,7 @@ impl DenialEndpoint {
             lazy_render_targets: false,
             scene_presentation: false,
             host_clock: false,
+            keep_screen_on: false,
             tasks: BTreeMap::new(),
         }
     }
@@ -540,6 +549,13 @@ impl DenialEndpoint {
                     return Err(EndpointError::UnknownObject(object));
                 }
                 Ok(EndpointAction::RequestActivation { object })
+            }
+            AndroidMessage::SetKeepScreenOn { object, keep } => {
+                if !self.keep_screen_on {
+                    return Err(EndpointError::IncompatibleClient);
+                }
+                self.task(object)?;
+                Ok(EndpointAction::SetKeepScreenOn { object, keep })
             }
             AndroidMessage::Pong { cookie } => Ok(EndpointAction::Pong { cookie }),
         }
@@ -854,6 +870,12 @@ impl DenialEndpoint {
         self.ready && self.host_clock
     }
 
+    /// Opt in when the host can keep its displays on for a task.
+    pub fn with_keep_screen_on(mut self) -> Self {
+        self.keep_screen_on = true;
+        self
+    }
+
     /// Forward one host frame grant. Without a negotiated host clock this is
     /// a no-op; Android then runs its own timer.
     ///
@@ -1001,10 +1023,13 @@ impl DenialEndpoint {
         self.lazy_render_targets &= capabilities & capability::LAZY_RENDER_TARGETS != 0;
         self.scene_presentation &= capabilities & capability::SCENE_PRESENTATION != 0;
         self.host_clock &= capabilities & capability::HOST_CLOCK != 0;
+        self.keep_screen_on &= capabilities & capability::KEEP_SCREEN_ON != 0;
         self.socket.send_denial(&DenialMessage::ServerHello {
             major: PROTOCOL_MAJOR,
-            minor: if self.host_clock {
+            minor: if self.keep_screen_on {
                 PROTOCOL_MINOR
+            } else if self.host_clock {
+                9
             } else if self.scene_presentation {
                 8
             } else if self.lazy_render_targets {
@@ -1030,6 +1055,11 @@ impl DenialEndpoint {
                 }
                 | if self.host_clock {
                     capability::HOST_CLOCK
+                } else {
+                    0
+                }
+                | if self.keep_screen_on {
+                    capability::KEEP_SCREEN_ON
                 } else {
                     0
                 }
@@ -1792,6 +1822,74 @@ mod tests {
                     );
                 } else {
                     assert_eq!(first, DenialMessage::DisplayPower { powered: true });
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn keep_screen_on_flows_only_when_negotiated() {
+        for host in [false, true] {
+            for client in [false, true] {
+                let (android, mut endpoint) = pair();
+                if host {
+                    endpoint = endpoint.with_keep_screen_on();
+                }
+                android
+                    .send_android(
+                        &AndroidMessage::ClientHello {
+                            min_major: 1,
+                            max_major: 1,
+                            capabilities: capability::REQUIRED_V1
+                                | if client {
+                                    capability::KEEP_SCREEN_ON
+                                } else {
+                                    0
+                                },
+                        },
+                        &[],
+                    )
+                    .unwrap();
+                endpoint.receive_action().unwrap();
+                let DenialMessage::ServerHello {
+                    minor,
+                    capabilities,
+                    ..
+                } = android.receive_denial().unwrap().message
+                else {
+                    panic!("hello");
+                };
+                let supported = host && client;
+                assert_eq!(capabilities & capability::KEEP_SCREEN_ON != 0, supported);
+                assert_eq!(minor, if supported { 10 } else { 6 });
+                let object = TaskObjectId(1);
+                android
+                    .send_android(
+                        &AndroidMessage::CreateTask {
+                            object,
+                            display: AndroidDisplayId(1),
+                            package: "org.example.app".into(),
+                        },
+                        &[],
+                    )
+                    .unwrap();
+                endpoint.receive_action().unwrap();
+                android
+                    .send_android(&AndroidMessage::SetKeepScreenOn { object, keep: true }, &[])
+                    .unwrap();
+                if supported {
+                    assert!(matches!(
+                        endpoint.receive_action().unwrap(),
+                        EndpointAction::SetKeepScreenOn {
+                            object: TaskObjectId(1),
+                            keep: true,
+                        }
+                    ));
+                } else {
+                    assert!(matches!(
+                        endpoint.receive_action(),
+                        Err(EndpointError::IncompatibleClient)
+                    ));
                 }
             }
         }

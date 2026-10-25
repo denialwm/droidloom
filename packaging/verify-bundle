@@ -16,7 +16,7 @@ COMPOSER = RUNTIME / 'bin/android.hardware.graphics.composer3-service.droidloom'
 POLICY_JAR = RUNTIME / 'framework/services.jar'
 POLICY_NATIVE = RUNTIME / 'lib64/libinputflinger.so'
 POLICY_ABI = b'DROIDLOOM_WINDOW_POLICY_ABI=1;'
-TASK_ABI = b'DROIDLOOM_TASK_BACKEND_ABI=2;'
+TASK_ABI = b'DROIDLOOM_TASK_BACKEND_ABI=3;'
 NATIVE_INPUT_ABI = b'DROIDLOOM_NATIVE_INPUT_ABI=2;'
 CHANNELS_ABI = b'DROIDLOOM_HOST_CHANNELS_ABI=1;'
 DIRECT_INPUT_ABI = b'DROIDLOOM_DIRECT_INPUT_ABI=1;'
@@ -59,9 +59,9 @@ def compatibility(root):
             or int.from_bytes(policy_native[18:20], 'little') != machine):
         raise ValueError('wrong Rust window policy JNI architecture')
     if TASK_ABI not in policy_java or TASK_ABI not in policy_native:
-        raise ValueError('framework pair lacks task backend ABI 2')
+        raise ValueError('framework pair lacks task backend ABI 3')
     if TASK_ABI not in binary:
-        raise ValueError('Composer lacks task backend ABI 2')
+        raise ValueError('Composer lacks task backend ABI 3')
     if any(NATIVE_INPUT_ABI not in data for data in [policy_java, policy_native, binary]):
         raise ValueError('framework pair lacks native input ABI 2')
     native_input = abi(policy_native, str(POLICY_NATIVE))

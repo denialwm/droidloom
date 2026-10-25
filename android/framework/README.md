@@ -188,6 +188,11 @@ task-organizer force-hidden flag, so the app pauses and stops as when leaving
 an app on a phone and stays stopped if Android reorders tasks. Show and host
 focus clear the flag; focus brings the task forward. This control path makes no task-list query or reflective call.
 
+The `DisplayContent` hunk of `0005-droidloom-authoritative-tasks.patch` reports
+every shown `FLAG_KEEP_SCREEN_ON` window of the default display to the backend
+during surface placement. The task's publication carries the flag, and the host
+keeps its displays on while that task's window is visible.
+
 The bounded command queue coalesces resize, focus and hide/show updates, preserves the
 existing 80 ms resize debounce and retains each command until acknowledged.
 Close invalidates its window's pending resize/focus operations. Reconnects can
@@ -208,7 +213,7 @@ When testing over an older installation, also build and activate the matching
 required capabilities, including display power; a stale presenter can reject
 the rebuilt Composer before Android boots. Restart Droidloom after selecting
 the matching components.
-Bundle checks require `DROIDLOOM_TASK_BACKEND_ABI=2;` in services, InputFlinger,
+Bundle checks require `DROIDLOOM_TASK_BACKEND_ABI=3;` in services, InputFlinger,
 the launch client and Composer. Runtime acceptance must cover cold/reused
 launches, aliases/trampolines, permission/authentication handoffs, Play Store
 Open, deep links, shares, task removal/reuse and Composer reconnects. Unit and

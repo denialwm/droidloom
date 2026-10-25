@@ -68,7 +68,15 @@ coalesces obsolete sizes/focus transitions and retains commands until acknowledg
 Close supersedes its window's pending work; reconnects retry unacknowledged
 commands against their original object identity. Idle subscriptions sleep until
 an event. Host-originated focus changes do not echo activation requests back to
-the compositor. Paired task-backend ABI 2 metadata rejects old/new mixtures.
+the compositor. Paired task-backend ABI 3 metadata rejects old/new mixtures.
+
+Keep screen on follows Android: a shown window with `FLAG_KEEP_SCREEN_ON` keeps
+the screen on, here per task. Surface placement of the default display reports
+those tasks to the backend, which republishes a task when its state changes
+(task-control 3.4). Composer sends `SetKeepScreenOn` (protocol 1.10, capability
+`KEEP_SCREEN_ON`) and the presenter holds a `zwp_idle_inhibitor_v1` on the
+task's surface. The host decides visibility: a minimized or hidden window keeps
+nothing on. Android's own obscuring order is ignored.
 
 Task destruction has two phases: request host window destruction once, retaining
 the binding to route the displayed frame's final buffer release; then remove the

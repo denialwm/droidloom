@@ -3,6 +3,7 @@ package com.android.server.wm;
 
 import static android.view.WindowManager.TRANSIT_TO_BACK;
 import static android.view.WindowManager.TRANSIT_TO_FRONT;
+import static android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON;
 
 import android.app.ActivityManager;
 import android.app.ActivityOptions;
@@ -38,6 +39,9 @@ final class DroidloomTaskBackend {
     // A new system_server in the same boot must not reuse earlier incarnations.
     private long mNextIncarnation = SystemClock.elapsedRealtimeNanos();
     private Task mHostFocused;
+    // Tasks with a shown FLAG_KEEP_SCREEN_ON window, as of the last surface placement.
+    private final IdentityHashMap<Task, Boolean> mKeepScreenOn = new IdentityHashMap<>();
+    private final IdentityHashMap<Task, Boolean> mPlacedKeepScreenOn = new IdentityHashMap<>();
     // Accessed only on mWorker. Background tasks retain their existing host window.
     private final IdentityHashMap<Task, Snapshot> mPublished = new IdentityHashMap<>();
     private final IdentityHashMap<Task, Snapshot> mInputPublished = new IdentityHashMap<>();
@@ -51,10 +55,10 @@ final class DroidloomTaskBackend {
         final int id, user, display;
         final long incarnation;
         final String owner;
-        final boolean ready, focused, hostFocused;
+        final boolean ready, focused, hostFocused, keepScreenOn;
         final Rect bounds;
         final IBinder inputToken;
-        Snapshot(Task task, long incarnation, boolean hostFocused) {
+        Snapshot(Task task, long incarnation, boolean hostFocused, boolean keepScreenOn) {
             token = task; id = task.mTaskId; user = task.mUserId;
             display = task.getDisplayId(); this.incarnation = incarnation;
             owner = task.realActivity == null ? null : task.realActivity.getPackageName();
@@ -65,9 +69,11 @@ final class DroidloomTaskBackend {
             ready = task.isVisibleRequested() && top != null && !top.isNoDisplay();
             focused = task.isFocused();
             this.hostFocused = hostFocused;
+            this.keepScreenOn = keepScreenOn;
         }
         long[] publish(boolean activate) {
-            return DroidloomTaskNative.registerTask(id, incarnation, user, display, owner, activate);
+            return DroidloomTaskNative.registerTask(id, incarnation, user, display, owner, activate,
+                    keepScreenOn);
         }
         boolean sameInput(Snapshot other) {
             return other != null && incarnation == other.incarnation && display == other.display
@@ -98,6 +104,30 @@ final class DroidloomTaskBackend {
         mWorker.post(mReconcile);
     }
 
+    /**
+     * Surface placement of the default display visits a window. Android keeps
+     * the screen on while a shown window has FLAG_KEEP_SCREEN_ON; here that is
+     * per task, and the host keeps its displays on while the task's window is
+     * visible there. Android's obscuring order is ignored: the host knows
+     * which windows are seen.
+     */
+    void placeWindow(WindowState window) {
+        if ((window.mAttrs.flags & FLAG_KEEP_SCREEN_ON) == 0 || !window.mHasSurface
+                || !window.isDisplayed()) return;
+        final Task task = window.getTask();
+        if (task != null) mPlacedKeepScreenOn.put(task, Boolean.TRUE);
+    }
+
+    /** Surface placement ended: republish when a task's keep-screen-on changed. */
+    void windowsPlaced() {
+        if (!mPlacedKeepScreenOn.keySet().equals(mKeepScreenOn.keySet())) {
+            mKeepScreenOn.clear();
+            mKeepScreenOn.putAll(mPlacedKeepScreenOn);
+            schedule();
+        }
+        mPlacedKeepScreenOn.clear();
+    }
+
     void launchCompleted(WaitResult result, ActivityRecord record) {
         if (mLaunches.containsKey(result)) mLaunches.put(result, record);
     }
@@ -109,7 +139,7 @@ final class DroidloomTaskBackend {
             incarnation = ++mNextIncarnation;
             mIncarnations.put(task, incarnation);
         }
-        return new Snapshot(task, incarnation, task == mHostFocused);
+        return new Snapshot(task, incarnation, task == mHostFocused, mKeepScreenOn.containsKey(task));
     }
 
     private ArrayList<Snapshot> snapshot() {
