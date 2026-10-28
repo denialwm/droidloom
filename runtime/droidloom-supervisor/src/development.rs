@@ -1249,14 +1249,13 @@ fn mount_shared_storage_directories(spec: &CellSpec, root: &Path) -> Result<(), 
         return Ok(());
     }
 
-    let packages =
-        fs::read_to_string(root.join("data/system/packages.list")).map_err(|source| {
-            io_error(
-                "read initialized Android package ownership for shared storage",
-                source,
-            )
-        })?;
-    let android_uid = media_provider_uid(&packages)?;
+    let Some(android_uid) = installed_media_provider_uid(root)? else {
+        eprintln!(
+            "droidloom-supervisor: new Android storage starts without shared folders; \
+             they are shared from the next start"
+        );
+        return Ok(());
+    };
     let proc_root = root.join("proc");
     let mut namespace = start_idmap_namespace(spec, &shared, android_uid, &proc_root)?
         .expect("shared-storage list was checked above");
@@ -1265,6 +1264,19 @@ fn mount_shared_storage_directories(spec: &CellSpec, root: &Path) -> Result<(), 
     let cleanup = stop_idmap_namespace(&mut namespace);
     result?;
     cleanup
+}
+
+/// `MediaProvider`'s UID from Android's package list; none before Android's
+/// first start writes the list.
+fn installed_media_provider_uid(root: &Path) -> Result<Option<u32>, DevelopmentError> {
+    match fs::read_to_string(root.join("data/system/packages.list")) {
+        Ok(packages) => media_provider_uid(&packages).map(Some),
+        Err(source) if source.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(source) => Err(io_error(
+            "read initialized Android package ownership for shared storage",
+            source,
+        )),
+    }
 }
 
 fn media_provider_uid(packages: &str) -> Result<u32, DevelopmentError> {
@@ -2440,6 +2452,30 @@ mod tests {
         ] {
             assert!(media_provider_uid(invalid).is_err(), "{invalid}");
         }
+    }
+
+    #[test]
+    fn fresh_storage_has_no_media_provider_uid_until_android_writes_packages() {
+        let root = tempfile::tempdir().unwrap();
+        assert_eq!(installed_media_provider_uid(root.path()).unwrap(), None);
+
+        let system = root.path().join("data/system");
+        fs::create_dir_all(&system).unwrap();
+        assert_eq!(installed_media_provider_uid(root.path()).unwrap(), None);
+
+        fs::write(
+            system.join("packages.list"),
+            "com.android.providers.media.module 10101 0 /data/user/0/provider\n",
+        )
+        .unwrap();
+        assert_eq!(
+            installed_media_provider_uid(root.path()).unwrap(),
+            Some(10101)
+        );
+
+        // A written list without MediaProvider is broken storage, not new storage.
+        fs::write(system.join("packages.list"), "").unwrap();
+        assert!(installed_media_provider_uid(root.path()).is_err());
     }
 
     fn image_with_magic(offset: u64, magic: &[u8]) -> tempfile::NamedTempFile {

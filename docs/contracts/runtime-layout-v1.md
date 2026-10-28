@@ -121,8 +121,10 @@ uses setgid directory inheritance so Android-created files retain the mapped
 host group. MediaProvider's primary GID is also mapped to a reserved subordinate
 host GID, satisfying Linux's creator-credential checks before setgid inheritance.
 The temporary mapping helper exits before Android init starts;
-the mounts retain the kernel's mapping reference. Initial Android provisioning
-must have installed MediaProvider before shared collections can be enabled.
+the mounts retain the kernel's mapping reference. Android writes that list on
+its first start, so new storage starts once without the shared collections,
+explicit or user folders, and says so on stderr; they are mounted from the next
+start.
 
 ## Device allowlist
 
