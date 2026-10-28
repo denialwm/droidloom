@@ -12,7 +12,7 @@ use std::ffi::CString;
 use std::ffi::{OsStr, OsString};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom};
-use std::os::fd::AsRawFd;
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt, symlink};
 use std::os::unix::process::CommandExt;
@@ -895,7 +895,6 @@ pub fn enter_development_cell(spec: &CellSpec) -> Result<(), DevelopmentError> {
         .map_err(|source| io_error("invalidate overlaid SystemUI package cache", source))?;
     mount_host_storage(&spec.data_dir.join("metadata"), &root.join("metadata"))?;
     mount_proc_and_sys(spec, &root)?;
-    mount_shared_storage_directories(spec, &root)?;
     create_private_dev(spec, &root)?;
     mount_first_stage_runtime_filesystems(&root)?;
     bind_boot_parameters(spec, &root)?;
@@ -1242,28 +1241,76 @@ fn c_string(bytes: &[u8]) -> Result<CString, DevelopmentError> {
     })
 }
 
-fn mount_shared_storage_directories(spec: &CellSpec, root: &Path) -> Result<(), DevelopmentError> {
+/// Shares `spec`'s folders into the running cell whose Android init is host
+/// process `init`, below Android's `/data/media/0`.
+///
+/// The folders are idmapped to `MediaProvider`'s UID, which Android records
+/// on its first start, so they join the cell while it runs: the mounts are
+/// made detached here and attached in Android init's mount namespace.
+/// Android shares `/data`, so a mount attached after vold's lower view or an
+/// app's namespace exists still reaches them. `setns` needs a
+/// single-threaded caller, so droidloomd runs this as its own process.
+///
+/// # Errors
+///
+/// Fails before Android has written its package list and made user 0's
+/// storage, and when a folder cannot be mounted.
+pub fn share_storage_into_cell(spec: &CellSpec, init: u32) -> Result<(), DevelopmentError> {
     // Resolved once: the user's folders are found again at each start.
     let shared = spec.shared_storage();
     if shared.is_empty() {
         return Ok(());
     }
+    let android_uid = installed_media_provider_uid(&spec.data_dir)?.ok_or_else(|| {
+        DevelopmentError::InvalidInput("Android has not written its package list yet".into())
+    })?;
+    let storage = fs::metadata(spec.data_dir.join(ANDROID_SHARED_STORAGE_ROOT))
+        .map_err(|source| io_error("stat Android shared storage on the host", source))?;
 
-    let Some(android_uid) = installed_media_provider_uid(root)? else {
-        eprintln!(
-            "droidloom-supervisor: new Android storage starts without shared folders; \
-             they are shared from the next start"
-        );
+    let proc_root = Path::new("/proc");
+    let Some(mut namespace) = start_idmap_namespace(spec, &shared, android_uid, proc_root)? else {
         return Ok(());
     };
-    let proc_root = root.join("proc");
-    let mut namespace = start_idmap_namespace(spec, &shared, android_uid, &proc_root)?
-        .expect("shared-storage list was checked above");
-    let userns = proc_root.join(namespace.id().to_string()).join("ns/user");
-    let result = mount_shared_storage_with_idmap(&shared, root, &userns);
+    let trees = File::open(proc_root.join(namespace.id().to_string()).join("ns/user"))
+        .map_err(|source| io_error("open shared-storage idmap", source))
+        .and_then(|userns| {
+            shared
+                .iter()
+                .map(|directory| idmapped_tree(&directory.source, &userns))
+                .collect::<Result<Vec<_>, _>>()
+        });
+    // The detached mounts keep the mapping once its namespace is gone.
     let cleanup = stop_idmap_namespace(&mut namespace);
-    result?;
-    cleanup
+    let trees = trees?;
+    cleanup?;
+
+    let namespace = File::open(format!("/proc/{init}/ns/mnt"))
+        .map_err(|source| io_error("open Android's mount namespace", source))?;
+    if unsafe { libc::setns(namespace.as_raw_fd(), libc::CLONE_NEWNS) } != 0 {
+        return Err(io_error(
+            "enter Android's mount namespace",
+            io::Error::last_os_error(),
+        ));
+    }
+    // Only Android's own /data reaches this exact folder; before Android init
+    // has pivoted, the same path would name a host folder.
+    let media_root = Path::new("/").join(ANDROID_SHARED_STORAGE_ROOT);
+    let target = fs::metadata(&media_root)
+        .map_err(|source| io_error("stat Android shared storage in the cell", source))?;
+    if (target.dev(), target.ino()) != (storage.dev(), storage.ino()) {
+        return Err(DevelopmentError::InvalidInput(
+            "Android's /data/media/0 is not this cell's storage".into(),
+        ));
+    }
+    for (directory, tree) in shared.iter().zip(&trees) {
+        let target = media_root.join(&directory.android_name);
+        fs::create_dir_all(&target)
+            .map_err(|source| io_error("create shared-storage mountpoint", source))?;
+        set_mode(&target, 0o770)?;
+        set_owner(&target, ANDROID_MEDIA_RW_ID, ANDROID_MEDIA_RW_ID)?;
+        attach_tree(tree, &target)?;
+    }
+    Ok(())
 }
 
 /// `MediaProvider`'s UID from Android's package list; none before Android's
@@ -1297,38 +1344,57 @@ fn media_provider_uid(packages: &str) -> Result<u32, DevelopmentError> {
     ))
 }
 
-fn mount_shared_storage_with_idmap(
-    shared: &[crate::SharedStorageDirectory],
-    root: &Path,
-    userns: &Path,
-) -> Result<(), DevelopmentError> {
-    let media_root = root.join(ANDROID_SHARED_STORAGE_ROOT);
-    for directory in [root.join("data/media"), media_root.clone()] {
-        fs::create_dir_all(&directory).map_err(|source| {
-            io_error("create Android shared-storage backing directory", source)
-        })?;
-        set_mode(&directory, 0o770)?;
-        set_owner(&directory, ANDROID_MEDIA_RW_ID, ANDROID_MEDIA_RW_ID)?;
+/// A detached bind of `source` whose host owner and group read as Android's
+/// through `userns`, without set-ID files, devices or programs.
+fn idmapped_tree(source: &Path, userns: &File) -> Result<OwnedFd, DevelopmentError> {
+    let path = c_string(source.as_os_str().as_bytes())?;
+    let flags = libc::OPEN_TREE_CLONE | libc::OPEN_TREE_CLOEXEC | libc::AT_SYMLINK_NOFOLLOW as u32;
+    let fd = unsafe { libc::syscall(libc::SYS_open_tree, libc::AT_FDCWD, path.as_ptr(), flags) };
+    let fd = i32::try_from(fd)
+        .ok()
+        .filter(|fd| *fd >= 0)
+        .ok_or_else(|| io_error("clone shared folder", io::Error::last_os_error()))?;
+    // SAFETY: a fresh descriptor returned by the kernel, owned from here on.
+    let tree = unsafe { OwnedFd::from_raw_fd(fd) };
+    let mut attributes = libc::mount_attr {
+        attr_set: libc::MOUNT_ATTR_IDMAP
+            | libc::MOUNT_ATTR_NOSUID
+            | libc::MOUNT_ATTR_NODEV
+            | libc::MOUNT_ATTR_NOEXEC,
+        attr_clr: libc::MOUNT_ATTR_RDONLY,
+        propagation: 0,
+        userns_fd: u64::try_from(userns.as_raw_fd()).unwrap_or(u64::MAX),
+    };
+    let result = unsafe {
+        libc::syscall(
+            libc::SYS_mount_setattr,
+            tree.as_raw_fd(),
+            c"".as_ptr(),
+            libc::AT_EMPTY_PATH,
+            &raw mut attributes,
+            std::mem::size_of::<libc::mount_attr>(),
+        )
+    };
+    if result < 0 {
+        return Err(io_error("idmap shared folder", io::Error::last_os_error()));
     }
+    Ok(tree)
+}
 
-    for directory in shared {
-        let target = media_root.join(&directory.android_name);
-        fs::create_dir_all(&target)
-            .map_err(|source| io_error("create shared-storage mountpoint", source))?;
-        set_mode(&target, 0o770)?;
-        set_owner(&target, ANDROID_MEDIA_RW_ID, ANDROID_MEDIA_RW_ID)?;
-
-        run_os(
-            "mount",
-            [
-                OsString::from("--bind"),
-                OsString::from("--map-users"),
-                userns.as_os_str().to_owned(),
-                directory.source.as_os_str().to_owned(),
-                target.as_os_str().to_owned(),
-            ],
-        )?;
-        remount(&target, "bind,rw,nosuid,nodev,noexec")?;
+fn attach_tree(tree: &OwnedFd, target: &Path) -> Result<(), DevelopmentError> {
+    let target = c_string(target.as_os_str().as_bytes())?;
+    let result = unsafe {
+        libc::syscall(
+            libc::SYS_move_mount,
+            tree.as_raw_fd(),
+            c"".as_ptr(),
+            libc::AT_FDCWD,
+            target.as_ptr(),
+            libc::MOVE_MOUNT_F_EMPTY_PATH,
+        )
+    };
+    if result < 0 {
+        return Err(io_error("attach shared folder", io::Error::last_os_error()));
     }
     Ok(())
 }

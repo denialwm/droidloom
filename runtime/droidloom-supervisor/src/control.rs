@@ -524,7 +524,7 @@ impl Daemon {
             cell,
             ready_init: std::cell::Cell::new(None),
             started: Instant::now(),
-            _media: media_scan::start(&spec),
+            _media: media_scan::start(&spec, spec_path, &self.config.supervisor),
         });
         self.last_exit = None;
         Ok(ControlResponse {

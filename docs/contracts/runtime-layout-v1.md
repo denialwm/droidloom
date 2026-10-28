@@ -115,16 +115,23 @@ The host kernel must provide FUSE. The packaged `vold` recursively binds its
 MediaProvider lower view so configured collection submounts remain visible;
 both volume teardown paths detach the whole lower tree. A non-recursive bind
 exposes the underlying empty mountpoint instead of the host collection.
-The supervisor reads MediaProvider's UID once from the initialized data directory's
-`/data/system/packages.list`; it never guesses an app UID. The test collection
-uses setgid directory inheritance so Android-created files retain the mapped
-host group. MediaProvider's primary GID is also mapped to a reserved subordinate
-host GID, satisfying Linux's creator-credential checks before setgid inheritance.
-The temporary mapping helper exits before Android init starts;
-the mounts retain the kernel's mapping reference. Android writes that list on
-its first start, so new storage starts once without the shared collections,
-explicit or user folders, and says so on stderr; they are mounted from the next
-start.
+The supervisor reads MediaProvider's UID from the data directory's
+`/data/system/packages.list`; it never guesses an app UID. Android writes that
+list on its first start, so the collections join the running cell: once the list
+exists and Android has made `/data/media/0`, `droidloomd` runs the supervisor's
+private `development-share` step. It makes each idmapped mount detached on the
+host, enters Android init's mount namespace, checks that `/data/media/0` there
+is the data directory's own folder, and attaches the mounts below it. On
+initialized storage this happens as Android init starts; on new storage during
+its first start. Android makes `/data` a shared mount, so a collection attached
+after vold's lower view or an app's namespace exists still reaches them; when
+the lower view was already there, `droidloomd` asks MediaProvider to rescan the
+collections. The test collection uses setgid directory inheritance so
+Android-created files retain the mapped host group. MediaProvider's primary GID
+is also mapped to a reserved subordinate host GID, satisfying Linux's
+creator-credential checks before setgid inheritance. The temporary mapping
+helper exits once the mounts are made; they retain the kernel's mapping
+reference.
 
 ## Device allowlist
 

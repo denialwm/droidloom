@@ -1,8 +1,11 @@
-//! Shared folders are host directories below `MediaProvider`'s FUSE layer, so a
-//! file the host writes there (a screenshot, a download) reaches Android only
-//! at `MediaProvider`'s next full scan. This watcher names every changed path to
-//! the framework, which asks `MediaProvider` to scan it: new files are indexed
-//! and removed ones dropped within a second.
+//! Shared folders are host directories below `MediaProvider`'s FUSE layer. They
+//! join the cell once Android has recorded `MediaProvider`'s UID and made user
+//! 0's storage, which on new storage is during its first start.
+//!
+//! A file the host writes there (a screenshot, a download) then reaches
+//! Android only at `MediaProvider`'s next full scan. This watcher names every
+//! changed path to the framework, which asks `MediaProvider` to scan it: new
+//! files are indexed and removed ones dropped within a second.
 use std::collections::{BTreeSet, HashMap};
 use std::ffi::CString;
 use std::fs;
@@ -10,6 +13,7 @@ use std::io;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
+use std::process::Stdio;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -30,6 +34,10 @@ const QUIET: Duration = Duration::from_millis(250);
 const MAX_DELAY: Duration = Duration::from_secs(2);
 /// Wait before retrying while Android's framework is not listening yet.
 const RETRY: Duration = Duration::from_secs(2);
+/// How often Android's storage is checked until the folders join the cell.
+const STORAGE_POLL: Duration = Duration::from_millis(100);
+/// vold's lower view of user 0's storage, which `MediaProvider` scans.
+const LOWER_VIEW: &str = "/mnt/pass_through/0/emulated";
 /// Beyond this many paths, each shared folder is rescanned whole.
 const MAX_PENDING: usize = 1024;
 const MAX_BATCH: usize = 256;
@@ -51,8 +59,9 @@ impl Drop for MediaWatch {
     }
 }
 
-/// Starts watching `spec`'s shared folders; none when it shares no folder.
-pub(super) fn start(spec: &CellSpec) -> Option<MediaWatch> {
+/// Shares `spec`'s folders into the cell with `supervisor`, then watches
+/// them; none when it shares no folder.
+pub(super) fn start(spec: &CellSpec, spec_path: &Path, supervisor: &Path) -> Option<MediaWatch> {
     let folders: Vec<(PathBuf, String)> = spec
         .shared_storage()
         .into_iter()
@@ -76,14 +85,97 @@ pub(super) fn start(spec: &CellSpec) -> Option<MediaWatch> {
     };
     let wake = stop.try_clone().ok()?;
     let spec = spec.clone();
+    let mut share = droidloom_cpu_placement::command(supervisor);
+    share
+        .arg("development-share")
+        .arg("--spec")
+        .arg(spec_path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped());
     let thread = std::thread::Builder::new()
         .name("media-scan".into())
-        .spawn(move || Watcher::new(inotify, folders).run(&spec, &wake))
+        .spawn(move || {
+            let Some(late) = share_folders(&spec, share, &wake) else {
+                return;
+            };
+            let mut watcher = Watcher::new(inotify, folders);
+            if late {
+                watcher.rescan_roots();
+            }
+            watcher.run(&spec, &wake);
+        })
         .ok()?;
     Some(MediaWatch {
         stop,
         thread: Some(thread),
     })
+}
+
+/// Shares the folders once Android's storage is there. True when vold's lower
+/// view existed first, so `MediaProvider` may have scanned without them; none
+/// when the cell stopped or the folders could not be shared.
+fn share_folders(
+    spec: &CellSpec,
+    mut share: std::process::Command,
+    stop: &OwnedFd,
+) -> Option<bool> {
+    let init = loop {
+        if let Some(init) = storage_ready(spec) {
+            break init;
+        }
+        if stopped(stop, STORAGE_POLL) {
+            return None;
+        }
+    };
+    match share.arg("--init").arg(init.to_string()).output() {
+        Ok(output) if output.status.success() => {}
+        Ok(output) => {
+            eprintln!(
+                "shared folders unavailable: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+            return None;
+        }
+        Err(error) => {
+            eprintln!("shared folders unavailable: {error}");
+            return None;
+        }
+    }
+    let mounts = fs::read_to_string(format!("/proc/{init}/mountinfo")).unwrap_or_default();
+    Some(has_mount(&mounts, LOWER_VIEW))
+}
+
+/// Android init's host PID once Android has written its package list and made
+/// user 0's storage, and init runs in its own root.
+fn storage_ready(spec: &CellSpec) -> Option<u32> {
+    let data = spec.data_dir.join("data");
+    if !data.join("system/packages.list").is_file() || !data.join("media/0").is_dir() {
+        return None;
+    }
+    let init = android_init_pid(spec).ok()??;
+    let command = fs::read(format!("/proc/{init}/cmdline")).ok()?;
+    (command.split(|byte| *byte == 0).next() == Some(b"/init")).then_some(init)
+}
+
+/// Whether `mountinfo` has a mount at `point`.
+fn has_mount(mountinfo: &str, point: &str) -> bool {
+    mountinfo
+        .lines()
+        .any(|line| line.split(' ').nth(4) == Some(point))
+}
+
+/// Waits up to `timeout` for `stop`; true once it is signalled.
+fn stopped(stop: &OwnedFd, timeout: Duration) -> bool {
+    let mut fd = libc::pollfd {
+        fd: stop.as_raw_fd(),
+        events: libc::POLLIN,
+        revents: 0,
+    };
+    let timeout = i32::try_from(timeout.as_millis()).unwrap_or(i32::MAX);
+    // SAFETY: one valid pollfd over a descriptor owned for the whole call.
+    let ready = unsafe { libc::poll(&raw mut fd, 1, timeout) };
+    ready > 0 || (ready < 0 && io::Error::last_os_error().kind() != io::ErrorKind::Interrupted)
 }
 
 fn owned(fd: i32) -> io::Result<OwnedFd> {
@@ -400,6 +492,20 @@ mod tests {
                 .sum::<usize>(),
             8
         );
+    }
+
+    #[test]
+    fn lower_view_is_found_only_at_its_own_mount_point() {
+        let data = "814 467 8:13 /var/lib/droidloom/users/1000/host-storage/data /data \
+                    rw,nosuid,nodev,noatime shared:516 - ext4 /dev/sda13 rw";
+        let lower = "4238 886 8:13 /var/lib/droidloom/users/1000/host-storage/data/media \
+                     /mnt/pass_through/0/emulated rw,nosuid,nodev,noatime shared:516 - ext4 \
+                     /dev/sda13 rw";
+        let below = "4239 4238 8:13 /home/user/Pictures /mnt/pass_through/0/emulated/0/Pictures \
+                     rw,nosuid,nodev,noexec,noatime,idmapped shared:517 - ext4 /dev/sda13 rw";
+        assert!(!has_mount(data, LOWER_VIEW));
+        assert!(!has_mount(&format!("{data}\n{below}"), LOWER_VIEW));
+        assert!(has_mount(&format!("{data}\n{lower}\n{below}"), LOWER_VIEW));
     }
 
     #[test]

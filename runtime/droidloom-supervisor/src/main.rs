@@ -8,7 +8,8 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand};
 use droidloom_supervisor::CellSpec;
 use droidloom_supervisor::development::{
-    enter_development_cell, run_development_cell, validate_development_inputs,
+    enter_development_cell, run_development_cell, share_storage_into_cell,
+    validate_development_inputs,
 };
 use droidloom_supervisor::linux_plan::build_linux_plan;
 
@@ -59,6 +60,16 @@ enum Command {
         #[arg(long)]
         spec: PathBuf,
     },
+    /// Private step of droidloomd: shares the folders into the running cell.
+    #[command(hide = true)]
+    DevelopmentShare {
+        /// Cell specification JSON.
+        #[arg(long)]
+        spec: PathBuf,
+        /// Host PID of the cell's Android init.
+        #[arg(long)]
+        init: u32,
+    },
 }
 
 fn main() {
@@ -98,6 +109,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         Command::DevelopmentEnter { spec } => {
             let spec = load_spec(&spec)?;
             enter_development_cell(&spec)?;
+        }
+        Command::DevelopmentShare { spec, init } => {
+            let spec = load_spec(&spec)?;
+            share_storage_into_cell(&spec, init)?;
         }
     }
     Ok(())
