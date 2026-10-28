@@ -118,26 +118,12 @@ fn run() -> Result<(), String> {
         bootstrap_object.0, bootstrap_display.0
     );
 
-    let (bootstrap_width, bootstrap_height) = {
-        let session = session
-            .lock()
-            .map_err(|_| "Composer session lock is poisoned".to_owned())?;
-        let configure = session
-            .windows()
-            .composer_for_display(bootstrap_display)
-            .map_err(|error| error.to_string())?
-            .latest_configure()
-            .ok_or_else(|| "bootstrap display has no Denial configure".to_owned())?;
-        (configure.width, configure.height)
-    };
     let surface_bridge = SurfaceBridge::new(
         surface_sink,
         Arc::clone(&session),
         coordinator.clone(),
         bootstrap_display,
-        bootstrap_width,
-        bootstrap_height,
-    )?;
+    );
     let _surface_thread = std::thread::Builder::new()
         .name("droidloom-surfaceflinger".to_owned())
         .spawn(move || {

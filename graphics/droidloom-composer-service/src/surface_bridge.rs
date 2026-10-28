@@ -26,8 +26,6 @@ pub struct SurfaceBridge {
     session: SharedSession,
     coordinator: TaskCoordinator,
     bootstrap_display: DisplayId,
-    bootstrap_width: u32,
-    bootstrap_height: u32,
 }
 
 impl SurfaceBridge {
@@ -37,20 +35,13 @@ impl SurfaceBridge {
         session: SharedSession,
         coordinator: TaskCoordinator,
         display: DisplayId,
-        width: u32,
-        height: u32,
-    ) -> Result<Self, String> {
-        if width == 0 || height == 0 {
-            return Err("SurfaceFlinger bridge received an empty display size".to_owned());
-        }
-        Ok(Self {
+    ) -> Self {
+        Self {
             sink,
             session,
             coordinator,
             bootstrap_display: display,
-            bootstrap_width: width,
-            bootstrap_height: height,
-        })
+        }
     }
 
     /// Accept SurfaceFlinger reconnects for the lifetime of Composer.
@@ -306,12 +297,10 @@ impl SurfaceBridge {
     }
 
     fn select_channel(&self, task: u64) -> Result<(DisplayId, u32, u32), String> {
+        // Every channel reports Denial's latest configure, the size Composer
+        // gives SurfaceFlinger: a rotated output resizes the built-in display.
         let display = if task == 0 {
-            return Ok((
-                self.bootstrap_display,
-                self.bootstrap_width,
-                self.bootstrap_height,
-            ));
+            self.bootstrap_display
         } else {
             self.coordinator.direct_task_display(TaskId(task))?
         };
@@ -324,7 +313,7 @@ impl SurfaceBridge {
             .composer_for_display(display)
             .map_err(|error| error.to_string())?
             .latest_configure()
-            .ok_or_else(|| format!("direct task {task} has no Denial configure"))?;
+            .ok_or_else(|| format!("Android channel {task} has no Denial configure"))?;
         Ok((display, configure.width, configure.height))
     }
 }
