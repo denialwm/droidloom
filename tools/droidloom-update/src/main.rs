@@ -133,6 +133,11 @@ enum Action {
         clean: bool,
         #[arg(long)]
         jobs: usize,
+        #[arg(long, default_value = "droidloom_x86_64", value_parser = ["droidloom_x86_64", "droidloom_arm64"])]
+        product: String,
+        /// ARM64 root filesystem the cross-compiled host programs link against.
+        #[arg(long, required_if_eq("product", "droidloom_arm64"))]
+        sysroot: Option<PathBuf>,
     },
     /// Show the complete build plan without changing anything.
     Plan,
@@ -243,6 +248,8 @@ fn execute(args: Args) -> Result<()> {
             destination,
             clean,
             jobs,
+            product,
+            sysroot,
         }) => {
             return package::stage(
                 &repository(args.source.clone())?,
@@ -250,6 +257,8 @@ fn execute(args: Args) -> Result<()> {
                 destination,
                 *clean,
                 *jobs,
+                product,
+                sysroot.as_deref(),
             );
         }
         Some(Action::Recover { uid }) => return install::recover(*uid),

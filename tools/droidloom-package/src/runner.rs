@@ -137,6 +137,14 @@ pub fn execute(action: Action) -> Result<()> {
             unregister(&directory)?;
             let token = api("actions/runners/registration-token", "POST")?;
             // Do not print the registration token or place it in the service environment.
+            // The job also cross-compiles aarch64; fail here, not hours into it.
+            if !root.join("sysroot/usr/lib/pkgconfig").is_dir() {
+                return Err(format!(
+                    "no ARM64 sysroot at {}/sysroot (an Arch Linux ARM root with the host programs' libraries)",
+                    root.display()
+                )
+                .into());
+            }
             let status = Command::new(directory.join("config.sh"))
                 .current_dir(&directory)
                 .args([
@@ -186,6 +194,10 @@ pub fn execute(action: Action) -> Result<()> {
                 ))
                 .arg(format!(
                     "--setenv=CARGO_HOME={}/cache/cargo-home",
+                    root.display()
+                ))
+                .arg(format!(
+                    "--setenv=DROIDLOOM_ARM64_SYSROOT={}/sysroot",
                     root.display()
                 ))
                 .arg(directory.join("run.sh")));

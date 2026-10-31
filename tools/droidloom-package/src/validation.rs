@@ -1,6 +1,12 @@
 //! Exercise real pacman transactions without exposing host devices or services.
 use super::{Result, podman, repository, require_user, run};
-use std::{fs, os::unix::fs::symlink, path::Path};
+use std::{
+    fs,
+    io::Read,
+    os::unix::fs::symlink,
+    path::{Path, PathBuf},
+    process::Command,
+};
 
 fn exec(work: &Path, name: &str, args: &[&str]) -> Result<()> {
     run(podman(work).args(["exec", name]).args(args))
@@ -45,12 +51,112 @@ fn archives(packages: &Path, mount: &str) -> Result<Vec<String>> {
     Ok(archives)
 }
 
+fn pkginfo(archive: &Path) -> Result<String> {
+    let output = Command::new("bsdtar")
+        .arg("-xOf")
+        .arg(archive)
+        .arg(".PKGINFO")
+        .output()?;
+    if !output.status.success() {
+        return Err(format!("{} has no package metadata", archive.display()).into());
+    }
+    Ok(String::from_utf8(output.stdout)?)
+}
+
+fn architecture(info: &str) -> Result<&str> {
+    info.lines()
+        .find_map(|line| line.strip_prefix("arch = "))
+        .ok_or_else(|| "package metadata names no architecture".into())
+}
+
+/// ELF machine of a file, or None when it is not ELF.
+fn elf_machine(path: &Path) -> Result<Option<u16>> {
+    let mut header = [0_u8; 20];
+    let mut file = fs::File::open(path)?;
+    if file.read(&mut header)? < header.len() || header[..4] != *b"\x7fELF" {
+        return Ok(None);
+    }
+    // e_machine follows the identification bytes, e_type, in the file's byte order.
+    let machine = [header[18], header[19]];
+    Ok(Some(match header[5] {
+        1 => u16::from_le_bytes(machine),
+        _ => u16::from_be_bytes(machine),
+    }))
+}
+
+/// Packages for another architecture cannot be installed here. Check that
+/// they claim it and that the host programs were compiled for it.
+fn check_foreign(packages: &Path, architecture: &str) -> Result<()> {
+    const EM_AARCH64: u16 = 183;
+    if architecture != "aarch64" {
+        return Err(format!("no check for {architecture} packages").into());
+    }
+    let root = packages.to_str().ok_or("non-UTF8 package path")?;
+    let archives: Vec<PathBuf> = archives(packages, root)?
+        .into_iter()
+        .map(PathBuf::from)
+        .collect();
+    for archive in &archives {
+        if self::architecture(&pkginfo(archive)?)? != architecture {
+            return Err(format!("{} is not an {architecture} package", archive.display()).into());
+        }
+    }
+    let tree = tempfile::tempdir()?;
+    run(Command::new("bsdtar")
+        .arg("-xpf")
+        .arg(&archives[0])
+        .arg("--no-same-owner")
+        .arg("-C")
+        .arg(tree.path())
+        .args(["usr/bin", "usr/lib/droidloom/droidloom-package-helper"]))?;
+    let mut programs = Vec::new();
+    for directory in ["usr/bin", "usr/lib/droidloom"] {
+        for entry in fs::read_dir(tree.path().join(directory))? {
+            let path = entry?.path();
+            if path.is_file() && !path.is_symlink() {
+                programs.push(path);
+            }
+        }
+    }
+    let mut compiled = 0;
+    for program in &programs {
+        match elf_machine(program)? {
+            Some(EM_AARCH64) => compiled += 1,
+            Some(machine) => {
+                return Err(
+                    format!("{} is built for ELF machine {machine}", program.display()).into(),
+                );
+            }
+            None => {}
+        }
+    }
+    if compiled == 0 {
+        return Err("the runtime package carries no host programs".into());
+    }
+    println!(
+        "{} {architecture} packages claim their architecture; {compiled} host programs are AArch64. Installation was not exercised on this host.",
+        archives.len()
+    );
+    Ok(())
+}
+
 pub fn check(packages: &Path, previous: Option<&Path>) -> Result<()> {
     require_user()?;
+    let packages = packages.canonicalize()?;
+    let runtime = PathBuf::from(
+        archives(&packages, packages.to_str().ok_or("non-UTF8 package path")?)?.remove(0),
+    );
+    let info = pkginfo(&runtime)?;
+    let target = architecture(&info)?;
+    if target != std::env::consts::ARCH {
+        if previous.is_some() {
+            return Err("upgrade transactions need packages for this host's architecture".into());
+        }
+        return check_foreign(&packages, target);
+    }
     let repo = repository(None)?;
     let work = super::build_workspace(&repo)?;
     fs::create_dir_all(&work)?;
-    let packages = packages.canonicalize()?;
     let current = archives(&packages, "/packages")?;
     let previous = previous.map(Path::canonicalize).transpose()?;
     let old = previous
@@ -230,4 +336,31 @@ fn transactions(
         return Err("reinstall after removal replaced existing Android data".into());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn elf_machine_reads_either_byte_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut little = *b"\x7fELF\x02\x01\x01\0\0\0\0\0\0\0\0\0\x02\0\xb7\0";
+        let path = dir.path().join("program");
+        fs::write(&path, little).unwrap();
+        assert_eq!(elf_machine(&path).unwrap(), Some(183));
+        little[5] = 2;
+        little[18..20].copy_from_slice(&183_u16.to_be_bytes());
+        fs::write(&path, little).unwrap();
+        assert_eq!(elf_machine(&path).unwrap(), Some(183));
+        fs::write(&path, "#!/bin/sh\nexit 0\n").unwrap();
+        assert_eq!(elf_machine(&path).unwrap(), None);
+    }
+
+    #[test]
+    fn architecture_comes_from_package_metadata() {
+        let info = "pkgname = droidloom-runtime\npkgver = 0.1.0-27\narch = aarch64\n";
+        assert_eq!(architecture(info).unwrap(), "aarch64");
+        assert!(architecture("pkgname = droidloom-runtime\n").is_err());
+    }
 }

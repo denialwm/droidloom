@@ -8,9 +8,9 @@ it does not rebuild every upstream Android component from source.
 ## Shipping with GitHub Actions
 
 `.github/workflows/ship.yml` runs on pushes to `main` or a manual dispatch of
-`main`. It builds the matching package pair, runs the disposable-container package
-checks, uploads archives to the `packages` GitHub Release, then deploys the pacman
-database and `install.sh` to GitHub Pages. There is one job, with no promotion or
+`main`. It builds the matching x86_64 package pair, cross-builds the aarch64 pair,
+runs the package checks, uploads archives to the `packages` GitHub Release, then
+deploys one pacman database per architecture and `install.sh` to GitHub Pages. There is one job, with no promotion or
 provenance pipeline. Pull requests do not run on this machine.
 
 Before publishing changed packages, increment `packaging/arch/version.json`'s
@@ -31,6 +31,9 @@ The runner and all its build state live under `/mnt/puck/logix/droidloom`:
   incremental compiler output.
 - `cache/host-target/`: host Rust tooling build cache.
 - `cache/cargo-home/`: host Cargo downloads.
+- `sysroot/`: Arch Linux ARM root filesystem the aarch64 host programs link
+  against, with development headers and pkg-config files. `runner start`
+  refuses to arm without it.
 
 The machine needs the usual build prerequisites plus `gh` (authenticated with
 repository administration access for runner registration), `curl`, `tar`,
@@ -370,11 +373,27 @@ This requires the host to delegate the `cpuset` controller to rootless Podman.
 Without it, the job limit still leaves capacity for two logical CPUs and nested
 Android builds retain their own CPU affinity control.
 
-Outputs are written to `dist/arch/<version-release>/`. For revision 0.1.0-7:
+To cross-build the aarch64 pair for Arch Linux ARM on the same x86_64 machine,
+pass an ARM64 root filesystem that has the libraries, headers and pkg-config
+files the host programs link against:
+
+```console
+cargo run --locked -j 1 -p droidloom-package -- build --architecture aarch64 \
+  --sysroot /absolute/path/to/sysroot
+```
+
+The sysroot is mounted read-only into the container. The Android image is built
+as `droidloom_arm64`, from the same pinned inputs the phone builds use.
+`--component` and `--native-bridge-source` apply to x86_64 builds.
+
+Outputs are written to `dist/arch/<version-release>/<architecture>/`. For
+revision 0.1.0-7:
 
 ```text
-dist/arch/0.1.0-7/droidloom-runtime-0.1.0-7-x86_64.pkg.tar.zst
-dist/arch/0.1.0-7/droidloom-image-0.1.0-7-x86_64.pkg.tar.zst
+dist/arch/0.1.0-7/x86_64/droidloom-runtime-0.1.0-7-x86_64.pkg.tar.zst
+dist/arch/0.1.0-7/x86_64/droidloom-image-0.1.0-7-x86_64.pkg.tar.zst
+dist/arch/0.1.0-7/aarch64/droidloom-runtime-0.1.0-7-aarch64.pkg.tar.zst
+dist/arch/0.1.0-7/aarch64/droidloom-image-0.1.0-7-aarch64.pkg.tar.zst
 ```
 
 The command prints the exact installation command when finished. Install both
@@ -570,7 +589,7 @@ audio and Android app validation are additional checks; see the
 ## 4. Exercise package installation
 
 ```console
-cargo run --locked -j 1 -p droidloom-package -- check --packages dist/arch/0.1.0-7
+cargo run --locked -j 1 -p droidloom-package -- check --packages dist/arch/0.1.0-7/x86_64
 ```
 
 Use your build's output directory if its version differs. This runs actual pacman
@@ -579,8 +598,12 @@ a disposable rootless Arch container. It needs no host sudo and does not restart
 your desktop. It uses a simulated GPU entry for setup checks; app rendering must
 be tested separately on a real Wayland desktop.
 
-Add `--previous dist/arch/<older-version-release>` to include upgrade and downgrade
-transactions against an older pair.
+Add `--previous dist/arch/<older-version-release>/<architecture>` to include
+upgrade and downgrade transactions against an older pair.
+
+For a pair built for another architecture, such as the aarch64 pair on an x86_64
+machine, `check` reads both packages' metadata and requires every packaged
+program to be built for that architecture; it does not install them.
 
 ## Rebuilds and troubleshooting
 

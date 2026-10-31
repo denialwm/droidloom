@@ -43,6 +43,11 @@ enum Action {
     },
     /// Compile the complete runtime and produce packages in a rootless Arch builder.
     Build {
+        #[arg(long, value_enum, default_value = "x86_64")]
+        architecture: Architecture,
+        /// ARM64 root filesystem providing the native libraries aarch64 links against.
+        #[arg(long, required_if_eq("architecture", "aarch64"))]
+        sysroot: Option<PathBuf>,
         /// Rebuild only selected host components; omitted builds everything.
         #[arg(long, value_enum, conflicts_with_all = ["clean", "source_cache"])]
         component: Vec<components::Component>,
@@ -74,6 +79,8 @@ enum Action {
     },
     #[command(hide = true)]
     InContainer {
+        #[arg(long, value_enum, default_value = "x86_64")]
+        architecture: Architecture,
         #[arg(long, value_enum)]
         component: Vec<components::Component>,
         #[arg(long)]
@@ -101,6 +108,30 @@ enum Action {
     },
 }
 
+/// Pacman architectures the package pair is built for, each from its own
+/// Android product. aarch64 is cross-compiled on the x86_64 builder.
+#[derive(Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+enum Architecture {
+    #[value(name = "x86_64")]
+    X86_64,
+    Aarch64,
+}
+impl Architecture {
+    const ALL: [Self; 2] = [Self::X86_64, Self::Aarch64];
+    fn name(self) -> &'static str {
+        match self {
+            Self::X86_64 => "x86_64",
+            Self::Aarch64 => "aarch64",
+        }
+    }
+    fn product(self) -> &'static str {
+        match self {
+            Self::X86_64 => "droidloom_x86_64",
+            Self::Aarch64 => "droidloom_arm64",
+        }
+    }
+}
+
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct Version {
@@ -109,23 +140,38 @@ struct Version {
     architecture: String,
 }
 impl Version {
-    fn read(repo: &Path) -> Result<Self> {
-        let version: Self =
+    /// packaging/arch/version.json names one release for every architecture.
+    fn read(repo: &Path, architecture: Architecture) -> Result<Self> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Release {
+            version: String,
+            release: u32,
+        }
+        let Release { version, release } =
             serde_json::from_slice(&fs::read(repo.join("packaging/arch/version.json"))?)?;
-        if version.version.is_empty()
+        if version.is_empty()
             || !version
-                .version
                 .bytes()
                 .all(|c| c.is_ascii_alphanumeric() || b"._+".contains(&c))
-            || version.release == 0
-            || version.architecture != "x86_64"
+            || release == 0
         {
-            return Err("invalid package version or architecture".into());
+            return Err("invalid package version".into());
         }
-        Ok(version)
+        Ok(Self {
+            version,
+            release,
+            architecture: architecture.name().into(),
+        })
     }
     fn directory(&self) -> String {
         format!("{}-{}", self.version, self.release)
+    }
+    /// One release's package pairs sit side by side, one directory per architecture.
+    fn output(&self, repo: &Path) -> PathBuf {
+        repo.join("dist/arch")
+            .join(self.directory())
+            .join(&self.architecture)
     }
 }
 
@@ -249,8 +295,15 @@ fn copy_inputs(repo: &Path, snapshot: &Path) -> Result<()> {
     }
     run(command.arg(format!("{}/", repo.display())).arg(snapshot))
 }
+struct Target {
+    architecture: Architecture,
+    sysroot: Option<PathBuf>,
+}
+
+#[allow(clippy::too_many_arguments)]
 fn build(
     explicit: Option<PathBuf>,
+    target: Target,
     requested: Option<usize>,
     cpuset: bool,
     clean: bool,
@@ -263,8 +316,22 @@ fn build(
     if std::env::consts::ARCH != "x86_64" {
         return Err("This package build currently requires an x86_64 Linux host.".into());
     }
+    let Target {
+        architecture,
+        sysroot,
+    } = target;
+    let sysroot = match (architecture, sysroot) {
+        (Architecture::X86_64, None) => None,
+        (Architecture::Aarch64, Some(sysroot)) => {
+            if !components.is_empty() || native_bridge_source.is_some() {
+                return Err("component and native bridge builds are x86_64 only".into());
+            }
+            Some(sysroot.canonicalize()?)
+        }
+        _ => return Err("only aarch64 builds take --sysroot, and they need it".into()),
+    };
     let repo = repository(explicit)?;
-    let version = Version::read(&repo)?;
+    let version = Version::read(&repo, architecture)?;
     let cpus = compiler_cpus()?;
     let jobs = requested.unwrap_or(cpus.len()).min(cpus.len());
     if jobs == 0 {
@@ -346,7 +413,7 @@ fn build(
             let name = entry.file_name();
             let name = name.to_string_lossy();
             if entry.file_type()?.is_file()
-                && ((name.starts_with("aosp_cf_x86_64_") && name.ends_with(".zip"))
+                && ((name.starts_with("aosp_cf_") && name.ends_with(".zip"))
                     || (name.starts_with("mesa-") && name.ends_with(".tar.xz")))
             {
                 let destination = snapshot.join(".work").join(entry.file_name());
@@ -356,7 +423,7 @@ fn build(
             }
         }
     }
-    let output = repo.join("dist/arch").join(version.directory());
+    let output = version.output(&repo);
     fs::create_dir_all(&output)?;
     if fs::read_dir(&output)?
         .any(|e| e.is_ok_and(|e| e.path().extension() == Some(OsStr::new("zst"))))
@@ -364,8 +431,9 @@ fn build(
         return Err(format!("{} already contains packages; increase packaging/arch/version.json release or move the previous artifacts before rebuilding", output.display()).into());
     }
     eprintln!(
-        "Building {} for x86_64 with {jobs} jobs; job limit leaves capacity for two CPUs. No host sudo is used.",
-        version.directory()
+        "Building {} for {} with {jobs} jobs; job limit leaves capacity for two CPUs. No host sudo is used.",
+        version.directory(),
+        version.architecture
     );
     let timestamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)?
@@ -428,6 +496,11 @@ fn build(
         .arg(format!("{}:/build:rw", cache.display()))
         .arg("--volume")
         .arg(format!("{}:/output:rw", output.display()));
+    if let Some(sysroot) = &sysroot {
+        container
+            .arg("--volume")
+            .arg(format!("{}:/sysroot:ro", sysroot.display()));
+    }
     if let Some(baseline) = &baseline {
         container
             .arg("--volume")
@@ -459,6 +532,8 @@ fn build(
             "droidloom-package",
             "--",
             "in-container",
+            "--architecture",
+            architecture.name(),
             "--jobs",
         ])
         .arg(jobs.to_string());
@@ -488,6 +563,9 @@ fn build(
     )?;
     components::record_inputs(&snapshot, &output)?;
     println!("Packages ready in {}", output.display());
+    if version.architecture != std::env::consts::ARCH {
+        return Ok(());
+    }
     println!(
         "Administrator access is needed only to install these files under /usr, install their runtime dependencies, and update /var/lib/pacman:"
     );
@@ -537,11 +615,16 @@ fn seed_sources(source: &Path, destination: &Path, relative: &Path) -> Result<()
     Ok(())
 }
 
-fn in_container(jobs: usize, clean: bool, components: Vec<components::Component>) -> Result<()> {
+fn in_container(
+    architecture: Architecture,
+    jobs: usize,
+    clean: bool,
+    components: Vec<components::Component>,
+) -> Result<()> {
     require_user()?;
     let repo = Path::new("/source");
     let work = Path::new("/build");
-    let version = Version::read(repo)?;
+    let version = Version::read(repo, architecture)?;
     let packaging = work.join("makepkg");
     fs::create_dir_all(&packaging)?;
     remove_staging(&packaging.join("src/payload"))?;
@@ -558,6 +641,9 @@ fn in_container(jobs: usize, clean: bool, components: Vec<components::Component>
         .current_dir(&packaging)
         .args(["--force", "--noconfirm", "--nocheck"])
         .env("PKGDEST", temporary.path())
+        // makepkg takes the target from the environment over makepkg.conf.
+        .env("CARCH", architecture.name())
+        .env("DROIDLOOM_PRODUCT", architecture.product())
         .env("DROIDLOOM_PACKAGE_TOOL", std::env::current_exe()?)
         .env("DROIDLOOM_SOURCE", repo)
         .env("DROIDLOOM_WORK", work)
@@ -567,6 +653,9 @@ fn in_container(jobs: usize, clean: bool, components: Vec<components::Component>
             if clean { "1" } else { "0" },
         );
     command.env("DROIDLOOM_COMPONENTS", serde_json::to_string(&components)?);
+    if architecture == Architecture::Aarch64 {
+        command.env("DROIDLOOM_SYSROOT", "/sysroot");
+    }
     if let Err(error) = run(&mut command) {
         cleanup_package_staging(&packaging);
         return Err(error);
@@ -649,7 +738,12 @@ fn compile(source: &Path, work: &Path, destination: &Path, jobs: usize) -> Resul
         .arg("--destination")
         .arg(destination)
         .arg("--jobs")
-        .arg(jobs.to_string());
+        .arg(jobs.to_string())
+        .arg("--product")
+        .arg(std::env::var("DROIDLOOM_PRODUCT").unwrap_or_else(|_| "droidloom_x86_64".into()));
+    if let Some(sysroot) = std::env::var_os("DROIDLOOM_SYSROOT") {
+        command.arg("--sysroot").arg(sysroot);
+    }
     if std::env::var("DROIDLOOM_CLEAN_PACKAGE_BUILD").as_deref() == Ok("1") {
         command.arg("--clean");
     }
@@ -689,6 +783,8 @@ fn execute() -> Result<()> {
         Action::Ship { action } => shipping::execute(action),
         Action::Runner { action } => runner::execute(action),
         Action::Build {
+            architecture,
+            sysroot,
             component,
             source,
             jobs,
@@ -698,6 +794,10 @@ fn execute() -> Result<()> {
             native_bridge_source,
         } => build(
             source,
+            Target {
+                architecture,
+                sysroot,
+            },
             jobs,
             cpuset,
             clean,
@@ -707,10 +807,11 @@ fn execute() -> Result<()> {
         ),
         Action::Check { packages, previous } => validation::check(&packages, previous.as_deref()),
         Action::InContainer {
+            architecture,
             jobs,
             clean,
             component,
-        } => in_container(jobs, clean, component),
+        } => in_container(architecture, jobs, clean, component),
         Action::Compile {
             source,
             work,

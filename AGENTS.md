@@ -33,7 +33,8 @@ Do not select **Clear storage**. See the exact recovery sequence in
 ## Commands
 
 - Build pacman packages: `cargo run --locked -j 1 -p droidloom-package -- build`
-- Check packages: `cargo run --locked -j 1 -p droidloom-package -- check --packages dist/arch/<version-release>`
+- Check packages: `cargo run --locked -j 1 -p droidloom-package -- check --packages dist/arch/<version-release>/<architecture>`
+- Cross-build the aarch64 pair: `cargo run --locked -j 1 -p droidloom-package -- build --architecture aarch64 --sysroot PATH`
 - Check Rust code: `cargo check --locked --workspace -j 1`
 - Test packaging: `cargo test --locked -j 1 -p droidloom-update -p droidloom-package -p droidloom-package-support`
 - Test runtime contracts: `cargo test --locked -j 1 -p droidloom-contracts`

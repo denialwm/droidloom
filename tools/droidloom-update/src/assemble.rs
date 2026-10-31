@@ -69,7 +69,12 @@ fn prepare_inputs_from(
     arch: &str,
     reuse_installed: bool,
 ) -> Result<PathBuf> {
-    let lock_path = repo.join(format!("android/manifest/source-lock-{arch}.json"));
+    // ARM64 kept the lock's original name.
+    let lock_path = repo.join(if arch == "aarch64" {
+        "android/manifest/source-lock.json".into()
+    } else {
+        format!("android/manifest/source-lock-{arch}.json")
+    });
     let lock = json(&lock_path)?;
     let typed = droidloom_image::load_source_lock(&lock_path)?;
     let base = if reuse_installed {
@@ -641,6 +646,18 @@ pub fn host_build(repo: &Path, work: &Path, sysroot: &Path, jobs: usize) -> Resu
     let target = work.join(format!("cargo-{CROSS_TARGET}"));
     let _lock = Lock::acquire(&work.join("host-cross-build.lock"))?;
     let mut build = Command::new("cargo");
+    // Flags in the environment describe the build machine: makepkg exports
+    // Arch's x86_64 CFLAGS, and RUSTFLAGS would replace the target's rustflags.
+    for flags in [
+        "CFLAGS",
+        "CXXFLAGS",
+        "CPPFLAGS",
+        "LDFLAGS",
+        "RUSTFLAGS",
+        "CARGO_ENCODED_RUSTFLAGS",
+    ] {
+        build.env_remove(flags);
+    }
     build
         .current_dir(repo)
         .env("CARGO_TARGET_DIR", &target)

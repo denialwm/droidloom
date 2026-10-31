@@ -1,5 +1,5 @@
 //! Rebuild host components over a completed portable package baseline.
-use super::{Result, Version, run};
+use super::{Architecture, Result, Version, run};
 use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -107,7 +107,7 @@ pub fn baseline(repo: &Path, current: &Version) -> Result<PathBuf> {
         );
     }
     for entry in fs::read_dir(repo.join("dist/arch"))? {
-        let path = entry?.path();
+        let path = entry?.path().join(&current.architecture);
         let Ok(summary) = fs::read(path.join("build-summary.json")) else {
             continue;
         };
@@ -154,7 +154,7 @@ pub fn compile(
     let summary: serde_json::Value =
         serde_json::from_slice(&fs::read(baseline.join("build-summary.json"))?)?;
     let previous: Version = serde_json::from_value(summary["version"].clone())?;
-    let current = Version::read(source)?;
+    let current = Version::read(source, Architecture::X86_64)?;
     if previous.version != current.version
         || previous.architecture != current.architecture
         || previous.release >= current.release
@@ -194,7 +194,9 @@ pub fn compile(
             || !text
                 .lines()
                 .any(|s| s == format!("pkgver = {}-{}", previous.version, previous.release))
-            || !text.lines().any(|s| s == "arch = x86_64")
+            || !text
+                .lines()
+                .any(|s| s == format!("arch = {}", previous.architecture))
         {
             return Err("component baseline archive metadata does not match its summary".into());
         }
@@ -223,9 +225,9 @@ pub fn compile(
             fs::set_permissions(target, fs::Permissions::from_mode(0o755))?;
         }
     }
-    fs::copy(
-        source.join("packaging/arch/version.json"),
+    fs::write(
         destination.join("runtime/usr/share/droidloom/package.json"),
+        serde_json::to_vec_pretty(&current)?,
     )?;
     println!(
         "Component payload ready; Android and unselected host files were reused without compilation."
@@ -260,7 +262,7 @@ mod tests {
             release,
             architecture: "x86_64".into(),
         };
-        let output = root.join("dist/arch").join(version.directory());
+        let output = version.output(root);
         fs::create_dir_all(&output).unwrap();
         fs::write(
             output.join("build-summary.json"),

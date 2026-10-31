@@ -48,6 +48,7 @@ pub fn prepare_build(
     source: &Path,
     vendor: &Path,
     work: &Path,
+    links: bool,
     projection: &mut crate::android::Projection,
 ) -> Result<()> {
     let bridge = source.join("frameworks/libs/binary_translation");
@@ -103,10 +104,13 @@ cc_library_headers {
         } else {
             write(&link.join(format!("{name}.so")), fs::read(&library)?)?;
         }
+        // Only a build that links the translator needs x86_64 libraries;
+        // the others only need these module names to resolve.
         let bytes = fs::read(link.join(format!("{name}.so")))?;
-        if bytes.len() < 20
-            || &bytes[..6] != b"\x7fELF\x02\x01"
-            || u16::from_le_bytes([bytes[18], bytes[19]]) != 62
+        if links
+            && (bytes.len() < 20
+                || &bytes[..6] != b"\x7fELF\x02\x01"
+                || u16::from_le_bytes([bytes[18], bytes[19]]) != 62)
         {
             return fail(format!("invalid pinned x86_64 API library: {name}"));
         }

@@ -33,12 +33,15 @@ jobs:
           persist-credentials: false
       - name: Keep temporary files on the worker disk
         run: echo "TMPDIR=$RUNNER_TEMP" >> "$GITHUB_ENV"
-      - name: Build packages using persistent local caches
+      - name: Build x86_64 packages using persistent local caches
         run: cargo run --locked -j 1 -p droidloom-package -- build
+      - name: Cross-build aarch64 packages
+        run: cargo run --locked -j 1 -p droidloom-package -- build --architecture aarch64 --sysroot "$DROIDLOOM_ARM64_SYSROOT"
       - name: Check package installation and lifecycle
         run: |
           version=$(jq -r '.version + "-" + (.release | tostring)' packaging/arch/version.json)
-          cargo run --locked -j 1 -p droidloom-package -- check --packages "dist/arch/$version"
+          cargo run --locked -j 1 -p droidloom-package -- check --packages "dist/arch/$version/x86_64"
+          cargo run --locked -j 1 -p droidloom-package -- check --packages "dist/arch/$version/aarch64"
       - name: Prepare pacman database and installer
         run: cargo run --locked -j 1 -p droidloom-package -- ship prepare
       - name: Upload packages and matching source

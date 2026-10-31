@@ -33,6 +33,8 @@ Run the same script again to update, or use your normal `sudo pacman -Syu`.
 The initial repository publishes **unsigned packages over HTTPS**; `SigLevel =
 Never` applies only to `[droidloom]`. Other repositories keep their signing policy.
 Pages serves the package database; GitHub Releases serves the package archives.
+On Arch Linux ARM (aarch64) the same script points pacman at the aarch64
+repository.
 Google apps are not included.
 
 For locally built packages, put one matching pair in a directory and run:

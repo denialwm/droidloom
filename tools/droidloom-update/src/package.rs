@@ -1,9 +1,35 @@
 //! Compile one portable package payload without activating a local installation.
 use crate::{android, assemble, licenses, python, util::*};
 use serde_json::{Value, json};
-use std::{fs, os::unix::fs::symlink, path::Path, process::Command};
+use std::{
+    fs,
+    os::unix::fs::symlink,
+    path::{Path, PathBuf},
+    process::Command,
+};
 
-pub fn stage(repo: &Path, work: &Path, destination: &Path, clean: bool, jobs: usize) -> Result<()> {
+/// Pacman architecture and cell recipe of each Android product.
+fn product_target(product: &str) -> Result<(&'static str, &'static str)> {
+    match product {
+        "droidloom_x86_64" => Ok(("x86_64", "cell-spec-x86_64-u1000.json")),
+        "droidloom_arm64" => Ok(("aarch64", "cell-spec-arm64.json")),
+        _ => fail("unsupported Android product"),
+    }
+}
+
+pub fn stage(
+    repo: &Path,
+    work: &Path,
+    destination: &Path,
+    clean: bool,
+    jobs: usize,
+    product: &str,
+    sysroot: Option<&Path>,
+) -> Result<()> {
+    let (arch, recipe) = product_target(product)?;
+    if (arch == "aarch64") != sysroot.is_some() {
+        return fail("only the ARM64 product cross-compiles against a sysroot");
+    }
     if unsafe { libc::geteuid() } == 0 {
         return fail("package compilation must run as an ordinary build user, without sudo");
     }
@@ -44,25 +70,39 @@ pub fn stage(repo: &Path, work: &Path, destination: &Path, clean: bool, jobs: us
         )?;
     }
     if clean {
-        for path in [&out, &cargo, &work.join("mesa-tools"), &work.join("ccache")] {
+        for path in [
+            &out,
+            &cargo,
+            &work.join(format!("cargo-{}", assemble::CROSS_TARGET)),
+            &work.join("mesa-tools"),
+            &work.join("mesa-panfrost-tools"),
+            &work.join("ccache"),
+        ] {
             if path.exists() {
                 fs::remove_dir_all(path)?;
             }
         }
     }
-    let mut host = Command::new("cargo");
-    host.current_dir(repo)
-        .env("CARGO_TARGET_DIR", &cargo)
-        .args(["build", "--locked", "--release", "--jobs"])
-        .arg(jobs.to_string());
-    for package in assemble::HOST_PACKAGES {
-        host.arg("-p").arg(package);
-    }
-    run_build(&mut host)?;
-    let base = assemble::prepare_package_inputs(repo, &work, "x86_64")?;
+    let host: PathBuf = match sysroot {
+        Some(sysroot) => assemble::host_build(repo, &work, sysroot, jobs)?,
+        None => {
+            let mut host = Command::new("cargo");
+            host.current_dir(repo)
+                .env("CARGO_TARGET_DIR", &cargo)
+                .args(["build", "--locked", "--release", "--jobs"])
+                .arg(jobs.to_string());
+            for package in assemble::HOST_PACKAGES {
+                host.arg("-p").arg(package);
+            }
+            run_build(&mut host)?;
+            cargo.join("release")
+        }
+    };
+    let base = assemble::prepare_package_inputs(repo, &work, arch)?;
     python::prepare(repo, &work)?;
-    assemble::mesa_tools(&work, jobs, false)?;
-    android::build(repo, &source, &out, &work, "droidloom_x86_64", jobs)?;
+    // As android-build: the ARM64 product also compiles Panfrost's shaders.
+    assemble::mesa_tools(&work, jobs, arch == "aarch64")?;
+    android::build(repo, &source, &out, &work, product, jobs)?;
     if !source_ready.exists() {
         write(
             &source_ready,
@@ -76,11 +116,11 @@ pub fn stage(repo: &Path, work: &Path, destination: &Path, clean: bool, jobs: us
         repo,
         &work,
         &base,
-        &out.join("target/product/droidloom_x86_64"),
-        &cargo.join("release"),
+        &out.join("target/product").join(product),
+        &host,
         stage.path(),
     )?;
-    package_layout(repo, &cargo.join("release"), stage.path())?;
+    package_layout(repo, &host, stage.path(), arch, recipe)?;
     package_notices(repo, &work, stage.path())?;
     if destination.exists() {
         fs::remove_dir_all(destination)?;
@@ -127,7 +167,7 @@ fn normalize_source_cache(source: &Path) -> Result<()> {
     Ok(())
 }
 
-fn package_layout(repo: &Path, host: &Path, stage: &Path) -> Result<()> {
+fn package_layout(repo: &Path, host: &Path, stage: &Path, arch: &str, recipe: &str) -> Result<()> {
     let runtime = stage.join("runtime");
     let image = stage.join("image");
     fs::create_dir_all(image.join("usr/lib/droidloom"))?;
@@ -158,17 +198,16 @@ fn package_layout(repo: &Path, host: &Path, stage: &Path) -> Result<()> {
         &runtime.join("usr/lib/droidloom/droidloom-package-helper"),
         0o755,
     )?;
-    let mut template: Value = serde_json::from_slice(&fs::read(
-        repo.join("packaging/cell-spec-x86_64-u1000.json"),
-    )?)?;
+    let mut template: Value =
+        serde_json::from_slice(&fs::read(repo.join("packaging").join(recipe))?)?;
     portable_template(&mut template);
     write(
         &runtime.join("usr/share/droidloom/cell-template.json"),
         serde_json::to_vec_pretty(&template)?,
     )?;
-    copy(
-        &repo.join("packaging/arch/version.json"),
+    write(
         &runtime.join("usr/share/droidloom/package.json"),
+        serde_json::to_vec_pretty(&package_identity(repo, arch)?)?,
     )?;
     for (from, to) in [
         (
@@ -196,6 +235,17 @@ fn package_layout(repo: &Path, host: &Path, stage: &Path) -> Result<()> {
         copy(&repo.join("packaging/arch").join(from), &runtime.join(to))?;
     }
     Ok(())
+}
+
+/// The release from packaging/arch/version.json and the architecture built.
+fn package_identity(repo: &Path, arch: &str) -> Result<Value> {
+    let mut identity: Value =
+        serde_json::from_slice(&fs::read(repo.join("packaging/arch/version.json"))?)?;
+    identity
+        .as_object_mut()
+        .ok_or("package version is not an object")?
+        .insert("architecture".into(), json!(arch));
+    Ok(identity)
 }
 
 fn portable_template(template: &mut Value) {
@@ -266,5 +316,21 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+    }
+    #[test]
+    fn package_identity_names_the_architecture_built() {
+        let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let version: Value =
+            serde_json::from_slice(&fs::read(repo.join("packaging/arch/version.json")).unwrap())
+                .unwrap();
+        for product in ["droidloom_x86_64", "droidloom_arm64"] {
+            let (arch, recipe) = product_target(product).unwrap();
+            let identity = package_identity(&repo, arch).unwrap();
+            assert_eq!(identity["architecture"], arch);
+            assert_eq!(identity["version"], version["version"]);
+            assert_eq!(identity["release"], version["release"]);
+            assert!(repo.join("packaging").join(recipe).is_file());
+        }
+        assert!(product_target("droidloom_riscv64").is_err());
     }
 }

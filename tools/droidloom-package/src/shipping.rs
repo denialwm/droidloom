@@ -1,5 +1,5 @@
 //! Small release interface shared by local runs and GitHub Actions.
-use super::{Result, Version, repository, run};
+use super::{Architecture, Result, Version, repository, run};
 use clap::Subcommand;
 use std::{fs, path::Path, process::Command};
 
@@ -8,7 +8,7 @@ const RELEASE: &str = "packages";
 
 #[derive(Subcommand)]
 pub enum Action {
-    /// Write the Pages database and installer from the current package pair.
+    /// Write the Pages databases and installer from the current package pairs.
     Prepare,
     /// Upload immutable package archives before deploying the Pages database.
     Publish,
@@ -18,13 +18,11 @@ fn packages(repo: &Path, version: &Version) -> Result<Vec<std::path::PathBuf>> {
     ["runtime", "image"]
         .iter()
         .map(|component| {
-            let path = repo
-                .join("dist/arch")
-                .join(version.directory())
-                .join(format!(
-                    "droidloom-{component}-{}-x86_64.pkg.tar.zst",
-                    version.directory()
-                ));
+            let path = version.output(repo).join(format!(
+                "droidloom-{component}-{}-{}.pkg.tar.zst",
+                version.directory(),
+                version.architecture
+            ));
             if !path.is_file() {
                 return Err(format!("missing {}", path.display()).into());
             }
@@ -44,30 +42,38 @@ fn gh() -> Command {
 
 pub fn execute(action: Action) -> Result<()> {
     let repo = repository(None)?;
-    let version = Version::read(&repo)?;
-    let packages = packages(&repo, &version)?;
+    // Every architecture ships the same release, or none does.
+    let mut pairs = Vec::new();
+    for architecture in Architecture::ALL {
+        let version = Version::read(&repo, architecture)?;
+        pairs.push((packages(&repo, &version)?, version));
+    }
+    let version = &pairs[0].1;
+    let packages: Vec<_> = pairs.iter().flat_map(|(pair, _)| pair).collect();
     let site = repo.join("dist/pages");
     match action {
         Action::Prepare => {
             if site.exists() {
                 fs::remove_dir_all(&site)?;
             }
-            let database = site.join("x86_64");
-            fs::create_dir_all(&database)?;
-            run(Command::new("repo-add")
-                .arg(database.join("droidloom.db.tar.gz"))
-                .args(&packages))?;
-            // Pages artifacts cannot contain symlinks. Publish the actual bytes.
-            for name in ["droidloom.db", "droidloom.files"] {
-                fs::remove_file(database.join(name))?;
-                fs::copy(database.join(format!("{name}.tar.gz")), database.join(name))?;
+            for (pair, version) in &pairs {
+                let database = site.join(&version.architecture);
+                fs::create_dir_all(&database)?;
+                run(Command::new("repo-add")
+                    .arg(database.join("droidloom.db.tar.gz"))
+                    .args(pair))?;
+                // Pages artifacts cannot contain symlinks. Publish the actual bytes.
+                for name in ["droidloom.db", "droidloom.files"] {
+                    fs::remove_file(database.join(name))?;
+                    fs::copy(database.join(format!("{name}.tar.gz")), database.join(name))?;
+                }
             }
             fs::copy(repo.join("install.sh"), site.join("install.sh"))?;
             fs::write(site.join(".nojekyll"), "")?;
             fs::write(
                 site.join("index.html"),
                 format!(
-                    "<!doctype html><html lang=\"en\"><meta charset=\"utf-8\"><title>Droidloom packages</title>\n<h1>Droidloom {}</h1><p>Arch Linux / Omarchy, x86_64.</p>\n<p>Download and review <a href=\"install.sh\">install.sh</a>, then run <code>sh install.sh</code> to install or update.</p>\n<p>Packages are unsigned and delivered over HTTPS. The installer configures this policy only for the Droidloom repository.</p>\n<p><a href=\"https://github.com/denialwm/droidloom/blob/main/docs/INSTALL.md\">Installation guide</a> · <a href=\"https://github.com/denialwm/droidloom/releases/tag/packages\">Packages and source</a></p></html>\n",
+                    "<!doctype html><html lang=\"en\"><meta charset=\"utf-8\"><title>Droidloom packages</title>\n<h1>Droidloom {}</h1><p>Arch Linux / Omarchy on x86_64, Arch Linux ARM on aarch64.</p>\n<p>Download and review <a href=\"install.sh\">install.sh</a>, then run <code>sh install.sh</code> to install or update.</p>\n<p>Packages are unsigned and delivered over HTTPS. The installer configures this policy only for the Droidloom repository.</p>\n<p><a href=\"https://github.com/denialwm/droidloom/blob/main/docs/INSTALL.md\">Installation guide</a> · <a href=\"https://github.com/denialwm/droidloom/releases/tag/packages\">Packages and source</a></p></html>\n",
                     version.directory()
                 ),
             )?;
@@ -95,7 +101,7 @@ pub fn execute(action: Action) -> Result<()> {
             // Preflight every asset before any upload. Same-version rebuilds may
             // resume only when their bytes match; never replace published files.
             let mut pending = Vec::new();
-            for path in packages.iter().chain(std::iter::once(&source)) {
+            for path in packages.into_iter().chain(std::iter::once(&source)) {
                 let name = path
                     .file_name()
                     .unwrap()
@@ -140,7 +146,7 @@ mod tests {
             release: 4,
             architecture: "x86_64".into(),
         };
-        let output = temp.path().join("dist/arch/1.2.3-4");
+        let output = temp.path().join("dist/arch/1.2.3-4/x86_64");
         fs::create_dir_all(&output).unwrap();
         fs::write(
             output.join("droidloom-runtime-1.2.3-4-x86_64.pkg.tar.zst"),

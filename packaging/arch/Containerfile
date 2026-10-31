@@ -1,7 +1,7 @@
 FROM docker.io/library/archlinux:base-devel
-RUN ["pacman", "-Syu", "--needed", "--noconfirm", "rustup", "git", "rsync", "curl", "unzip", "zip", "meson", "ninja", "pkgconf", "llvm", "spirv-llvm-translator", "bison", "flex", "android-tools", "erofs-utils", "fakeroot", "attr", "e2fsprogs", "python", "python-yaml", "python-mako", "ccache", "mesa", "libdrm", "wayland", "libxkbcommon"]
+RUN ["pacman", "-Syu", "--needed", "--noconfirm", "rustup", "git", "rsync", "curl", "unzip", "zip", "meson", "ninja", "pkgconf", "llvm", "spirv-llvm-translator", "bison", "flex", "android-tools", "erofs-utils", "fakeroot", "attr", "e2fsprogs", "python", "python-yaml", "python-mako", "ccache", "mesa", "libdrm", "wayland", "libxkbcommon", "aarch64-linux-gnu-gcc"]
 ENV RUSTUP_HOME=/opt/rustup
-RUN ["rustup", "toolchain", "install", "1.93.0", "--profile", "minimal"]
+RUN ["rustup", "toolchain", "install", "1.93.0", "--profile", "minimal", "--target", "aarch64-unknown-linux-gnu"]
 RUN ["rustup", "default", "1.93.0"]
 RUN ["chmod", "-R", "a+rX", "/opt/rustup"]
 RUN ["pacman", "-S", "--needed", "--noconfirm", "clang", "glslang"]

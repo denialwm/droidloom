@@ -1,5 +1,5 @@
 #!/bin/sh
-# Install or update Droidloom on x86_64 Arch Linux / Omarchy.
+# Install or update Droidloom on Arch Linux / Omarchy (x86_64) or Arch Linux ARM (aarch64).
 set -eu
 
 case "${1:-}" in
@@ -10,7 +10,11 @@ case "${1:-}" in
   *) printf 'Unknown argument: %s\n' "$1" >&2; exit 1 ;;
 esac
 [ "$#" -le 1 ] || exit 1
-[ "$(uname -m)" = x86_64 ] || { echo 'Droidloom packages require x86_64.' >&2; exit 1; }
+machine=$(uname -m)
+case "$machine" in
+  x86_64|aarch64) ;;
+  *) echo 'Droidloom packages require x86_64 or aarch64.' >&2; exit 1 ;;
+esac
 command -v pacman >/dev/null || { echo 'This installer requires Arch Linux / Omarchy and pacman.' >&2; exit 1; }
 
 # Keep privileges in this small, reviewable installer. Pacman owns installation,
@@ -23,11 +27,11 @@ config=/etc/pacman.conf
 include=/etc/pacman.d/droidloom.conf
 repository=$(mktemp)
 trap 'rm -f "$repository"' EXIT HUP INT TERM
-cat > "$repository" <<'REPO'
+cat > "$repository" <<REPO
 [droidloom]
 # Droidloom currently publishes unsigned packages over HTTPS.
 SigLevel = Never
-Server = https://denialwm.github.io/droidloom/x86_64
+Server = https://denialwm.github.io/droidloom/$machine
 CacheServer = https://github.com/denialwm/droidloom/releases/download/packages
 REPO
 

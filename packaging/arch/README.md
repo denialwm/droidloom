@@ -6,8 +6,9 @@ User-facing instructions are maintained in:
 - [Building packages](../../docs/BUILDING.md)
 - [Known issues](../../docs/KNOWN_ISSUES.md)
 
-`version.json` defines the matching package release. `PKGBUILD.in` calls the Rust
-builder, and `Containerfile` supplies its rootless Arch environment. The runtime
+`version.json` defines the matching package release for both architectures,
+x86_64 and aarch64. `PKGBUILD.in` calls the Rust builder, and `Containerfile`
+supplies its rootless Arch environment, including the aarch64 cross compiler. The runtime
 and image packages must be installed together. Lifecycle hooks stop the runtime
 before replacement or removal and preserve Android data.
 
