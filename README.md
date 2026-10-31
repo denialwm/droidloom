@@ -16,7 +16,9 @@ Arch Linux and aarch64 Arch Linux ARM. Download them from the
 install them through the repository as below.
 
 > [!NOTE]
-> Droidloom is incompatible with NVIDIA graphics.
+> Droidloom does not work with NVIDIA graphics yet. NVIDIA support is planned
+> and under development; [supporting the project](https://denialwm.org/support.html) helps it
+> move forward.
 
 ## What you get
 

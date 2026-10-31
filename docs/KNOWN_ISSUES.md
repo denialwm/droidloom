@@ -531,8 +531,9 @@ The subsequent source fixes and full-suite results are recorded above.
   retain SurfaceFlinger composition. Package and unit checks do not establish
   visual correctness or a measured performance gain; those need acceptance in
   the updated session.
-- **Incompatible with NVIDIA graphics.** A dual-GPU AMD/NVIDIA laptop works
-  through its AMD GPU.
+- **No NVIDIA graphics yet.** A dual-GPU AMD/NVIDIA laptop works through its
+  AMD GPU. NVIDIA support is planned and under development;
+  [supporting the project](https://denialwm.org/support.html) helps it move forward.
 - **First-start authentication needs a desktop agent.** If the polkit prompt
   is unavailable, use the explicit sudo setup helper in the installation guide.
   The exact normal-user graphical authentication path still needs a complete
