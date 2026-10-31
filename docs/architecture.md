@@ -601,6 +601,10 @@ allows one unacknowledged scene per task. Further compositions coalesce until
 acceptance schedules another composition using the latest Android snapshot.
 Rejected scenes release only their newly tracked, never-attached reads and force
 a composed fallback; reused reads retain their original GPU dependencies.
+Status -95 means the host cannot place the arrangement at all, such as a layer
+edge off its logical pixel grid: the sender composes it without asking again
+until its layers, size or configure serial change. Status -11 rejects only that
+scene, and the next composition asks again.
 Invalid, duplicate or mismatched results fail the stream without releasing
 ambiguous reads. Transitions to composed targets wait for outstanding acceptance
 before sending on Composer's socket, preserving ordering across both sockets.

@@ -215,6 +215,7 @@ void commitTests() {
     CommitQueue queue;
     std::vector<uint64_t> rejected;
     bool repaint = false;
+    bool unplaceable = false;
     assert(!queue.busy() && !queue.defer());
     auto first = queue.begin({91, 92});
     assert(first == 1 && queue.busy());
@@ -224,7 +225,7 @@ void commitTests() {
     assert(!queue.complete({1, 0, 1}, &rejected, &repaint));
     assert(queue.busy());
     assert(queue.complete({1, 0, 0}, &rejected, &repaint));
-    assert(rejected.empty() && !repaint && !queue.takeFallback());
+    assert(rejected.empty() && !repaint && !queue.takeFallback(&unplaceable));
     assert(!queue.complete({1, 0, 0}, &rejected, &repaint));
     auto second = queue.begin({93});
     assert(second == 2);
@@ -235,9 +236,23 @@ void commitTests() {
     assert(third == 3);
     assert(queue.complete({3, 0, static_cast<uint32_t>(-95)}, &rejected, &repaint));
     assert((rejected == std::vector<uint64_t>{94, 95}));
-    assert(repaint && queue.takeFallback() && !queue.takeFallback());
+    assert(repaint && queue.takeFallback(&unplaceable) && unplaceable);
+    assert(!queue.takeFallback(&unplaceable) && !unplaceable);
     // Only a rejected scene's new reads complete; accepted reads keep GPU gates.
     assert(std::find(rejected.begin(), rejected.end(), 91) == rejected.end());
+    // A rejection of this scene alone falls back once and asks again.
+    assert(queue.begin({96}) == 4);
+    assert(queue.complete({4, 0, static_cast<uint32_t>(-11)}, &rejected, &repaint));
+    assert(repaint && queue.takeFallback(&unplaceable) && !unplaceable);
+    // The shape keeps placement and drops each layer's buffer and frame.
+    const std::vector<uint64_t> scene{7, 800, 600, 1, 41, 9, 0, 281, 800, 600,
+                                      0, 0, 0, 0, 0, 255, 0, 1, 0x34325258};
+    std::vector<uint64_t> next = scene;
+    next[4] = 42;
+    next[5] = 10;
+    assert(sceneShape(scene) == sceneShape(next) && sceneShape(scene) != scene);
+    next[7] = 282;
+    assert(sceneShape(scene) != sceneShape(next));
 
     int sockets[2];
     assert(socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, sockets) == 0);

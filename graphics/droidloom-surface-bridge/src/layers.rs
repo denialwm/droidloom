@@ -585,6 +585,12 @@ pub fn release_fence(ticket: u64) -> Vec<u8> {
     bytes
 }
 
+/// Scene rejection: the host cannot place this arrangement (EOPNOTSUPP). The
+/// sender composes it until its layers, size or configure serial change.
+pub const SCENE_UNPLACEABLE: i32 = -95;
+/// Scene rejection for this scene only (EAGAIN); the next one may be accepted.
+pub const SCENE_RETRY: i32 = -11;
+
 /// Scene acceptance is metadata, and must never imply producer buffer release.
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // Split ID and signed wire status.
 pub fn commit_result(scene: u64, code: i32) -> Vec<u8> {

@@ -293,9 +293,9 @@ impl Stream {
             self.staged.clear();
             if let Some(scene) = commit.scene {
                 self.events
-                    .send_record(&wire::commit_result(scene, -11), &[])?;
+                    .send_record(&wire::commit_result(scene, wire::SCENE_RETRY), &[])?;
             } else {
-                self.ack(-11)?;
+                self.ack(wire::SCENE_RETRY)?;
             }
         }
         self.end_wait("aborted");
@@ -966,7 +966,7 @@ impl App {
                 if let Some(scene) = stream.waiting.take().and_then(|commit| commit.scene) {
                     stream
                         .events
-                        .send_record(&wire::commit_result(scene, -95), &[])?;
+                        .send_record(&wire::commit_result(scene, wire::SCENE_RETRY), &[])?;
                 }
                 stream.end_wait("aborted by SurfaceFlinger");
                 stream.ack(0)?;
@@ -1073,13 +1073,20 @@ impl App {
         }
         if status != wire::SceneStatus::Ready {
             stream.staged.clear();
+            // Off-grid edges or a missing alpha global refuse the arrangement
+            // itself; anything else may pass with the next scene.
+            let code = if !exact_geometry || self.layer_globals.alpha.is_none() {
+                wire::SCENE_UNPLACEABLE
+            } else {
+                wire::SCENE_RETRY
+            };
             if let Some(scene) = scene {
                 stream
                     .events
-                    .send_record(&wire::commit_result(scene, -95), &[])?;
+                    .send_record(&wire::commit_result(scene, code), &[])?;
                 return Ok(());
             }
-            return stream.ack(-95);
+            return stream.ack(code);
         }
         let task = self.tasks.get_mut(&object).unwrap();
         // A newer accepted direct scene supersedes a composed frame which has

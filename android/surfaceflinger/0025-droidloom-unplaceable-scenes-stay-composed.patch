@@ -1,0 +1,101 @@
+diff --git a/services/surfaceflinger/DroidloomLayers.cpp b/services/surfaceflinger/DroidloomLayers.cpp
+index 6c2d062..b55cdcc 100644
+--- a/services/surfaceflinger/DroidloomLayers.cpp
++++ b/services/surfaceflinger/DroidloomLayers.cpp
+@@ -157,12 +157,24 @@ public:
+     }
+ };
+ 
++// The host rejects with EOPNOTSUPP when it cannot place an arrangement at all,
++// such as a layer edge off its logical pixel grid. Any other rejection is
++// transient and falls back for one composition.
++constexpr int32_t kUnplaceable = -95;
++
++// A scene is the configure serial, width and height, then 16 words per layer
++// starting with its id, buffer and frame. Its shape leaves out the content.
++std::vector<uint64_t> sceneShape(std::vector<uint64_t> scene) {
++    for (size_t i = 3; i + 2 < scene.size(); i += 16) scene[i + 1] = scene[i + 2] = 0;
++    return scene;
++}
++
+ // One outstanding scene bounds queued descriptors and avoids speculative read
+ // reuse. Caller holds State::mutex; no callback runs while that lock is held.
+ class CommitQueue {
+     uint64_t mNext = 0, mPending = 0;
+     std::vector<uint64_t> mAdded;
+-    bool mDeferred = false, mFallback = false;
++    bool mDeferred = false, mFallback = false, mUnplaceable = false;
+ public:
+     bool busy() const { return mPending != 0; }
+     bool defer() {
+@@ -170,7 +182,10 @@ public:
+         mDeferred = true;
+         return true;
+     }
+-    bool takeFallback() { return std::exchange(mFallback, false); }
++    bool takeFallback(bool* unplaceable) {
++        *unplaceable = std::exchange(mUnplaceable, false);
++        return std::exchange(mFallback, false);
++    }
+     uint64_t begin(std::vector<uint64_t> added) {
+         if (busy() || mNext == UINT64_MAX) return 0;
+         mPending = ++mNext;
+@@ -186,6 +201,7 @@ public:
+         if (words[2]) {
+             *rejected = std::move(mAdded);
+             mFallback = true;
++            mUnplaceable = static_cast<int32_t>(words[2]) == kUnplaceable;
+         }
+         mAdded.clear();
+         mPending = 0;
+@@ -596,7 +612,11 @@ bool DroidloomLayers::presentFrame(compositionengine::Output& output, uint32_t w
+         // Coalesce under pressure, without staging references to skipped
+         // frames. Acceptance wakes a new composition using the latest snapshot.
+         if (mState->commits.defer()) return true;
+-        if (mState->commits.takeFallback()) return false;
++        bool unplaceable = false;
++        if (mState->commits.takeFallback(&unplaceable)) {
++            if (unplaceable) mUnplaceable = sceneShape(mScene);
++            return false;
++        }
+     }
+     std::vector<Export> exports;
+     std::set<uint64_t> buffers;
+@@ -656,6 +676,12 @@ bool DroidloomLayers::presentFrame(compositionengine::Output& output, uint32_t w
+                 e.id, h->width, h->height, e.format, h->totalSize, mCacheSerial});
+     }
+     mRetireOnRelease = trimDroidloomImports(mBuffers, currentImports, retire);
++    // Compose an arrangement the host cannot place without asking it every
++    // other frame. Any change to its layers, size or configure asks again.
++    if (!mUnplaceable.empty()) {
++        if (sceneShape(scene) == mUnplaceable) return false;
++        mUnplaceable.clear();
++    }
+     // A release can wake an otherwise unchanged scene solely to retire imports.
+     // Do not reattach buffers or create new reads for that cleanup.
+     if (scene == mScene) return true;
+@@ -808,7 +834,10 @@ bool DroidloomLayers::presentFrame(compositionengine::Output& output, uint32_t w
+         mState->live = false;
+         return false;
+     }
+-    if (reply[0] != 0) return reject();
++    if (reply[0] != 0) {
++        if (static_cast<int32_t>(reply[0]) == kUnplaceable) mUnplaceable = sceneShape(scene);
++        return reject();
++    }
+     mLayers = std::move(next);
+     mScene = std::move(scene);
+     return true;
+diff --git a/services/surfaceflinger/DroidloomLayers.h b/services/surfaceflinger/DroidloomLayers.h
+index 9b22bcd..69fe3a6 100644
+--- a/services/surfaceflinger/DroidloomLayers.h
++++ b/services/surfaceflinger/DroidloomLayers.h
+@@ -40,6 +40,8 @@ class DroidloomLayers {
+    private:
+     bool presentFrame(compositionengine::Output& output, uint32_t width, uint32_t height);
+     std::vector<uint64_t> mScene;
++    // Shape of the last scene the host could not place, composed until it changes.
++    std::vector<uint64_t> mUnplaceable;
+     struct State;
+     std::shared_ptr<State> mState;
+     base::unique_fd mRequests;
