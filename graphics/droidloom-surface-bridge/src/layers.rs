@@ -13,7 +13,7 @@ pub const MAX_IMPORTS: usize = 16;
 /// Stream supports synchronized subsurfaces, alpha, and release sync-files.
 /// Requiring both bits makes older peers select normal composition fallback.
 pub const SUPPORTED: u32 =
-    3 | ASYNC_STAGE | CONFIG_EVENTS | ASYNC_COMMIT | ASYNC_IMPORT | SCENE_BATCH;
+    3 | ASYNC_STAGE | CONFIG_EVENTS | ASYNC_COMMIT | ASYNC_IMPORT | SCENE_BATCH | PLACEMENT_GRID;
 /// Bounded chunks; the final chunk and commit share one packet.
 pub const SCENE_BATCH: u32 = 1 << 6;
 /// Maximum layers in one scene chunk; the transport still permits only four FDs.
@@ -30,18 +30,24 @@ pub const ASYNC_COMMIT: u32 = 1 << 4;
 /// Allocation import results arrive on the event socket, identified by attempt
 /// and allocation. Scenes may reference only successfully imported sources.
 pub const ASYNC_IMPORT: u32 = 1 << 5;
+/// Subscriptions through opcode 13 also carry the task's logical size. A layer
+/// edge is placeable only where `edge * logical` is a multiple of the physical
+/// size, so senders compose any other scene without asking.
+pub const PLACEMENT_GRID: u32 = 1 << 7;
 
-/// Last published task configuration. Revision also orders changes to visibility
-/// and capabilities that do not increment Android's configure serial.
+/// Last published task configuration: capabilities, configure serial, physical
+/// and logical size. Revision also orders changes to visibility and
+/// capabilities that do not increment Android's configure serial.
 #[derive(Default)]
 pub struct ConfigPublisher {
     revision: u64,
-    current: [u32; 4],
+    current: [u32; 6],
     subscribed: bool,
+    placement: bool,
 }
 
 impl ConfigPublisher {
-    fn refresh(&mut self, current: [u32; 4]) -> Result<bool, WireError> {
+    fn refresh(&mut self, current: [u32; 6]) -> Result<bool, WireError> {
         if self.revision != 0 && self.current == current {
             return Ok(false);
         }
@@ -51,24 +57,21 @@ impl ConfigPublisher {
     }
 
     #[allow(clippy::cast_possible_truncation)] // Wire revision is split into low/high words.
-    fn snapshot(&self) -> [u32; 6] {
-        [
-            self.revision as u32,
-            (self.revision >> 32) as u32,
-            self.current[0],
-            self.current[1],
-            self.current[2],
-            self.current[3],
-        ]
+    fn snapshot(&self) -> Vec<u32> {
+        let mut words = vec![self.revision as u32, (self.revision >> 32) as u32];
+        // Only a placement subscriber receives the logical size.
+        words.extend_from_slice(&self.current[..if self.placement { 6 } else { 4 }]);
+        words
     }
 
     /// Subscribe and return the initial reply, even if nothing changed.
     ///
     /// # Errors
     /// Returns `WireError::Field` if the revision would overflow.
-    pub fn subscribe(&mut self, current: [u32; 4]) -> Result<[u32; 6], WireError> {
+    pub fn subscribe(&mut self, current: [u32; 6], placement: bool) -> Result<Vec<u32>, WireError> {
         self.refresh(current)?;
         self.subscribed = true;
+        self.placement = placement;
         Ok(self.snapshot())
     }
 
@@ -76,7 +79,7 @@ impl ConfigPublisher {
     ///
     /// # Errors
     /// Returns `WireError::Field` if the revision would overflow.
-    pub fn update(&mut self, current: [u32; 4]) -> Result<Option<[u32; 6]>, WireError> {
+    pub fn update(&mut self, current: [u32; 6]) -> Result<Option<Vec<u32>>, WireError> {
         let changed = self.refresh(current)?;
         Ok((changed && self.subscribed).then(|| self.snapshot()))
     }
@@ -169,7 +172,10 @@ pub enum Request {
     Config,
     /// Subscribe to configuration events; initial revisioned snapshot is replied
     /// on the request socket and later changes use the event socket.
-    SubscribeConfig,
+    SubscribeConfig {
+        /// Opcode 13: snapshots also carry the logical size (`PLACEMENT_GRID`).
+        placement: bool,
+    },
     /// Register image planes once.
     Register(Buffer),
     /// Pipeline registration without a request-socket reply. Requires
@@ -475,7 +481,9 @@ pub fn decode(bytes: &[u8], descriptors: usize) -> Result<Request, WireError> {
     let p = &bytes[16..];
     match read_u32(bytes, 4)? {
         1 if p.is_empty() && descriptors == 0 => Ok(Request::Config),
-        8 if p.is_empty() && descriptors == 0 => Ok(Request::SubscribeConfig),
+        opcode @ (8 | 13) if p.is_empty() && descriptors == 0 => Ok(Request::SubscribeConfig {
+            placement: opcode == 13,
+        }),
         opcode @ (2 | 10) => {
             let (attempt, p) = if opcode == 10 {
                 let attempt = read_u64(p, 0)?;
@@ -779,28 +787,28 @@ mod tests {
     #[test]
     fn configuration_subscription_orders_changes_and_leaves_legacy_peers_silent() {
         let mut publisher = super::ConfigPublisher::default();
-        let initial = [super::SUPPORTED, 9, 800, 600];
+        let initial = [super::SUPPORTED, 9, 800, 600, 400, 300];
         assert_eq!(publisher.update(initial).unwrap(), None);
         assert_eq!(
-            publisher.subscribe(initial).unwrap(),
+            publisher.subscribe(initial, false).unwrap(),
             [1, 0, super::SUPPORTED, 9, 800, 600]
         );
         assert_eq!(publisher.update(initial).unwrap(), None);
-        let resized = [super::SUPPORTED, 10, 1024, 768];
+        let resized = [super::SUPPORTED, 10, 1024, 768, 512, 384];
         assert_eq!(
             publisher.update(resized).unwrap(),
-            Some([2, 0, super::SUPPORTED, 10, 1024, 768])
+            Some(vec![2, 0, super::SUPPORTED, 10, 1024, 768])
         );
         assert_eq!(
-            publisher.update([0, 10, 1024, 768]).unwrap(),
-            Some([3, 0, 0, 10, 1024, 768])
+            publisher.update([0, 10, 1024, 768, 512, 384]).unwrap(),
+            Some(vec![3, 0, 0, 10, 1024, 768])
         );
         assert_eq!(
             publisher.update(resized).unwrap(),
-            Some([4, 0, super::SUPPORTED, 10, 1024, 768])
+            Some(vec![4, 0, super::SUPPORTED, 10, 1024, 768])
         );
         assert_eq!(
-            publisher.subscribe(resized).unwrap(),
+            publisher.subscribe(resized, false).unwrap(),
             [4, 0, super::SUPPORTED, 10, 1024, 768]
         );
         publisher.revision = u64::MAX;
@@ -810,10 +818,34 @@ mod tests {
     }
 
     #[test]
+    fn placement_subscription_carries_the_logical_size() {
+        let mut publisher = super::ConfigPublisher::default();
+        let initial = [super::SUPPORTED, 9, 1216, 2640, 608, 1320];
+        assert_eq!(
+            publisher.subscribe(initial, true).unwrap(),
+            [1, 0, super::SUPPORTED, 9, 1216, 2640, 608, 1320]
+        );
+        assert_eq!(
+            publisher
+                .update([super::SUPPORTED, 10, 1216, 2640, 405, 880])
+                .unwrap(),
+            Some(vec![2, 0, super::SUPPORTED, 10, 1216, 2640, 405, 880])
+        );
+    }
+
+    #[test]
     fn configuration_subscription_rejects_payload_and_descriptors() {
         use super::{Request, decode, response};
-        assert_eq!(decode(&response(8, &[]), 0), Ok(Request::SubscribeConfig));
+        assert_eq!(
+            decode(&response(8, &[]), 0),
+            Ok(Request::SubscribeConfig { placement: false })
+        );
+        assert_eq!(
+            decode(&response(13, &[]), 0),
+            Ok(Request::SubscribeConfig { placement: true })
+        );
         assert!(decode(&response(8, &[1]), 0).is_err());
+        assert!(decode(&response(13, &[1]), 0).is_err());
         assert!(decode(&response(8, &[]), 1).is_err());
     }
     use super::*;

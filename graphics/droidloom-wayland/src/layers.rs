@@ -582,9 +582,11 @@ fn carrier(
 }
 
 impl App {
-    fn layer_config(&self, object: TaskObjectId) -> Option<[u32; 4]> {
+    fn layer_config(&self, object: TaskObjectId) -> Option<[u32; 6]> {
         let task = self.tasks.get(&object)?;
         let enabled = self.layer_globals.alpha.is_some() && task.accepts_present();
+        // The grid submit_layer_scene checks edges against.
+        let (logical_width, logical_height) = task.logical_size.unwrap_or_default();
         Some([
             if enabled {
                 wire::SUPPORTED
@@ -594,6 +596,8 @@ impl App {
             task.configure_serial,
             task.buffer_size.0,
             task.buffer_size.1,
+            logical_width,
+            logical_height,
         ])
     }
     pub(super) fn bind_layers(
@@ -736,7 +740,7 @@ impl App {
                         | Request::CommitAsync { .. }
                         | Request::CommitBatch { .. }
                         | Request::Config
-                        | Request::SubscribeConfig
+                        | Request::SubscribeConfig { .. }
                 ) {
                     // A legacy target is sent on Composer's socket before SF
                     // receives its ack and can send this request. Drain that
@@ -799,7 +803,7 @@ impl App {
         if stream.waiting.is_some()
             && !matches!(
                 request,
-                Request::Config | Request::SubscribeConfig | Request::Abort
+                Request::Config | Request::SubscribeConfig { .. } | Request::Abort
             )
         {
             return Err(PresenterError::Configuration("layer scene already waiting"));
@@ -859,12 +863,13 @@ impl App {
             Request::StageBatch(_) | Request::CommitBatch { .. } => {
                 unreachable!("normalized batch")
             }
-            Request::SubscribeConfig => {
+            Request::SubscribeConfig { placement } => {
                 let words = stream
                     .configuration
                     .subscribe(
                         self.layer_config(object)
                             .ok_or(PresenterError::UnknownTask(object))?,
+                        placement,
                     )
                     .map_err(|_| {
                         PresenterError::Configuration("layer configuration revision exhausted")
@@ -874,15 +879,12 @@ impl App {
                     .send_record(&wire::response(0x8005, &words), &[])?;
             }
             Request::Config => {
-                stream.requests.send_record(
-                    &wire::response(
-                        0x8002,
-                        &self
-                            .layer_config(object)
-                            .ok_or(PresenterError::UnknownTask(object))?,
-                    ),
-                    &[],
-                )?;
+                let config = self
+                    .layer_config(object)
+                    .ok_or(PresenterError::UnknownTask(object))?;
+                stream
+                    .requests
+                    .send_record(&wire::response(0x8002, &config[..4]), &[])?;
             }
             Request::Register(metadata)
             | Request::RegisterAsync {

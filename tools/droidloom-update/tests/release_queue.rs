@@ -17,6 +17,7 @@ fn layer_pipeline_supports_bounded_async_imports_commits_and_legacy_replies() {
         "0015-droidloom-scene-batches.patch",
         "0018-droidloom-import-retention.patch",
         "0025-droidloom-unplaceable-scenes-stay-composed.patch",
+        "0026-droidloom-placement-grid.patch",
     ] {
         let output = Command::new("git")
             .current_dir(temp.path())

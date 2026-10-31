@@ -257,6 +257,10 @@ const PATCHES: &[(&str, &str)] = &[
     ),
     (
         "frameworks/native",
+        "android/surfaceflinger/0026-droidloom-placement-grid.patch",
+    ),
+    (
+        "frameworks/native",
         "android/inputflinger/0001-application-token-targeted-injection.patch",
     ),
     (

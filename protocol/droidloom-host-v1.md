@@ -159,7 +159,8 @@ remain at most 128 bytes.
 
 The stream requests are Config (1), Register (2), Unregister (3), Stage (4),
 Commit (5), Abort (6), optional StageAsync (7), SubscribeConfig (8),
-CommitAsync (9), RegisterAsync (10), StageBatch (11), and CommitBatch (12).
+CommitAsync (9), RegisterAsync (10), StageBatch (11), CommitBatch (12), and
+SubscribePlacement (13).
 Config returns capabilities,
 configure serial and physical dimensions. Register has one FD per image plane;
 Stage and StageAsync have at most
@@ -219,6 +220,14 @@ validation and event `0x8006`. Earlier chunks remain invisible until acceptance.
 The complete scene remains bounded to 64 layers and one unacknowledged commit;
 chunk overflow invalidates the whole scene. Final batches preserve the same
 cross-socket barrier as Commit. Older peers use StageAsync and CommitAsync.
+
+Config capability bit 7 (`PLACEMENT_GRID`) permits SubscribePlacement, which is
+SubscribeConfig whose snapshots append two words: logical width and logical
+height. A layer edge is placeable only where edge × logical size is a multiple
+of the physical size; the sender composes any other scene without submitting
+it. Scene rejection -95 means the host cannot place that arrangement at all, and
+the sender composes it until its layers, size or configure serial change; -11
+rejects that scene only. Older peers subscribe with SubscribeConfig.
 
 `RegisterBuffer` carries an allocation ID, dimensions, explicit DRM FourCC and
 modifier, and one through four dense plane records containing index, offset,

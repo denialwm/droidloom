@@ -207,6 +207,28 @@ void configurationTests() {
         assert(!subscribed && config[1] == serial);
     }
     legacy.join();
+    // A host with PLACEMENT_GRID answers opcode 13 with its logical size too.
+    ConfigCache placed;
+    subscribed = false;
+    std::thread grid([&] {
+        std::vector<uint32_t> request;
+        assert(receive(sockets[1], 1, &request) && request.empty());
+        replyWords(sockets[1], 0x8002, {15 | 128, 20, 1216, 2640});
+        assert(receive(sockets[1], 13, &request) && request.empty());
+        replyWords(sockets[1], 0x8005, {1, 0, 15 | 128, 20, 1216, 2640, 608, 1320});
+    });
+    assert(configuration(sockets[0], placed, subscribed, 1216, 2640, &config));
+    grid.join();
+    assert(subscribed && (placed.logicalSize() == std::array<uint32_t, 2>{608, 1320}));
+    assert(!placed.update({2, 0, 15 | 128, 20, 1216, 2640}));
+    assert(placed.update({2, 0, 15 | 128, 21, 1216, 2640, 405, 880}));
+    assert((placed.logicalSize() == std::array<uint32_t, 2>{405, 880}));
+    assert((current.logicalSize() == std::array<uint32_t, 2>{0, 0}));
+    // Firefox's video layer at y=281 sits between logical pixels at scale 2.
+    assert(onLogicalGrid({0, 280, 1216, 2640}, {608, 1320}, 1216, 2640));
+    assert(!onLogicalGrid({0, 281, 1216, 2640}, {608, 1320}, 1216, 2640));
+    assert(!onLogicalGrid({-1, 0, 1216, 2640}, {608, 1320}, 1216, 2640));
+    assert(onLogicalGrid({0, 281, 1216, 2640}, {0, 0}, 1216, 2640));
     close(sockets[0]);
     close(sockets[1]);
 }

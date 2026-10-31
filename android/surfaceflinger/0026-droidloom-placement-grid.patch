@@ -1,0 +1,94 @@
+diff --git a/services/surfaceflinger/DroidloomLayers.cpp b/services/surfaceflinger/DroidloomLayers.cpp
+index b55cdcc..3e78054 100644
+--- a/services/surfaceflinger/DroidloomLayers.cpp
++++ b/services/surfaceflinger/DroidloomLayers.cpp
+@@ -283,17 +283,27 @@ struct ConfigCache {
+     std::mutex mutex;
+     uint64_t revision = 0;
+     std::array<uint32_t, 4> value{};
++    // A placement subscription adds the host's logical size; zero without one.
++    bool placement = false;
++    std::array<uint32_t, 2> logical{};
++    void expectPlacement() {
++        std::lock_guard lock(mutex);
++        placement = true;
++    }
+     bool update(const std::vector<uint32_t>& words, bool* changed = nullptr) {
+         if (changed) *changed = false;
+-        if (words.size() != 6) return false;
++        std::lock_guard lock(mutex);
++        if (words.size() != (placement ? 8u : 6u)) return false;
+         const uint64_t next = words[0] | static_cast<uint64_t>(words[1]) << 32;
+         if (!next) return false;
+         const std::array<uint32_t, 4> incoming{words[2], words[3], words[4], words[5]};
+-        std::lock_guard lock(mutex);
++        std::array<uint32_t, 2> grid{};
++        if (placement) grid = {words[6], words[7]};
+         if (next < revision) return true;
+-        if (next == revision) return incoming == value;
++        if (next == revision) return incoming == value && grid == logical;
+         revision = next;
+         value = incoming;
++        logical = grid;
+         if (changed) *changed = true;
+         return true;
+     }
+@@ -301,6 +311,10 @@ struct ConfigCache {
+         std::lock_guard lock(mutex);
+         return value;
+     }
++    std::array<uint32_t, 2> logicalSize() {
++        std::lock_guard lock(mutex);
++        return logical;
++    }
+ };
+ bool configurationEvent(ConfigCache& cache, const std::vector<uint32_t>& words,
+                         const std::function<void()>& repaint) {
+@@ -316,7 +330,10 @@ bool configurationSnapshot(int socket, ConfigCache& cache, bool& subscribed,
+         if (!send(socket, 1, {}) || !receive(socket, 0x8002, &words) || words.size() != 4 ||
+             words[1] == 0 || words[2] == 0 || words[3] == 0) return false;
+         if (words[0] & 8) {
+-            if (!send(socket, 8, {}) || !receive(socket, 0x8005, &words) ||
++            // Capability bit 7: subscribe with opcode 13 for the logical size.
++            const bool placement = (words[0] & 128) != 0;
++            if (placement) cache.expectPlacement();
++            if (!send(socket, placement ? 13 : 8, {}) || !receive(socket, 0x8005, &words) ||
+                 !cache.update(words)) return false;
+             subscribed = true;
+         } else {
+@@ -332,6 +349,16 @@ bool configuration(int socket, ConfigCache& cache, bool& subscribed, uint32_t wi
+     return configurationSnapshot(socket, cache, subscribed, config) &&
+             ((*config)[0] & 3) == 3 && (*config)[2] == width && (*config)[3] == height;
+ }
++// The host places a layer edge (left, top, right, bottom) only on a whole
++// logical pixel. Without a logical size every edge passes and the host decides.
++bool onLogicalGrid(std::array<int32_t, 4> edges, std::array<uint32_t, 2> logical,
++                   uint32_t width, uint32_t height) {
++    const auto on = [](int64_t edge, uint32_t units, uint32_t pixels) {
++        return !units || edge * units % pixels == 0;
++    };
++    return on(edges[0], logical[0], width) && on(edges[1], logical[1], height) &&
++            on(edges[2], logical[0], width) && on(edges[3], logical[1], height);
++}
+ // Exact ABI of the pinned minigbm mapper; never pass its metadata FD as an image plane.
+ struct CrosHandle : native_handle_t {
+     int32_t fds[5];
+@@ -676,8 +703,16 @@ bool DroidloomLayers::presentFrame(compositionengine::Output& output, uint32_t w
+                 e.id, h->width, h->height, e.format, h->totalSize, mCacheSerial});
+     }
+     mRetireOnRelease = trimDroidloomImports(mBuffers, currentImports, retire);
+-    // Compose an arrangement the host cannot place without asking it every
+-    // other frame. Any change to its layers, size or configure asks again.
++    // Compose a scene the host cannot place without asking it: asking costs a
++    // frame while the answer travels.
++    const auto logical = mState->config.logicalSize();
++    for (const auto& e : exports) {
++        const auto& d = e.destination;
++        if (!onLogicalGrid({d.left, d.top, d.right, d.bottom}, logical, width, height)) {
++            return false;
++        }
++    }
++    // Also an arrangement it refused, until its layers, size or configure change.
+     if (!mUnplaceable.empty()) {
+         if (sceneShape(scene) == mUnplaceable) return false;
+         mUnplaceable.clear();
