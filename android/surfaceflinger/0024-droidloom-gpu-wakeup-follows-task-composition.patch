@@ -1,0 +1,99 @@
+diff --git a/services/surfaceflinger/Scheduler/VsyncConfiguration.cpp b/services/surfaceflinger/Scheduler/VsyncConfiguration.cpp
+index 47f957f..14a32a5 100644
+--- a/services/surfaceflinger/Scheduler/VsyncConfiguration.cpp
++++ b/services/surfaceflinger/Scheduler/VsyncConfiguration.cpp
+@@ -16,6 +16,7 @@
+ 
+ #include "VsyncConfiguration.h"
+ 
++#include <algorithm>
+ #include <chrono>
+ #include <cinttypes>
+ #include <optional>
+@@ -276,6 +277,14 @@ static void validateSysprops() {
+ }
+ 
+ namespace {
++// GPU-composed frames start up to 3 ms before the late wakeup, so RenderEngine
++// finishes before the host latches. Composer puts the late wakeup 2 ms before
++// the latch; the earlier wakeup stays at least 1 ms after the previous latch.
++std::chrono::nanoseconds sfEarlyGpuLead(nsecs_t vsyncDuration) {
++    return std::clamp(std::chrono::nanoseconds(vsyncDuration) - 3ms,
++                      std::chrono::nanoseconds(0), std::chrono::nanoseconds(3ms));
++}
++
+ nsecs_t sfDurationToOffset(std::chrono::nanoseconds sfDuration, nsecs_t vsyncDuration) {
+     return vsyncDuration - sfDuration.count() % vsyncDuration;
+ }
+@@ -299,7 +308,9 @@ VsyncConfigSet WorkDuration::constructOffsets(nsecs_t vsyncDuration) const {
+ 
+     const auto sfEarlyDuration = sfDurationFixup(mSfEarlyDuration);
+     const auto appEarlyDuration = appDurationFixup(mAppEarlyDuration);
+-    const auto sfEarlyGpuDuration = sfDurationFixup(mSfEarlyGpuDuration);
++    const auto sfEarlyGpuDuration = mSfEarlyGpuLeads
++            ? sfDurationFixup(mSfDuration) + sfEarlyGpuLead(vsyncDuration)
++            : sfDurationFixup(mSfEarlyGpuDuration);
+     const auto appEarlyGpuDuration = appDurationFixup(mAppEarlyGpuDuration);
+     const auto sfDuration = sfDurationFixup(mSfDuration);
+     const auto appDuration = appDurationFixup(mAppDuration);
+@@ -365,6 +376,7 @@ WorkDuration::WorkDuration(Fps currentRefreshRate)
+                      getProperty("debug.sf.earlyGl.app.duration")
+                              .value_or(getProperty("debug.sf.late.app.duration").value_or(-1)),
+                      getProperty("debug.sf.hwc.min.duration").value_or(0)) {
++    mSfEarlyGpuLeads = !getProperty("debug.sf.earlyGl.sf.duration").has_value();
+     validateSysprops();
+ }
+ 
+diff --git a/services/surfaceflinger/Scheduler/VsyncConfiguration.h b/services/surfaceflinger/Scheduler/VsyncConfiguration.h
+index 3d8ae3e..8bdf8d2 100644
+--- a/services/surfaceflinger/Scheduler/VsyncConfiguration.h
++++ b/services/surfaceflinger/Scheduler/VsyncConfiguration.h
+@@ -166,6 +166,9 @@ private:
+     const nsecs_t mAppEarlyGpuDuration;
+ 
+     const nsecs_t mHwcMinWorkDuration;
++
++    // An unset earlyGl SF duration starts GPU frames earlier than late ones.
++    bool mSfEarlyGpuLeads = false;
+ };
+ 
+ } // namespace impl
+diff --git a/services/surfaceflinger/SurfaceFlinger.cpp b/services/surfaceflinger/SurfaceFlinger.cpp
+index 708cd6b..661d9db 100644
+--- a/services/surfaceflinger/SurfaceFlinger.cpp
++++ b/services/surfaceflinger/SurfaceFlinger.cpp
+@@ -3471,6 +3471,9 @@ CompositeResultsPerDisplay SurfaceFlinger::composite(
+                 offloadGpuCompositedDisplays(std::move(*optionalOffloadedRefreshArgs));
+     }
+ 
++    // Set when RenderEngine composes an Android task this frame.
++    bool droidloomTaskComposed = false;
++
+     // WindowManager tags every task root with METADATA_TASK_ID, and the
+     // snapshot builder inherits it through the complete task layer subtree.
+     // Render each such subtree into its own Denial-owned target. The physical
+@@ -3876,6 +3879,7 @@ CompositeResultsPerDisplay SurfaceFlinger::composite(
+                                              timingFrame, task, frame.layers.size());
+             taskOutput.engine->present(taskRefresh);
+             renderTiming.stop();
++            droidloomTaskComposed = true;
+             // Every rotated target is still fully rendered. Damage describes
+             // differences from the last submitted frame, not target buffer age.
+             const bool fullDamage = forceGeometry || refreshArgs.updatingGeometryThisFrame;
+@@ -4012,7 +4016,15 @@ CompositeResultsPerDisplay SurfaceFlinger::composite(
+             flags |= CompositionCoverage::Hwc;
+         }
+ 
+-        if (state.reusedClientComposition) {
++        // The headless bootstrap display reports client composition but draws
++        // nothing. Its GPU work is the task composition above, which decides
++        // whether SurfaceFlinger wakes early for GPU frames.
++        const bool droidloomHeadless = refreshArgs.droidloomHeadlessDisplay &&
++                asPhysicalDisplayId(display->getDisplayIdVariant()) ==
++                        refreshArgs.droidloomHeadlessDisplay;
++        if (droidloomHeadless) {
++            if (droidloomTaskComposed) flags |= CompositionCoverage::Gpu;
++        } else if (state.reusedClientComposition) {
+             flags |= CompositionCoverage::GpuReuse;
+         } else if (state.usesClientComposition) {
+             flags |= CompositionCoverage::Gpu;

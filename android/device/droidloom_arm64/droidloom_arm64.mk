@@ -85,8 +85,9 @@ PRODUCT_COPY_FILES += \
 # HWUI reports each frame's work to a hint session, which Droidloom's power
 # service turns into utilization floors for the UI thread and RenderThread.
 # SurfaceFlinger schedules by work durations. Its own stays one period minus
-# 1 ms, which Composer's vsync relies on; apps wake 9.33 ms before SF instead
-# of 15.67 ms, and 15.67 ms during early (transition) scheduling.
+# 1 ms, which Composer's vsync relies on, and starts up to 3 ms earlier while
+# it composes tasks on the GPU; apps wake 9.33 ms before SF instead of 15.67 ms,
+# and 15.67 ms during early (transition) and GPU scheduling.
 # Android's stream volumes start at full scale; the host mixer owns loudness.
 # Codec2 clients use the AIDL software store: the cell has no hwservicemanager,
 # so the default HIDL selection leaves apps with the in-process audio codecs.
