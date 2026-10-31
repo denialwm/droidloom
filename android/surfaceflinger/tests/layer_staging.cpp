@@ -275,6 +275,15 @@ void commitTests() {
     assert(sceneShape(scene) == sceneShape(next) && sceneShape(scene) != scene);
     next[7] = 282;
     assert(sceneShape(scene) != sceneShape(next));
+    // A shape settles once it has held for kSettleNs; new content keeps it.
+    ShapeSettle settle;
+    assert(!settle.settled(sceneShape(scene), 0));
+    assert(!settle.settled(sceneShape(next), kSettleNs / 2));
+    std::vector<uint64_t> content = next;
+    content[4] = 43;
+    assert(!settle.settled(sceneShape(content), kSettleNs / 2 + kSettleNs - 1));
+    assert(settle.settled(sceneShape(content), kSettleNs / 2 + kSettleNs));
+    assert(!settle.settled(sceneShape(scene), 3 * kSettleNs));
 
     int sockets[2];
     assert(socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, sockets) == 0);

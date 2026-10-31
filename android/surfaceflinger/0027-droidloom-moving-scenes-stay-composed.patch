@@ -1,0 +1,86 @@
+diff --git a/services/surfaceflinger/DroidloomLayers.cpp b/services/surfaceflinger/DroidloomLayers.cpp
+index 3e78054..df27324 100644
+--- a/services/surfaceflinger/DroidloomLayers.cpp
++++ b/services/surfaceflinger/DroidloomLayers.cpp
+@@ -13,6 +13,7 @@
+ #include <sys/socket.h>
+ #include <ui/Fence.h>
+ #include <unistd.h>
++#include <utils/Timers.h>
+ 
+ #include <algorithm>
+ #include <array>
+@@ -169,6 +170,24 @@ std::vector<uint64_t> sceneShape(std::vector<uint64_t> scene) {
+     return scene;
+ }
+ 
++// Switching between composition and direct placement shows on screen, and a
++// moving scene can switch on every frame as its edges cross the pixel grid.
++// Once composed, a scene asks for direct placement again only after its shape
++// has held for kSettleNs.
++constexpr int64_t kSettleNs = 100'000'000;
++class ShapeSettle {
++    std::vector<uint64_t> mShape;
++    int64_t mSince = 0;
++public:
++    bool settled(std::vector<uint64_t> shape, int64_t now) {
++        if (shape != mShape) {
++            mShape = std::move(shape);
++            mSince = now;
++        }
++        return now - mSince >= kSettleNs;
++    }
++};
++
+ // One outstanding scene bounds queued descriptors and avoids speculative read
+ // reuse. Caller holds State::mutex; no callback runs while that lock is held.
+ class CommitQueue {
+@@ -470,6 +489,7 @@ std::optional<Export> prepare(const compositionengine::OutputLayer& layer, uint3
+ }
+ }  // namespace
+ struct DroidloomLayers::Batch : SceneBatch {};
++struct DroidloomLayers::Settle : ShapeSettle {};
+ struct DroidloomLayers::State {
+     std::mutex mutex;
+     std::condition_variable completed;
+@@ -511,7 +531,8 @@ sp<Fence> mergeDroidloomReleaseFence(const ReleaseCallbackId& id, sp<Fence> fenc
+     return fence;
+ }
+ DroidloomLayers::DroidloomLayers(base::unique_fd requests, base::unique_fd events, std::function<void()> repaint)
+-    : mState(std::make_shared<State>()), mRequests(std::move(requests)), mBatch(std::make_unique<Batch>()) {
++    : mState(std::make_shared<State>()), mRequests(std::move(requests)), mBatch(std::make_unique<Batch>()),
++      mSettle(std::make_unique<Settle>()) {
+     std::thread([state = mState, events = std::move(events), repaint = std::move(repaint)] {
+         const auto wakeWork = [&] {
+             state->workRevision.fetch_add(1, std::memory_order_release);
+@@ -703,6 +724,8 @@ bool DroidloomLayers::presentFrame(compositionengine::Output& output, uint32_t w
+                 e.id, h->width, h->height, e.format, h->totalSize, mCacheSerial});
+     }
+     mRetireOnRelease = trimDroidloomImports(mBuffers, currentImports, retire);
++    // Composed frames count toward settling too.
++    const bool settled = mSettle->settled(sceneShape(scene), systemTime(SYSTEM_TIME_MONOTONIC));
+     // Compose a scene the host cannot place without asking it: asking costs a
+     // frame while the answer travels.
+     const auto logical = mState->config.logicalSize();
+@@ -717,6 +740,8 @@ bool DroidloomLayers::presentFrame(compositionengine::Output& output, uint32_t w
+         if (sceneShape(scene) == mUnplaceable) return false;
+         mUnplaceable.clear();
+     }
++    // A composed scene stays composed while it moves.
++    if (mScene.empty() && !settled) return false;
+     // A release can wake an otherwise unchanged scene solely to retire imports.
+     // Do not reattach buffers or create new reads for that cleanup.
+     if (scene == mScene) return true;
+diff --git a/services/surfaceflinger/DroidloomLayers.h b/services/surfaceflinger/DroidloomLayers.h
+index 69fe3a6..6503bd9 100644
+--- a/services/surfaceflinger/DroidloomLayers.h
++++ b/services/surfaceflinger/DroidloomLayers.h
+@@ -47,6 +47,8 @@ class DroidloomLayers {
+     base::unique_fd mRequests;
+     struct Batch;
+     std::unique_ptr<Batch> mBatch;
++    struct Settle;
++    std::unique_ptr<Settle> mSettle;
+     struct Cached {
+         sp<GraphicBuffer> buffer;
+         uint32_t format;
