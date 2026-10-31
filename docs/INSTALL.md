@@ -1,14 +1,17 @@
 # Install Droidloom
 
-This guide covers the x86_64 Arch Linux / Omarchy preview. Read
+This guide covers the preview packages for x86_64 Arch Linux and aarch64 Arch
+Linux ARM. Prebuilt packages for both are in the
+[latest release](https://github.com/denialwm/droidloom/releases/latest). Read
 [known issues](KNOWN_ISSUES.md) before installing. To produce the packages yourself,
 follow [BUILDING.md](BUILDING.md), then return here.
 
 ## 1. Check prerequisites
 
-- An x86_64 machine running Arch Linux or Omarchy, with a Wayland desktop.
-- An AMD or Intel GPU. On a dual-GPU laptop, setup selects a supported render
-  node; NVIDIA rendering is not validated.
+- An x86_64 machine running Arch Linux, or an aarch64 machine running Arch
+  Linux ARM, with a Wayland desktop.
+- A GPU other than NVIDIA: Droidloom is incompatible with NVIDIA graphics. On a
+  dual-GPU laptop, setup selects the other GPU's render node.
 - A working systemd user session and administrator access through sudo or polkit.
 - At least 20 GiB free for packages, installed files and Android app data.
   The package pair is about 975 MiB to download and 2.5 GiB installed, before apps.
@@ -134,7 +137,7 @@ droidloomctl launch com.android.settings
 ```
 
 A separate Settings window should appear. Optionally set Android's display
-density; 160 DPI was used for the Omarchy preview tests:
+density; 160 DPI was used for the desktop preview tests:
 
 ```console
 droidloomctl dpi 160

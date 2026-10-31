@@ -73,7 +73,7 @@ pub fn execute(action: Action) -> Result<()> {
             fs::write(
                 site.join("index.html"),
                 format!(
-                    "<!doctype html><html lang=\"en\"><meta charset=\"utf-8\"><title>Droidloom packages</title>\n<h1>Droidloom {}</h1><p>Arch Linux / Omarchy on x86_64, Arch Linux ARM on aarch64.</p>\n<p>Download and review <a href=\"install.sh\">install.sh</a>, then run <code>sh install.sh</code> to install or update.</p>\n<p>Packages are unsigned and delivered over HTTPS. The installer configures this policy only for the Droidloom repository.</p>\n<p><a href=\"https://github.com/denialwm/droidloom/blob/main/docs/INSTALL.md\">Installation guide</a> · <a href=\"https://github.com/denialwm/droidloom/releases/tag/packages\">Packages and source</a></p></html>\n",
+                    "<!doctype html><html lang=\"en\"><meta charset=\"utf-8\"><title>Droidloom packages</title>\n<h1>Droidloom {}</h1><p>Arch Linux on x86_64, Arch Linux ARM on aarch64. Incompatible with NVIDIA graphics.</p>\n<p>Download and review <a href=\"install.sh\">install.sh</a>, then run <code>sh install.sh</code> to install or update.</p>\n<p>Packages are unsigned and delivered over HTTPS. The installer configures this policy only for the Droidloom repository.</p>\n<p><a href=\"https://github.com/denialwm/droidloom/blob/main/docs/INSTALL.md\">Installation guide</a> · <a href=\"https://github.com/denialwm/droidloom/releases/latest\">Packages and source</a></p></html>\n",
                     version.directory()
                 ),
             )?;

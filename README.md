@@ -8,10 +8,14 @@ desktop application catalog.
   <img src="assets/screenshots/whatsapp.png" alt="WhatsApp running in a separate Linux desktop window through Droidloom, with its Android process visible in the terminal below" width="640">
 </p>
 
-This is an early preview. The package workflow targets x86_64 Arch Linux and
-Omarchy with AMD or Intel graphics. WhatsApp and Phone have been tested on Omarchy
-with Hyprland, including tiled resizing on an AMD/NVIDIA laptop using its AMD GPU.
-NVIDIA rendering is not validated.
+This is an early preview. Prebuilt pacman packages are published for x86_64
+Arch Linux and aarch64 Arch Linux ARM. Download them from the
+[latest release](https://github.com/denialwm/droidloom/releases/latest), or
+install them through the repository as below. WhatsApp and Phone have been
+tested on Hyprland, including tiled resizing.
+
+> [!NOTE]
+> Droidloom is incompatible with NVIDIA graphics.
 
 ## Install the preview
 

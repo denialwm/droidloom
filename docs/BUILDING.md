@@ -309,7 +309,7 @@ services, then persistent apps and home.
 ## 1. Prepare an x86_64 build machine
 
 The supported package workflow uses rootless Podman with an Arch build container.
-Install Rust/Cargo with a C linker, Git, Podman and rsync. On Arch / Omarchy:
+Install Rust/Cargo with a C linker, Git, Podman and rsync. On Arch Linux:
 
 ```console
 sudo pacman -S --needed rustup gcc git podman rsync

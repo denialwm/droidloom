@@ -531,8 +531,8 @@ The subsequent source fixes and full-suite results are recorded above.
   retain SurfaceFlinger composition. Package and unit checks do not establish
   visual correctness or a measured performance gain; those need acceptance in
   the updated session.
-- **Graphics support is bounded.** The package targets AMD and Intel. A dual-GPU
-  AMD/NVIDIA laptop was tested using AMD; NVIDIA rendering is not validated.
+- **Incompatible with NVIDIA graphics.** A dual-GPU AMD/NVIDIA laptop works
+  through its AMD GPU.
 - **First-start authentication needs a desktop agent.** If the polkit prompt
   is unavailable, use the explicit sudo setup helper in the installation guide.
   The exact normal-user graphical authentication path still needs a complete
@@ -654,7 +654,7 @@ remains deferred for the current Denial target, with full damage on changed laye
 ## Build and distribution
 
 - The rootless package workflow has passed package lifecycle checks and fresh
-  Omarchy installation tests, but downloading all sources with completely empty
+  installation tests, but downloading all sources with completely empty
   caches has not yet been rehearsed.
 - Package staging needs additional disk space beyond retained compiler outputs.
   A build can compile successfully and still fail during image copying or archive

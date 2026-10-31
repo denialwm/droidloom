@@ -1,6 +1,6 @@
 # Packaging internals
 
-For installation and source builds, use the [Arch/Omarchy guide](arch/README.md).
+For installation and source builds, use the [Arch Linux guide](arch/README.md).
 
 The native package split is `droidloom-runtime` and `droidloom-image`, with
 optional hardware-service packages. `droidloom-runtime` owns the supervisor,

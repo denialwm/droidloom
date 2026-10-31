@@ -1,5 +1,5 @@
 #!/bin/sh
-# Install or update Droidloom on Arch Linux / Omarchy (x86_64) or Arch Linux ARM (aarch64).
+# Install or update Droidloom on Arch Linux (x86_64) or Arch Linux ARM (aarch64).
 set -eu
 
 case "${1:-}" in
@@ -15,7 +15,7 @@ case "$machine" in
   x86_64|aarch64) ;;
   *) echo 'Droidloom packages require x86_64 or aarch64.' >&2; exit 1 ;;
 esac
-command -v pacman >/dev/null || { echo 'This installer requires Arch Linux / Omarchy and pacman.' >&2; exit 1; }
+command -v pacman >/dev/null || { echo 'This installer requires Arch Linux and pacman.' >&2; exit 1; }
 
 # Keep privileges in this small, reviewable installer. Pacman owns installation,
 # dependencies, updates and lifecycle hooks; no runtime setup is performed here.
