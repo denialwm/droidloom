@@ -167,10 +167,13 @@ pub fn check(packages: &Path, previous: Option<&Path>) -> Result<()> {
     let fixture = tempfile::Builder::new()
         .prefix("package-check-")
         .tempdir_in(&work)?;
+    // As in sysfs, the render node's device is a PCI device with a driver link.
     let drm = fixture.path().join("drm");
-    fs::create_dir_all(drm.join("renderD129/device"))?;
+    fs::create_dir_all(drm.join("renderD129"))?;
+    fs::create_dir_all(drm.join("devices/0000:0a:00.0"))?;
     fs::create_dir_all(drm.join("drivers/amdgpu"))?;
-    symlink("../../drivers/amdgpu", drm.join("renderD129/device/driver"))?;
+    symlink("../devices/0000:0a:00.0", drm.join("renderD129/device"))?;
+    symlink("../../drivers/amdgpu", drm.join("devices/0000:0a:00.0/driver"))?;
     let name = format!("droidloom-package-check-{}", std::process::id());
     eprintln!(
         "Testing actual pacman transactions in disposable rootless Arch. No host sudo, devices or graphical services are used."
