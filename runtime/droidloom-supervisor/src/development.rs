@@ -1928,6 +1928,18 @@ fn create_private_dev(spec: &CellSpec, root: &Path) -> Result<(), DevelopmentErr
     // the host node. A render node has no display-master/modesetting authority.
     let render_target = dev.join("dri").join(ANDROID_RENDER_NODE);
     let render = read_render_node_sysfs_metadata(&spec.render_node)?;
+    match spec.graphics_backend {
+        crate::GraphicsBackend::Forwarding => eprintln!(
+            "droidloom-supervisor: graphics: GPU forwarding (GPU choice {}); Android Vulkan and GLES run through droidloom-gpu-server, the cell's render node is {}",
+            spec.gpu,
+            spec.render_node.display()
+        ),
+        backend => eprintln!(
+            "droidloom-supervisor: graphics: native {backend:?} on {} (GPU choice {}); GPU forwarding is off",
+            spec.render_node.display(),
+            spec.gpu
+        ),
+    }
     make_device_node(
         &render_target,
         "c",
@@ -1987,9 +1999,10 @@ fn create_private_dev(spec: &CellSpec, root: &Path) -> Result<(), DevelopmentErr
         create_mount_target(&target)?;
         bind_mount(&text_socket, &target, false)?;
     }
-    // Audio is a separate user broker. Its systemd-owned socket survives broker
-    // restarts, preserving the inode bind-mounted into the Android cell.
-    for name in ["clipboard", "notifications", "audio"] {
+    // Audio and the GPU server are separate user brokers. Their systemd-owned
+    // sockets survive broker restarts, preserving the inodes bind-mounted into
+    // the Android cell.
+    for name in ["clipboard", "notifications", "audio", "gpu"] {
         let socket = spec.denial_socket.with_file_name(format!("{name}.sock"));
         if socket.exists() {
             if !fs::symlink_metadata(&socket)
@@ -2001,8 +2014,8 @@ fn create_private_dev(spec: &CellSpec, root: &Path) -> Result<(), DevelopmentErr
                     "{name} endpoint is not a socket"
                 )));
             }
-            let target = if name == "audio" {
-                root.join("dev/socket/droidloom/audio")
+            let target = if name == "audio" || name == "gpu" {
+                root.join("dev/socket/droidloom").join(name)
             } else {
                 framework_host.join(name)
             };
@@ -2222,6 +2235,7 @@ fn bind_product_properties(spec: &CellSpec, root: &Path) -> Result<(), Developme
     let properties = crate::tracing::container_properties(&original);
     let properties = crate::identity::product_properties(&properties, &crate::identity::host());
     let properties = crate::app_properties::product_properties(&properties);
+    let properties = spec.graphics_backend.product_properties(&properties);
     let source = spec.runtime_dir.join("android-product.prop");
     fs::write(&source, properties)
         .map_err(|source| io_error("write Android product properties", source))?;

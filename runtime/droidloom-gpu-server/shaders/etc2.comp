@@ -1,0 +1,186 @@
+#version 450
+/* Copyright 2026 Droidloom. SPDX-License-Identifier: GPL-3.0-or-later */
+
+// ETC2 and EAC blocks to texels, after the Khronos Data Format
+// Specification. VARIANT picks the format:
+//   0 ETC2 RGB8, 1 ETC2 RGB8A1, 2 ETC2 RGBA8 (EAC alpha, then RGB),
+//   3 EAC R11 unorm, 4 EAC R11 snorm, 5 EAC RG11 unorm, 6 EAC RG11 snorm.
+// Blocks come from a texel buffer laid out per mip level (layer, row,
+// block), the region from vkCmdDispatchBase; a workgroup is 2x2 blocks.
+
+#extension GL_EXT_samplerless_texture_functions : require
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+#if VARIANT <= 2
+layout(set = 0, binding = 0, rgba8ui) writeonly uniform uimage2DArray Output;
+#elif VARIANT <= 4
+layout(set = 0, binding = 0, r16ui) writeonly uniform uimage2DArray Output;
+#else
+layout(set = 0, binding = 0, rg16ui) writeonly uniform uimage2DArray Output;
+#endif
+layout(set = 0, binding = 1) uniform utextureBuffer Blocks;
+
+const int MODIFIERS[8][2] = int[8][2](
+    int[2](2, 8), int[2](5, 17), int[2](9, 29), int[2](13, 42),
+    int[2](18, 60), int[2](24, 80), int[2](33, 106), int[2](47, 183));
+
+const int DISTANCES[8] = int[8](3, 6, 11, 16, 23, 32, 41, 64);
+
+const int EAC[16][8] = int[16][8](
+    int[8](-3, -6, -9, -15, 2, 5, 8, 14), int[8](-3, -7, -10, -13, 2, 6, 9, 12),
+    int[8](-2, -5, -8, -13, 1, 4, 7, 12), int[8](-2, -4, -6, -13, 1, 3, 5, 12),
+    int[8](-3, -6, -8, -12, 2, 5, 7, 11), int[8](-3, -7, -9, -11, 2, 6, 8, 10),
+    int[8](-4, -7, -8, -11, 3, 6, 7, 10), int[8](-3, -5, -8, -11, 2, 4, 7, 10),
+    int[8](-2, -6, -8, -10, 1, 5, 7, 9), int[8](-2, -5, -8, -10, 1, 4, 7, 9),
+    int[8](-2, -4, -8, -10, 1, 3, 7, 9), int[8](-2, -5, -7, -10, 1, 4, 6, 9),
+    int[8](-3, -4, -7, -10, 2, 3, 6, 9), int[8](-1, -2, -3, -10, 0, 1, 2, 9),
+    int[8](-4, -6, -8, -9, 3, 5, 7, 8), int[8](-3, -5, -7, -9, 2, 4, 6, 8));
+
+// Blocks are big-endian 64-bit words.
+uint bswap(uint x)
+{
+    return (x >> 24) | ((x >> 8) & 0xff00u) | ((x << 8) & 0xff0000u) | (x << 24);
+}
+
+uint bits(uint word, int offset, int count)
+{
+    return bitfieldExtract(word, offset, count);
+}
+
+ivec3 clamp255(ivec3 c)
+{
+    return clamp(c, ivec3(0), ivec3(255));
+}
+
+// The colour part of an ETC2 block at texel t; alpha 0 marks a punch-through
+// transparent texel. RGB8A1 reads bit 33 as "opaque" and has no individual mode.
+ivec4 etc2_rgb(uint hi, uint lo, ivec2 t, bool punch)
+{
+    int i = t.x * 4 + t.y;
+    int index = int(bits(lo, 16 + i, 1) << 1 | bits(lo, i, 1));
+    bool bit33 = bits(hi, 1, 1) != 0u;
+    bool opaque = !punch || bit33;
+    bool flip = bits(hi, 0, 1) != 0u;
+    bool second = flip ? t.y >= 2 : t.x >= 2;
+
+    if (!punch && !bit33) {
+        // Individual: two 4-bit colours.
+        ivec3 c = second ? ivec3(bits(hi, 24, 4), bits(hi, 16, 4), bits(hi, 8, 4))
+                         : ivec3(bits(hi, 28, 4), bits(hi, 20, 4), bits(hi, 12, 4));
+        int table = int(second ? bits(hi, 2, 3) : bits(hi, 5, 3));
+        int m = MODIFIERS[table][index & 1];
+        return ivec4(clamp255(c * 17 + ((index & 2) != 0 ? -m : m)), 255);
+    }
+
+    ivec3 base = ivec3(bits(hi, 27, 5), bits(hi, 19, 5), bits(hi, 11, 5));
+    ivec3 delta = ivec3(bitfieldExtract(int(hi), 24, 3), bitfieldExtract(int(hi), 16, 3), bitfieldExtract(int(hi), 8, 3));
+    ivec3 other = base + delta;
+
+    if (other.r < 0 || other.r > 31) {
+        // T mode.
+        ivec3 c1 = ivec3(bits(hi, 27, 2) << 2 | bits(hi, 24, 2), bits(hi, 20, 4), bits(hi, 16, 4)) * 17;
+        ivec3 c2 = ivec3(bits(hi, 12, 4), bits(hi, 8, 4), bits(hi, 4, 4)) * 17;
+        int d = DISTANCES[bits(hi, 2, 2) << 1 | bits(hi, 0, 1)];
+        if (!opaque && index == 2)
+            return ivec4(0);
+        ivec3 paint[4] = ivec3[4](c1, clamp255(c2 + d), c2, clamp255(c2 - d));
+        return ivec4(paint[index], 255);
+    }
+    if (other.g < 0 || other.g > 31) {
+        // H mode.
+        ivec3 c1 = ivec3(bits(hi, 27, 4), bits(hi, 24, 3) << 1 | bits(hi, 20, 1), bits(hi, 19, 1) << 3 | bits(hi, 15, 3)) * 17;
+        ivec3 c2 = ivec3(bits(hi, 11, 4), bits(hi, 7, 4), bits(hi, 3, 4)) * 17;
+        int v1 = c1.r << 16 | c1.g << 8 | c1.b;
+        int v2 = c2.r << 16 | c2.g << 8 | c2.b;
+        int d = DISTANCES[bits(hi, 2, 1) << 2 | bits(hi, 0, 1) << 1 | uint(v1 >= v2)];
+        if (!opaque && index == 2)
+            return ivec4(0);
+        ivec3 paint[4] = ivec3[4](clamp255(c1 + d), clamp255(c1 - d), clamp255(c2 + d), clamp255(c2 - d));
+        return ivec4(paint[index], 255);
+    }
+    if (other.b < 0 || other.b > 31) {
+        // Planar: three colours, always opaque.
+        ivec3 o = ivec3(bits(hi, 25, 6), bits(hi, 24, 1) << 6 | bits(hi, 17, 6), bits(hi, 16, 1) << 5 | bits(hi, 11, 2) << 3 | bits(hi, 7, 3));
+        ivec3 h = ivec3(bits(hi, 2, 5) << 1 | bits(hi, 0, 1), bits(lo, 25, 7), bits(lo, 19, 6));
+        ivec3 v = ivec3(bits(lo, 13, 6), bits(lo, 6, 7), bits(lo, 0, 6));
+        // 6-bit red and blue, 7-bit green, widened to 8 bits.
+        ivec3 up = ivec3(2, 1, 2);
+        ivec3 down = ivec3(4, 6, 4);
+        o = (o << up) | (o >> down);
+        h = (h << up) | (h >> down);
+        v = (v << up) | (v >> down);
+        return ivec4(clamp255((t.x * (h - o) + t.y * (v - o) + 4 * o + 2) >> 2), 255);
+    }
+
+    // Differential: a 5-bit colour and a 3-bit offset to the second.
+    ivec3 c = second ? other : base;
+    c = (c << 3) | (c >> 2);
+    int table = int(second ? bits(hi, 2, 3) : bits(hi, 5, 3));
+    int m = MODIFIERS[table][index & 1];
+    if (!opaque) {
+        if (index == 2)
+            return ivec4(0);
+        if (index == 0)
+            m = 0;
+    }
+    return ivec4(clamp255(c + ((index & 2) != 0 ? -m : m)), 255);
+}
+
+// One EAC block: base, multiplier, table and 3-bit indices at texel t.
+ivec3 eac_fields(uint hi, uint lo, ivec2 t, out int modifier)
+{
+    int at = 45 - 3 * (t.x * 4 + t.y);
+    uint index = at >= 32 ? hi >> (at - 32) : lo >> at | (at > 29 ? hi << (32 - at) : 0u);
+    int table = int(bits(hi, 16, 4));
+    modifier = EAC[table][index & 7u];
+    return ivec3(bits(hi, 24, 8), bits(hi, 20, 4), table);
+}
+
+int eac_alpha(uint hi, uint lo, ivec2 t)
+{
+    int m;
+    ivec3 f = eac_fields(hi, lo, t, m);
+    return clamp(f.x + m * f.y, 0, 255);
+}
+
+// 11-bit EAC as 16-bit unorm or snorm bits.
+uint eac11(uint hi, uint lo, ivec2 t, bool signed_)
+{
+    int m;
+    ivec3 f = eac_fields(hi, lo, t, m);
+    int step = f.y == 0 ? m : m * f.y * 8;
+    if (!signed_) {
+        int v = clamp(f.x * 8 + 4 + step, 0, 2047);
+        return uint(v << 5 | v >> 6);
+    }
+    int b = max(bitfieldExtract(f.x, 0, 8), -127);
+    int v = clamp(b * 8 + step, -1023, 1023);
+    int magnitude = abs(v) << 5 | abs(v) >> 5;
+    return uint(v < 0 ? -magnitude : magnitude) & 0xffffu;
+}
+
+void main()
+{
+    ivec2 size = imageSize(Output).xy;
+    ivec2 texel = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(texel, size)))
+        return;
+    ivec2 blocks = (size + 3) / 4;
+    ivec2 block = texel / 4;
+    uvec4 words = texelFetch(Blocks, (int(gl_WorkGroupID.z) * blocks.y + block.y) * blocks.x + block.x);
+    uvec4 w = uvec4(bswap(words.x), bswap(words.y), bswap(words.z), bswap(words.w));
+    ivec2 t = texel & 3;
+    ivec3 at = ivec3(texel, gl_WorkGroupID.z);
+#if VARIANT == 0
+    imageStore(Output, at, uvec4(etc2_rgb(w.x, w.y, t, false)));
+#elif VARIANT == 1
+    imageStore(Output, at, uvec4(etc2_rgb(w.x, w.y, t, true)));
+#elif VARIANT == 2
+    imageStore(Output, at, uvec4(etc2_rgb(w.z, w.w, t, false).rgb, eac_alpha(w.x, w.y, t)));
+#elif VARIANT == 3 || VARIANT == 4
+    imageStore(Output, at, uvec4(eac11(w.x, w.y, t, VARIANT == 4), 0, 0, 0));
+#else
+    imageStore(Output, at, uvec4(eac11(w.x, w.y, t, VARIANT == 6), eac11(w.z, w.w, t, VARIANT == 6), 0, 0));
+#endif
+}

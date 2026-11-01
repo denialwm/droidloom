@@ -13,7 +13,11 @@ public final class GraphicsCapabilitiesTest {
                 }
             }
         }
-        for (int[] invalid : new int[][] {null, {}, {0x404000}, {0x404000, 1}, {0, 0, 0},
+        int[] noLevel = DroidloomGraphicsCapabilities.detectVulkan(() -> new int[] {0, -1, 1});
+        if (noLevel == null || DroidloomGraphicsCapabilities.hasHardwareLevel(noLevel)) {
+            throw new AssertionError("HWUI without a hardware level lost or given features");
+        }
+        for (int[] invalid : new int[][] {null, {}, {0x404000}, {0x404000, 1}, {0, 0, 0}, {0, -1, 0},
                 {0x404000, -1, 0}, {0x404000, 2, 0}, {0x20404000, 1, 0}, {0x404000, 1, -1},
                 {0x404000, 1, 2}}) {
             if (DroidloomGraphicsCapabilities.detectVulkan(() -> invalid) != null) {
@@ -34,10 +38,12 @@ public final class GraphicsCapabilitiesTest {
         if (!android.os.SystemProperties.get("ro.hwui.use_vulkan").equals("false")) {
             throw new AssertionError("Product HWUI choice overridden");
         }
-        android.os.SystemProperties.set("ro.hwui.use_vulkan", "");
-        DroidloomGraphicsCapabilities.selectHwuiRenderer(new int[] {0x404000, 1, 1});
-        if (!android.os.SystemProperties.get("ro.hwui.use_vulkan").equals("true")) {
-            throw new AssertionError("HWUI Vulkan not selected");
+        for (int[] selected : new int[][] {{0x404000, 1, 1}, {0, -1, 1}}) {
+            android.os.SystemProperties.set("ro.hwui.use_vulkan", "");
+            DroidloomGraphicsCapabilities.selectHwuiRenderer(selected);
+            if (!android.os.SystemProperties.get("ro.hwui.use_vulkan").equals("true")) {
+                throw new AssertionError("HWUI Vulkan not selected");
+            }
         }
         System.out.println("PASS: Java Vulkan feature boundary, HWUI default and failed probe handling");
     }

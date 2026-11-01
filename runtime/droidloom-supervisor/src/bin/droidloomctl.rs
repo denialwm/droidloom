@@ -142,6 +142,12 @@ enum Command {
         #[arg(long, default_value = DEFAULT_CELL_SPEC)]
         spec: PathBuf,
     },
+    /// List the host's GPUs, or choose the one Android renders on. An NVIDIA
+    /// GPU renders through GPU forwarding, AMD and Intel natively.
+    Gpu {
+        /// auto (NVIDIA when present), amd, intel, nvidia or a PCI address.
+        choice: Option<droidloom_supervisor::host_gpu::GpuChoice>,
+    },
     /// Persist how size-less initial Wayland configures are resolved.
     WindowMode {
         /// Mobile work-area or fixed windowed policy.
@@ -175,6 +181,9 @@ fn main() {
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
+    if let Command::Gpu { choice } = &cli.command {
+        return gpu(choice.as_ref());
+    }
     if !cli.cell && cli.socket == PathBuf::from(DEFAULT_CONTROL_SOCKET) {
         let operation = match &cli.command {
             Command::Start {
@@ -227,6 +236,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         let control_request = match cli.command {
             Command::Install { .. } => unreachable!("handled with its APK file descriptor"),
+            Command::Gpu { .. } => unreachable!("handled by package setup"),
             Command::Update { clean, build_only } => {
                 if PathBuf::from("/usr/share/droidloom/package.json").is_file() {
                     return Err("Droidloom is managed by pacman. Install the new package pair with sudo pacman -U, or build it with cargo run --locked -j 1 -p droidloom-package -- build. Sudo is needed only to replace package-owned system files and update pacman's database.".into());
@@ -381,6 +391,22 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         Err(response.message.into())
     }
+}
+
+/// GPU choice is package setup's: it rewrites the root-owned configuration.
+fn gpu(choice: Option<&droidloom_supervisor::host_gpu::GpuChoice>) -> Result<(), Box<dyn std::error::Error>> {
+    if !PathBuf::from("/usr/share/droidloom/package.json").is_file() {
+        return Err("choosing the GPU needs the pacman package; a source installation reads \"gpu\" from /etc/droidloom/cell.json at droidloomctl update".into());
+    }
+    let mut command = droidloom_cpu_placement::command("/usr/lib/droidloom/droidloom-package-helper");
+    command.arg("gpu");
+    if let Some(choice) = choice {
+        command.arg(choice.to_string());
+    }
+    if !command.status()?.success() {
+        return Err("the GPU choice was not changed".into());
+    }
+    Ok(())
 }
 
 fn session_lifecycle(

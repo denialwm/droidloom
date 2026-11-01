@@ -163,7 +163,6 @@ VulkanCapabilities detectVulkan(PFN_vkGetInstanceProcAddr getProc) {
         VkPhysicalDeviceFeatures f{};
         features(devices[i], &f);
         const int32_t level = hardwareLevel(f);
-        if (level < 0) continue;
         uint32_t version = std::min(loaderVersion, p.apiVersion);
         // Android's version feature also promises AHB, YCbCr and SYNC_FD
         // interop at 1.1+. An API version alone does not establish that.
@@ -171,8 +170,10 @@ VulkanCapabilities detectVulkan(PFN_vkGetInstanceProcAddr getProc) {
                 !androidInterop(getProc, handle, devices[i], extensions))) {
             version = VK_MAKE_API_VERSION(0, 1, 0, 3);
         }
-        // HWUI always takes the first physical device.
+        // HWUI always takes the first physical device. It needs no texture
+        // compression, so a device without a hardware level still runs it.
         if (i == 0) result.hwui = version >= VK_API_VERSION_1_1 && graphics->queueCount >= 2;
+        if (level < 0) continue;
         // Version must come from a device that supports the advertised level.
         if (level > result.level || (level == result.level && version > result.version)) {
             result.version = version;

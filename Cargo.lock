@@ -59,6 +59,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "ash"
+version = "0.38.0+1.3.281"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0bb44936d800fea8f016d7f2311c6a4f97aebd5dc86f09906139ec848cf3a46f"
+dependencies = [
+ "libloading",
+]
+
+[[package]]
 name = "async-broadcast"
 version = "0.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -615,6 +624,39 @@ dependencies = [
 ]
 
 [[package]]
+name = "droidloom-gpu-gen"
+version = "0.1.0"
+dependencies = [
+ "roxmltree",
+]
+
+[[package]]
+name = "droidloom-gpu-protocol"
+version = "0.1.0"
+dependencies = [
+ "libc",
+]
+
+[[package]]
+name = "droidloom-gpu-server"
+version = "0.1.0"
+dependencies = [
+ "droidloom-gpu-protocol",
+ "libc",
+]
+
+[[package]]
+name = "droidloom-gpu-triangle"
+version = "0.1.0"
+dependencies = [
+ "ash",
+ "droidloom-syncobj",
+ "libc",
+ "wayland-client",
+ "wayland-protocols",
+]
+
+[[package]]
 name = "droidloom-image"
 version = "0.1.0"
 dependencies = [
@@ -778,6 +820,15 @@ dependencies = [
  "serde_json",
  "sha2",
  "tempfile",
+]
+
+[[package]]
+name = "droidloom-vulkan"
+version = "0.1.0"
+dependencies = [
+ "droidloom-gpu-protocol",
+ "droidloom-minigbm",
+ "libc",
 ]
 
 [[package]]
@@ -1368,6 +1419,15 @@ name = "r-efi"
 version = "6.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
+
+[[package]]
+name = "roxmltree"
+version = "0.21.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f1964b10c76125c36f8afe190065a4bf9a87bf324842c05701330bba9f1cacbb"
+dependencies = [
+ "memchr",
+]
 
 [[package]]
 name = "rustix"

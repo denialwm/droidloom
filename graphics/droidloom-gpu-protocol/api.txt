@@ -1,0 +1,319 @@
+# Vulkan forwarded to the host GPU. droidloom-gpu-gen reads this list.
+#
+#   command NAME [sync] [client] [server] [local]
+#   struct NAME
+#
+# `sync` waits for the host even when nothing comes back, so real errors
+# reach the application. `client` and `server` mean that side is written by
+# hand in its manual.rs; the record frame is still generated. Opcodes follow
+# this order. `local` commands never reach the host: the client answers them
+# alone (manual.rs) and they get no opcode.
+#
+# Structures reached from commands are included, and so is every structure
+# that may extend an included one, from Vulkan 1.0 to 1.3 and from each
+# advertised device extension: chains travel whole. `struct` adds one that
+# nothing reaches, such as a hidden extension's.
+
+# Instance and loader
+command vkCreateInstance sync client server
+command vkDestroyInstance client
+command vkEnumerateInstanceExtensionProperties client
+command vkEnumerateInstanceVersion client
+command vkGetInstanceProcAddr client
+command vkGetDeviceProcAddr client
+command vkEnumeratePhysicalDevices client server
+
+# Physical device queries
+command vkGetPhysicalDeviceProperties server
+command vkGetPhysicalDeviceProperties2 server
+command vkGetPhysicalDeviceFeatures server
+command vkGetPhysicalDeviceFeatures2 server
+command vkGetPhysicalDeviceQueueFamilyProperties server
+command vkGetPhysicalDeviceMemoryProperties server
+command vkGetPhysicalDeviceMemoryProperties2 server
+# ETC2 and ASTC are decoded on the host (compressed.rs): it answers their
+# format queries and owns their images, views and copies, and keeps the
+# compute state each command buffer bound for after a decode.
+command vkGetPhysicalDeviceFormatProperties server
+command vkGetPhysicalDeviceFormatProperties2 server
+command vkGetPhysicalDeviceImageFormatProperties server
+command vkGetPhysicalDeviceImageFormatProperties2 client server
+command vkGetPhysicalDeviceSparseImageFormatProperties
+command vkEnumerateDeviceExtensionProperties server
+command vkEnumerateDeviceLayerProperties local
+command vkEnumerateInstanceLayerProperties local
+command vkEnumeratePhysicalDeviceGroups local
+command vkGetPhysicalDeviceQueueFamilyProperties2 server
+command vkGetPhysicalDeviceSparseImageFormatProperties2
+command vkGetPhysicalDeviceExternalBufferProperties
+command vkGetPhysicalDeviceExternalFenceProperties local
+command vkGetPhysicalDeviceExternalSemaphoreProperties
+command vkGetPhysicalDeviceToolProperties
+struct VkPhysicalDeviceDrmPropertiesEXT
+struct VkPhysicalDeviceVulkan11Features
+struct VkPhysicalDeviceVulkan12Features
+struct VkPhysicalDeviceVulkan13Features
+
+# Device and queues
+command vkCreateDevice sync client server
+command vkDestroyDevice server
+command vkGetDeviceQueue client server
+command vkGetDeviceQueue2 local
+# Private data never leaves the client.
+command vkCreatePrivateDataSlot local
+command vkDestroyPrivateDataSlot local
+command vkSetPrivateData local
+command vkGetPrivateData local
+command vkDeviceWaitIdle sync
+command vkQueueWaitIdle sync
+command vkQueueSubmit local
+command vkQueueSubmit2 client server
+# The host hands a window buffer over: it owns the release semaphore and
+# brings the buffer up to date first (shadow.rs).
+command vkQueueSignalReleaseImageANDROID server
+
+# Synchronization
+command vkCreateFence client server
+command vkDestroyFence
+command vkWaitForFences client
+command vkResetFences client
+command vkGetFenceStatus client
+# Fences are points on kernel timelines, so they travel as sync files
+# without the host. The host keeps vkGetFenceFdKHR for its own exports.
+command vkGetFenceFdKHR client
+command vkImportFenceFdKHR local
+# A timeline semaphore is mirrored on a kernel timeline the client makes:
+# the host adds each submitted signal to it, so waits and counter reads stay
+# in the client.
+command vkCreateSemaphore client server
+command vkDestroySemaphore client server
+command vkSignalSemaphore client
+command vkWaitSemaphores local
+command vkGetSemaphoreCounterValue local
+command vkGetSemaphoreFdKHR
+command vkImportSemaphoreFdKHR
+struct VkExportFenceCreateInfo
+struct VkExportSemaphoreCreateInfo
+struct VkTimelineSemaphoreSubmitInfo
+
+# Memory and images
+command vkAllocateMemory sync client server
+command vkFreeMemory client server
+command vkMapMemory local
+command vkUnmapMemory local
+command vkFlushMappedMemoryRanges
+command vkInvalidateMappedMemoryRanges
+command vkGetMemoryFdKHR
+command vkGetMemoryFdPropertiesKHR
+command vkCreateImage client server
+command vkDestroyImage client server
+# AHardwareBuffer images the application draws into are optimal images
+# beside their linear buffer (shadow.rs): memory goes to the buffer, and
+# barriers to and from the foreign queue copy between the two.
+command vkGetImageMemoryRequirements server
+command vkBindImageMemory server
+command vkBindImageMemory2 client server
+command vkGetImageMemoryRequirements2 server
+command vkGetDeviceImageMemoryRequirements server
+command vkGetImageSparseMemoryRequirements
+command vkGetImageSparseMemoryRequirements2
+command vkGetDeviceImageSparseMemoryRequirements
+command vkGetDeviceMemoryCommitment
+command vkCreateSamplerYcbcrConversion client
+command vkDestroySamplerYcbcrConversion
+command vkGetImageSubresourceLayout
+command vkCreateSampler
+command vkDestroySampler
+command vkCreateImageView client server
+command vkDestroyImageView
+struct VkExternalMemoryImageCreateInfo
+struct VkImageDrmFormatModifierListCreateInfoEXT
+struct VkImageDrmFormatModifierExplicitCreateInfoEXT
+struct VkPhysicalDeviceImageDrmFormatModifierInfoEXT
+command vkGetImageDrmFormatModifierPropertiesEXT
+struct VkExportMemoryAllocateInfo
+struct VkImportMemoryFdInfoKHR
+struct VkMemoryDedicatedAllocateInfo
+struct VkImportMemoryHostPointerInfoEXT
+struct VkMemoryHostPointerPropertiesEXT
+
+# Buffers
+command vkCreateBuffer
+command vkDestroyBuffer
+command vkGetBufferMemoryRequirements
+command vkBindBufferMemory
+command vkBindBufferMemory2
+command vkGetBufferMemoryRequirements2
+command vkGetDeviceBufferMemoryRequirements
+command vkGetBufferDeviceAddress
+command vkGetBufferOpaqueCaptureAddress
+command vkGetDeviceMemoryOpaqueCaptureAddress
+command vkCreateBufferView
+command vkDestroyBufferView
+
+# Pipelines
+command vkCreateShaderModule
+command vkDestroyShaderModule
+command vkCreatePipelineLayout
+command vkDestroyPipelineLayout
+command vkCreateGraphicsPipelines server
+command vkCreateComputePipelines server
+command vkDestroyPipeline
+command vkCreatePipelineCache
+command vkDestroyPipelineCache
+command vkGetPipelineCacheData
+command vkMergePipelineCaches
+command vkCreateRenderPass
+command vkDestroyRenderPass
+command vkCreateRenderPass2
+command vkGetRenderAreaGranularity
+command vkCreateFramebuffer
+command vkDestroyFramebuffer
+
+# Descriptors
+command vkCreateDescriptorSetLayout
+command vkDestroyDescriptorSetLayout
+command vkCreateDescriptorPool
+command vkDestroyDescriptorPool
+command vkResetDescriptorPool
+command vkAllocateDescriptorSets
+command vkFreeDescriptorSets
+command vkUpdateDescriptorSets
+command vkGetDescriptorSetLayoutSupport
+struct VkWriteDescriptorSetInlineUniformBlock
+# Templates expand into vkUpdateDescriptorSets in the client (manual.rs).
+command vkCreateDescriptorUpdateTemplate local
+command vkDestroyDescriptorUpdateTemplate local
+command vkUpdateDescriptorSetWithTemplate local
+struct VkPipelineRenderingCreateInfo
+
+# Queries and events
+command vkCreateQueryPool
+command vkDestroyQueryPool
+command vkGetQueryPoolResults
+command vkResetQueryPool
+command vkCreateEvent
+command vkDestroyEvent
+command vkGetEventStatus sync
+command vkSetEvent
+command vkResetEvent
+
+# Command buffers
+command vkCreateCommandPool server
+command vkDestroyCommandPool server
+command vkResetCommandPool
+command vkTrimCommandPool
+command vkResetCommandBuffer
+command vkAllocateCommandBuffers client server
+command vkFreeCommandBuffers client server
+command vkBeginCommandBuffer client server
+command vkEndCommandBuffer client server
+command vkCmdPipelineBarrier2 server
+command vkCmdBeginRendering
+command vkCmdEndRendering
+command vkCmdBindPipeline server
+command vkCmdSetViewport
+command vkCmdSetScissor
+command vkCmdPushConstants
+command vkCmdDraw
+command vkCmdCopyBuffer
+command vkCmdFillBuffer
+command vkCmdPipelineBarrier server
+command vkCmdBeginRenderPass
+command vkCmdEndRenderPass
+command vkCmdBindDescriptorSets server
+command vkCmdBindVertexBuffers
+command vkCmdBindIndexBuffer
+command vkCmdDrawIndexed
+command vkCmdCopyBufferToImage server
+command vkCmdCopyImage server
+command vkCmdClearColorImage
+command vkCmdExecuteCommands
+command vkCmdNextSubpass
+command vkCmdBeginRenderPass2
+command vkCmdNextSubpass2
+command vkCmdEndRenderPass2
+command vkCmdSetLineWidth
+command vkCmdSetDepthBias
+command vkCmdSetBlendConstants
+command vkCmdSetDepthBounds
+command vkCmdSetStencilCompareMask
+command vkCmdSetStencilWriteMask
+command vkCmdSetStencilReference
+command vkCmdSetCullMode
+command vkCmdSetFrontFace
+command vkCmdSetPrimitiveTopology
+command vkCmdSetViewportWithCount
+command vkCmdSetScissorWithCount
+command vkCmdBindVertexBuffers2
+command vkCmdSetDepthTestEnable
+command vkCmdSetDepthWriteEnable
+command vkCmdSetDepthCompareOp
+command vkCmdSetDepthBoundsTestEnable
+command vkCmdSetStencilTestEnable
+command vkCmdSetStencilOp
+command vkCmdSetRasterizerDiscardEnable
+command vkCmdSetDepthBiasEnable
+command vkCmdSetPrimitiveRestartEnable
+command vkCmdSetDeviceMask
+command vkCmdDrawIndirect
+command vkCmdDrawIndexedIndirect
+command vkCmdDrawIndirectCount
+command vkCmdDrawIndexedIndirectCount
+command vkCmdDispatch
+command vkCmdDispatchIndirect
+command vkCmdDispatchBase
+command vkCmdCopyImageToBuffer server
+command vkCmdUpdateBuffer
+command vkCmdBlitImage
+command vkCmdClearDepthStencilImage
+command vkCmdClearAttachments
+command vkCmdResolveImage
+command vkCmdCopyBuffer2
+command vkCmdCopyImage2 server
+command vkCmdCopyBufferToImage2 server
+command vkCmdCopyImageToBuffer2 server
+command vkCmdBlitImage2
+command vkCmdResolveImage2
+command vkCmdSetEvent
+command vkCmdResetEvent
+command vkCmdWaitEvents
+command vkCmdSetEvent2
+command vkCmdResetEvent2
+command vkCmdWaitEvents2
+command vkCmdBeginQuery
+command vkCmdEndQuery
+command vkCmdResetQueryPool
+command vkCmdWriteTimestamp
+command vkCmdWriteTimestamp2
+command vkCmdCopyQueryPoolResults
+
+# Transform feedback, which ANGLE needs for geometry and tessellation shaders.
+command vkCmdBindTransformFeedbackBuffersEXT
+command vkCmdBeginTransformFeedbackEXT
+command vkCmdEndTransformFeedbackEXT
+command vkCmdBeginQueryIndexedEXT
+command vkCmdEndQueryIndexedEXT
+command vkCmdDrawIndirectByteCountEXT
+
+# Dynamic state, lines and depth bias beyond 1.3.
+command vkCmdSetPatchControlPointsEXT
+command vkCmdSetLogicOpEXT
+command vkCmdSetColorWriteEnableEXT
+command vkCmdSetVertexInputEXT
+command vkCmdSetLineStipple
+command vkCmdSetDepthBias2EXT
+
+# Headless WSI, answered in the client (wsi.rs): swapchain images are plain
+# forwarded images, acquire and present are empty submits.
+command vkCreateHeadlessSurfaceEXT local
+command vkDestroySurfaceKHR local
+command vkGetPhysicalDeviceSurfaceSupportKHR local
+command vkGetPhysicalDeviceSurfaceCapabilitiesKHR local
+command vkGetPhysicalDeviceSurfaceFormatsKHR local
+command vkGetPhysicalDeviceSurfacePresentModesKHR local
+command vkCreateSwapchainKHR local
+command vkDestroySwapchainKHR local
+command vkGetSwapchainImagesKHR local
+command vkAcquireNextImageKHR local
+command vkQueuePresentKHR local

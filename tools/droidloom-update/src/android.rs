@@ -265,6 +265,10 @@ const PATCHES: &[(&str, &str)] = &[
     ),
     (
         "frameworks/native",
+        "android/surfaceflinger/0028-droidloom-gray-task-backing.patch",
+    ),
+    (
+        "frameworks/native",
         "android/inputflinger/0001-application-token-targeted-injection.patch",
     ),
     (
@@ -792,6 +796,7 @@ pub fn build_targets(
         "runtime/droidloom-audio-protocol",
         "android/audio",
         "android/framework",
+        "android/gpu",
         "android/power",
         "android/lmkd-compat",
         "android/runtime",

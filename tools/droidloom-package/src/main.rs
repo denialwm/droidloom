@@ -281,9 +281,9 @@ fn copy_inputs(repo: &Path, snapshot: &Path) -> Result<()> {
     let mut command = Command::new("rsync");
     command.args(["-a", "--delete"]);
     for exclusion in [
-        ".work/",
+        ".work",
         "/work/",
-        ".git/",
+        ".git",
         "target/",
         "dist/",
         "apks/",

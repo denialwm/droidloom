@@ -280,9 +280,11 @@ fn android_vendor_build_uses_the_safe_rust_composer_core() {
     assert!(android_bp.contains("name: \"android.hardware.power-service.droidloom\""));
     assert!(android_bp.contains("crate_root: \"android/power/droidloom-power/src/lib.rs\""));
     assert!(android_bp.contains("\"android.hardware.power-V7-rust\""));
+    assert!(android_bp.contains("name: \"vulkan.droidloom\""));
+    assert!(android_bp.contains("crate_root: \"android/gpu/droidloom-vulkan/src/lib.rs\""));
     // Five shared transport/codec crates also build platform variants for WMS
     // and its native input receiver.
-    assert_eq!(android_bp.matches("vendor: true").count(), 14);
+    assert_eq!(android_bp.matches("vendor: true").count(), 17);
 
     let product = fs::read_to_string(
         repository_root().join("android/device/droidloom_arm64/droidloom_arm64.mk"),
@@ -441,6 +443,8 @@ fn x86_64_product_uses_native_amd_and_intel_dmabufs_and_drivers() {
     assert!(product.contains("android.hardware.graphics.allocator-service.minigbm"));
     assert!(product.contains("vulkan.radeon"));
     assert!(product.contains("ro.hardware.vulkan=radeon"));
+    // The cell's `forwarding` graphics pairing selects it over radeon.
+    assert!(product.contains("vulkan.droidloom"));
 }
 
 #[test]

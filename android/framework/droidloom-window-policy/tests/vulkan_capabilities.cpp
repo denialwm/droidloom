@@ -178,8 +178,13 @@ int main() {
     assert(probe().version == 0);
     reset(); devices[0].graphics = false;
     assert(probe().version == 0);
+    // Without ETC2 there is no hardware level, but HWUI still runs.
     reset(); devices[0].features.textureCompressionETC2 = VK_FALSE;
-    assert(probe().version == 0);
+    result = probe();
+    assert(result.version == 0 && result.level == -1 && result.hwui);
+    reset({gpu(VK_API_VERSION_1_1, 0), gpu()}); devices[0].features.textureCompressionETC2 = VK_FALSE;
+    result = probe();
+    assert(result.version == VK_API_VERSION_1_4 && result.level == 1 && result.hwui);
 
     // Choose a coherent level/version pair, independent of enumeration order.
     for (bool reversed : {false, true}) {

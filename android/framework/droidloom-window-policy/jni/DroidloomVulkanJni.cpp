@@ -15,7 +15,7 @@ Java_com_android_server_DroidloomGraphicsCapabilities_probeVulkan(JNIEnv* env, j
             dlsym(loader, "vkGetInstanceProcAddr"));
     const auto capabilities = droidloom::detectVulkan(getProc);
     dlclose(loader);
-    if (!capabilities.version) return nullptr;
+    if (!capabilities.version && !capabilities.hwui) return nullptr;
     const jint values[] = {static_cast<jint>(capabilities.version), capabilities.level,
             capabilities.hwui ? 1 : 0};
     jintArray result = env->NewIntArray(3);

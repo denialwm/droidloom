@@ -9,6 +9,7 @@
 namespace droidloom {
 
 struct VulkanCapabilities {
+    // The best device with a hardware level; 0 and -1 when none has one.
     uint32_t version = 0;
     int32_t level = -1;
     // HWUI's Vulkan pipeline can run: the first physical device has Vulkan

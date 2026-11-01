@@ -59,7 +59,8 @@ PRODUCT_PACKAGES += \
     libEGL_mesa \
     libGLESv1_CM_mesa \
     libGLESv2_mesa \
-    vulkan.radeon
+    vulkan.radeon \
+    vulkan.droidloom
 
 PRODUCT_COPY_FILES += \
     vendor/droidloom/android/device/droidloom_arm64/android.hardware.droidloom_input.xml:$(TARGET_COPY_OUT_VENDOR)/etc/permissions/android.hardware.droidloom_input.xml \

@@ -15,6 +15,7 @@ pub mod development;
 mod development_network;
 mod filesystem_guard;
 pub mod gapps;
+pub mod host_gpu;
 pub mod host_storage;
 mod identity;
 pub mod linux_plan;
@@ -130,6 +131,9 @@ pub enum GraphicsBackend {
     DrmDmaHeap,
     /// Turnip KGSL rendering, Zink GLES and linear system DMA-heap images.
     KgslDmaHeap,
+    /// Host Vulkan through droidloom-gpu-server, for GPUs without an Android
+    /// driver (NVIDIA), ANGLE GLES and linear system DMA-heap images.
+    Forwarding,
 }
 
 /// System DMA heap that Codec2 allocates its linear media buffers from. Every
@@ -144,7 +148,37 @@ impl GraphicsBackend {
             Self::Drm => &[],
             Self::DrmDmaHeap => &["/dev/dma_heap/system"],
             Self::KgslDmaHeap => &["/dev/kgsl-3d0", "/dev/dma_heap/system"],
+            Self::Forwarding => &["/dev/dma_heap/system"],
         }
+    }
+
+    /// Android's driver choices for this pairing, over the image's own.
+    pub fn properties(self) -> &'static [(&'static str, &'static str)] {
+        match self {
+            Self::Drm | Self::DrmDmaHeap | Self::KgslDmaHeap => &[],
+            Self::Forwarding => &[("ro.hardware.vulkan", "droidloom"), ("ro.hardware.egl", "angle")],
+        }
+    }
+
+    /// `original` product properties with this pairing's driver choices.
+    /// Product properties load last, so they win over the vendor image's.
+    pub(crate) fn product_properties(self, original: &str) -> String {
+        let chosen = self.properties();
+        let mut output = String::with_capacity(original.len() + 64);
+        for line in original.lines() {
+            if line
+                .split_once('=')
+                .is_some_and(|(key, _)| chosen.iter().any(|(name, _)| *name == key.trim()))
+            {
+                continue;
+            }
+            output.push_str(line);
+            output.push('\n');
+        }
+        for (key, value) in chosen {
+            output.push_str(&format!("{key}={value}\n"));
+        }
+        output
     }
 }
 
@@ -192,6 +226,11 @@ pub struct CellSpec {
     pub data_dir: PathBuf,
     /// Ephemeral cell directory below `/run/droidloom/cells`.
     pub runtime_dir: PathBuf,
+    /// The GPU Android renders on: `auto`, a vendor or a PCI address
+    /// (`host_gpu`). Setup turns it into `render_node` and
+    /// `graphics_backend`.
+    #[serde(default, skip_serializing_if = "host_gpu::GpuChoice::is_auto")]
+    pub gpu: host_gpu::GpuChoice,
     /// The only DRM device exposed to Android.
     pub render_node: PathBuf,
     /// Host-validated graphics pairing. Omission uses native DRM.
@@ -720,6 +759,7 @@ mod tests {
             share_user_folders: false,
             data_dir: "/var/lib/droidloom/users/1000/data".into(),
             runtime_dir: "/run/droidloom/cells/u1000".into(),
+            gpu: Default::default(),
             render_node: "/dev/dri/renderD128".into(),
             graphics_backend: GraphicsBackend::default(),
             denial_socket: "/run/user/1000/denial/native-bridge.sock".into(),
@@ -747,8 +787,20 @@ mod tests {
             decoded.graphics_backend.auxiliary_devices(),
             &["/dev/kgsl-3d0", "/dev/dma_heap/system"]
         );
+        json["graphics_backend"] = serde_json::json!("forwarding");
+        let decoded: CellSpec = serde_json::from_value(json.clone()).unwrap();
+        assert_eq!(decoded.graphics_backend.auxiliary_devices(), &["/dev/dma_heap/system"]);
         json["graphics_backend"] = serde_json::json!("/dev/dri/card0");
         assert!(serde_json::from_value::<CellSpec>(json).is_err());
+    }
+
+    #[test]
+    fn forwarding_chooses_its_drivers_once() {
+        let input = "ro.product.name=droidloom\nro.hardware.egl=mesa\n";
+        assert_eq!(GraphicsBackend::Drm.product_properties(input), input);
+        let result = GraphicsBackend::Forwarding.product_properties(input);
+        assert_eq!(result, "ro.product.name=droidloom\nro.hardware.vulkan=droidloom\nro.hardware.egl=angle\n");
+        assert_eq!(GraphicsBackend::Forwarding.product_properties(&result), result);
     }
 
     #[test]

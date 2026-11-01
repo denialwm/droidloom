@@ -14,7 +14,8 @@ public final class DroidloomGraphicsCapabilities {
 
     /**
      * Returns {API version, hardware level, HWUI Vulkan 0 or 1}, or null when support cannot be
-     * established.
+     * established. Version and level are 0 and -1 when no device has a hardware level, as on
+     * GPUs without ETC2; HWUI may still run there.
      */
     public static int[] detectVulkan() {
         return detectVulkan(() -> {
@@ -27,9 +28,10 @@ public final class DroidloomGraphicsCapabilities {
         try {
             int[] capabilities = probe.get();
             if (capabilities == null || capabilities.length != 3
-                    || capabilities[0] < 0x00400000 || (capabilities[0] >>> 29) != 0
-                    || capabilities[1] < 0 || capabilities[1] > 1
-                    || capabilities[2] < 0 || capabilities[2] > 1) {
+                    || capabilities[2] < 0 || capabilities[2] > 1
+                    || !(capabilities[0] == 0 && capabilities[1] == -1 && capabilities[2] == 1
+                            || capabilities[0] >= 0x00400000 && (capabilities[0] >>> 29) == 0
+                                    && capabilities[1] >= 0 && capabilities[1] <= 1)) {
                 Slog.i(TAG, "No hardware Vulkan capabilities detected");
                 return null;
             }
@@ -40,6 +42,11 @@ public final class DroidloomGraphicsCapabilities {
             Slog.w(TAG, "Vulkan capability probe failed; leaving features absent", failure);
             return null;
         }
+    }
+
+    /** PackageManager's Vulkan features need a hardware level. */
+    public static boolean hasHardwareLevel(int[] capabilities) {
+        return capabilities != null && capabilities[1] >= 0;
     }
 
     /**

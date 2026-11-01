@@ -28,7 +28,7 @@ class BundleTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.root = pathlib.Path(self.tmp.name)
         self.put(bundle.COMPOSER, elf() + bundle.TASK_ABI + bundle.DIRECT_INPUT_ABI + bundle.NATIVE_INPUT_ABI)
-        for name in ['droidloomd', 'droidloomctl', 'droidloom-supervisor', 'droidloom-wayland', 'droidloom-applications', 'droidloom-audio']:
+        for name in ['droidloomd', 'droidloomctl', 'droidloom-supervisor', 'droidloom-wayland', 'droidloom-applications', 'droidloom-audio', 'droidloom-gpu-server']:
             self.put(pathlib.Path('usr/bin') / name, elf() + bundle.FRAMEWORK_ABI)
         self.put(pathlib.Path('usr/bin/droidloom-wayland'), elf() + bundle.DIRECT_INPUT_ABI + bundle.CHANNELS_ABI + bundle.NOTIFICATIONS_ABI)
         self.jar(bundle.RUNTIME / 'systemui/SystemUI.apk', 5)

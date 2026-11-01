@@ -10,10 +10,11 @@ follow [BUILDING.md](BUILDING.md), then return here.
 
 - An x86_64 machine running Arch Linux, or an aarch64 machine running Arch
   Linux ARM, with a Wayland desktop.
-- A GPU other than NVIDIA: Droidloom does not work with NVIDIA graphics yet.
-  On a dual-GPU laptop, setup selects the other GPU's render node. NVIDIA
-  support is planned and under development;
-  [supporting the project](https://denialwm.org/support.html) helps it move forward.
+- An AMD, Intel or NVIDIA GPU. AMD and Intel render natively. NVIDIA, on
+  x86_64, renders through [GPU forwarding](gpu-forwarding.md) and needs the
+  proprietary driver with its Vulkan driver (`nvidia-utils`) and the
+  `nvidia-drm` module. With several GPUs, setup picks NVIDIA when there is one;
+  `droidloomctl gpu` lists them and chooses another.
 - A working systemd user session and administrator access through sudo or polkit.
 - At least 20 GiB free for packages, installed files and Android app data.
   The package pair is about 975 MiB to download and 2.5 GiB installed, before apps.

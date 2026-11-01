@@ -19,7 +19,8 @@ build() {
 
 package_droidloom-runtime() {
   depends=("droidloom-image=$pkgver-$pkgrel" glibc gcc-libs mesa libdrm wayland
-    libxkbcommon libpipewire pipewire systemd polkit util-linux e2fsprogs iproute2 nftables iptables android-tools)
+    libxkbcommon libpipewire pipewire systemd polkit util-linux e2fsprogs iproute2 nftables iptables android-tools
+    vulkan-icd-loader)
   optdepends=('wireplumber: automatic host audio routing (or another PipeWire session manager)')
   "$DROIDLOOM_PACKAGE_TOOL" install-tree --source "$srcdir/payload/runtime" --destination "$pkgdir"
 }

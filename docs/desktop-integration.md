@@ -82,8 +82,7 @@ restart, PID reuse or incomplete setup invalidates the cache.
 
 ## Current limitations
 
-The pacman packages are built for x86_64 and aarch64. NVIDIA graphics are not
-supported yet; that support is planned and under development. Install standalone APKs with `droidloomctl install /path/to/application.apk`.
+The pacman packages are built for x86_64 and aarch64. Install standalone APKs with `droidloomctl install /path/to/application.apk`.
 
 For apps needing explicit activity selection, use
 `droidloomctl launch PACKAGE --component PACKAGE/ACTIVITY`.

@@ -31,10 +31,11 @@ No software renderer is included.
 Runtime patches under `android/aosp-patches/`:
 
 - `0010-minigbm-dma-heap-images.patch`: opt-in bounded linear image allocation,
-  import validation and matching allocation/capability-query checks. Planar
-  YVU420/YV12 uses a 128-byte luma pitch alignment so both half-width chroma
-  pitches satisfy Turnip's 64-byte linear import requirement. Android YV12's
-  exact chroma-stride rule and unpadded height remain intact.
+  import validation and matching allocation/capability-query checks. Every
+  pitch is a multiple of 128 bytes, NVIDIA's linear import requirement and
+  twice Turnip's. Planar YVU420/YV12 uses a 256-byte luma pitch alignment so
+  both half-width chroma pitches keep it. Android YV12's exact chroma-stride
+  rule and unpadded height remain intact.
 - `0011-mesa-zink-kgsl.patch`: when ordinary DRM matching fails on `msm_drm`,
   select a unique Turnip device without DRM identity only if external DMA-BUF
   memory and image modifier extensions are present. Other DRM drivers keep

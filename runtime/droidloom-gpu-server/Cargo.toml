@@ -1,0 +1,22 @@
+[package]
+name = "droidloom-gpu-server"
+description = "Host side of Droidloom GPU forwarding: runs Android's Vulkan on the host driver"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+droidloom-gpu-protocol = { path = "../../graphics/droidloom-gpu-protocol" }
+libc.workspace = true
+
+[lints.rust]
+unsafe_code = "allow"
+unsafe_op_in_unsafe_fn = "allow"
+missing_docs = "warn"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+missing_safety_doc = "allow"

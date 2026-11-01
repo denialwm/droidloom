@@ -1,0 +1,26 @@
+[package]
+name = "droidloom-vulkan"
+description = "Vulkan driver that forwards to the host GPU through droidloom-gpu-server"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+name = "droidloom_vulkan"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+droidloom-gpu-protocol = { path = "../../../graphics/droidloom-gpu-protocol" }
+droidloom-minigbm = { path = "../../../graphics/droidloom-minigbm" }
+libc.workspace = true
+
+[lints.rust]
+unsafe_code = "allow"
+missing_docs = "warn"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+missing_safety_doc = "allow"

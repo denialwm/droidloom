@@ -1,0 +1,9 @@
+[Unit]
+Description=Droidloom GPU forwarding endpoint
+PartOf=droidloom.service
+
+[Socket]
+ListenStream=%t/droidloom/gpu.sock
+SocketMode=0666
+DirectoryMode=0700
+RemoveOnStop=true

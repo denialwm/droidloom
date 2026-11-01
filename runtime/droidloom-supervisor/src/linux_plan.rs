@@ -920,6 +920,7 @@ mod tests {
             share_user_folders: false,
             data_dir: "/var/lib/droidloom/users/1000/data".into(),
             runtime_dir: "/run/droidloom/cells/u1000".into(),
+            gpu: Default::default(),
             render_node: "/dev/dri/renderD128".into(),
             graphics_backend: crate::GraphicsBackend::default(),
             denial_socket: "/run/user/1000/denial/native-bridge.sock".into(),

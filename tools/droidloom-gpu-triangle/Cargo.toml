@@ -1,0 +1,26 @@
+[package]
+name = "droidloom-gpu-triangle"
+description = "Spinning triangle that hands its own DMA-BUFs to the compositor, for GPU forwarding bring-up"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+ash = "0.38.0"
+droidloom-syncobj = { path = "../../graphics/droidloom-syncobj" }
+libc.workspace = true
+wayland-client.workspace = true
+wayland-protocols.workspace = true
+
+[lints.rust]
+unsafe_code = "allow"
+unsafe_op_in_unsafe_fn = "deny"
+missing_docs = "warn"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+must_use_candidate = "allow"

@@ -11,7 +11,7 @@
 +            removeFeature(PackageManager.FEATURE_VULKAN_HARDWARE_VERSION);
 +            removeFeature(PackageManager.FEATURE_VULKAN_HARDWARE_LEVEL);
 +            final int[] vulkan = DroidloomGraphicsCapabilities.detectVulkan();
-+            if (vulkan != null) {
++            if (DroidloomGraphicsCapabilities.hasHardwareLevel(vulkan)) {
 +                addFeature(PackageManager.FEATURE_VULKAN_HARDWARE_VERSION, vulkan[0]);
 +                addFeature(PackageManager.FEATURE_VULKAN_HARDWARE_LEVEL, vulkan[1]);
 +            }

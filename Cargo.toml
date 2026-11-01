@@ -24,6 +24,9 @@ members = [
     "graphics/droidloom-syncobj",
     "graphics/droidloom-surface-bridge",
     "graphics/droidloom-task-control",
+    "graphics/droidloom-gpu-protocol",
+    "android/gpu/droidloom-vulkan",
+    "runtime/droidloom-gpu-server",
     "graphics/droidloom-transport",
     "tools/droidloom-image",
     "tools/droidloom-gapps",
@@ -34,6 +37,8 @@ members = [
     "tools/droidloom-dmabuf-probe",
     "tools/droidloom-translation-bench",
     "tools/droidloom-frame-timing",
+    "tools/droidloom-gpu-triangle",
+    "tools/droidloom-gpu-gen",
 ]
 resolver = "3"
 

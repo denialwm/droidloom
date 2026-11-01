@@ -1,4 +1,5 @@
 use crate::util::*;
+use droidloom_supervisor::host_gpu::{GpuChoice, Graphics, HostGpu};
 use serde_json::{Value, json};
 use std::{
     fs,
@@ -10,6 +11,7 @@ pub const HOST_PACKAGES: &[&str] = &[
     "droidloom-wayland",
     "droidloom-applications",
     "droidloom-audio",
+    "droidloom-gpu-server",
     "droidloom-doctor",
     "droidloom-update",
     "droidloom-package-support",
@@ -21,6 +23,7 @@ pub const HOST_BINARIES: &[&str] = &[
     "droidloom-wayland",
     "droidloom-applications",
     "droidloom-audio",
+    "droidloom-gpu-server",
     "droidloom-doctor",
     "droidloom-update",
 ];
@@ -543,6 +546,8 @@ pub fn assemble_artifacts(
         "user/droidloom-recovery.service",
         "user/droidloom-audio.service",
         "user/droidloom-audio.socket",
+        "user/droidloom-gpu.service",
+        "user/droidloom-gpu.socket",
     ] {
         copy(
             &repo.join("packaging/systemd").join(name),
@@ -554,9 +559,7 @@ pub fn assemble_artifacts(
 
 fn configure_local(repo: &Path, payload: &Path, uid: u32) -> Result<()> {
     let mut spec = json(&repo.join("packaging/cell-spec-x86_64-u1000.json"))?;
-    let render = render_node()?;
     spec["host_uid"] = json!(uid);
-    spec["render_node"] = json!(render);
     spec["data_dir"] = json!(format!("/var/lib/droidloom/users/{uid}/data"));
     spec["runtime_dir"] = json!(format!("/run/droidloom/cells/u{uid}"));
     spec["denial_socket"] = json!(format!("/run/user/{uid}/droidloom/native-bridge.sock"));
@@ -565,16 +568,27 @@ fn configure_local(repo: &Path, payload: &Path, uid: u32) -> Result<()> {
         let existing = json(Path::new("/etc/droidloom/cell.json"))?;
         preserve_settings(&mut spec, &existing, uid)?;
     }
+    let choice: GpuChoice = match spec.get("gpu") {
+        Some(value) => serde_json::from_value(value.clone())?,
+        None => GpuChoice::Auto,
+    };
+    let graphics = Graphics::resolve(&choice, &HostGpu::list(Path::new("/sys/class/drm"))?)
+        .map_err(|error| format!("this x86_64 product needs an AMD, Intel or NVIDIA GPU: {error}"))?;
+    println!("droidloom-update: GPU choice {choice}: {graphics}.");
+    spec["render_node"] = json!(graphics.render_node);
+    spec["graphics_backend"] = json!(graphics.backend);
     let record = output(Command::new("getent").args(["passwd", &uid.to_string()]))?;
     configure_target(
         repo,
         payload,
         &spec,
         record.split(':').next().ok_or("user absent")?,
+        graphics.forwarded(),
     )
 }
 
-fn configure_target(repo: &Path, payload: &Path, spec: &Value, user: &str) -> Result<()> {
+/// `forwarded` names the GPU `droidloom-gpu-server` renders on.
+fn configure_target(repo: &Path, payload: &Path, spec: &Value, user: &str, forwarded: Option<&str>) -> Result<()> {
     let runtime = payload.join("usr/lib/droidloom/runtime");
     let uid = spec["host_uid"]
         .as_u64()
@@ -609,7 +623,8 @@ fn configure_target(repo: &Path, payload: &Path, spec: &Value, user: &str) -> Re
     write(
         &payload.join("usr/lib/environment.d/60-droidloom.conf"),
         format!(
-            "DROIDLOOM_HOST_PEER_PID=0\nDROIDLOOM_HOST_PEER_UID=1000\nDROIDLOOM_HOST_PEER_GID=1000\nDROIDLOOM_RENDER_NODE={render}\n"
+            "DROIDLOOM_HOST_PEER_PID=0\nDROIDLOOM_HOST_PEER_UID=1000\nDROIDLOOM_HOST_PEER_GID=1000\nDROIDLOOM_RENDER_NODE={render}\n{}",
+            forwarded.map_or_else(String::new, |pci| format!("DROIDLOOM_GPU={pci}\n"))
         ),
     )?;
     let user = serde_json::to_string(user)?;
@@ -797,7 +812,7 @@ pub fn stage_cross(
         host,
         staging.path(),
     )?;
-    configure_target(repo, staging.path(), cell, user)?;
+    configure_target(repo, staging.path(), cell, user, None)?;
     let notices = staging.path().join("usr/share/licenses/droidloom");
     crate::licenses::project(repo, &notices)?;
     crate::licenses::rust(repo, &notices.join("rust"))?;
@@ -817,23 +832,6 @@ pub fn stage_cross(
     );
     Ok(())
 }
-fn render_node() -> Result<String> {
-    let mut nodes = fs::read_dir("/sys/class/drm")?.collect::<std::io::Result<Vec<_>>>()?;
-    nodes.sort_by_key(|e| e.file_name());
-    for node in nodes {
-        if !node.file_name().to_string_lossy().starts_with("renderD") {
-            continue;
-        }
-        if let Ok(driver) = fs::canonicalize(node.path().join("device/driver"))
-            && driver
-                .file_name()
-                .is_some_and(|n| n == "amdgpu" || n == "i915" || n == "xe")
-        {
-            return Ok(format!("/dev/dri/{}", node.file_name().to_string_lossy()));
-        }
-    }
-    fail("this x86_64 product requires an AMD or Intel render node")
-}
 fn preserve_settings(spec: &mut Value, existing: &Value, uid: u32) -> Result<()> {
     if existing["host_uid"].as_u64() != Some(u64::from(uid)) {
         return fail("the existing Droidloom installation belongs to another desktop user");
@@ -841,6 +839,7 @@ fn preserve_settings(spec: &mut Value, existing: &Value, uid: u32) -> Result<()>
     // Runtime mappings come from the new recipe. Personal data and sharing do not.
     for field in [
         "data_dir",
+        "gpu",
         "subordinate_uids",
         "subordinate_gids",
         "shared_storage_directories",

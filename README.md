@@ -16,9 +16,9 @@ Arch Linux and aarch64 Arch Linux ARM. Download them from the
 install them through the repository as below.
 
 > [!NOTE]
-> Droidloom does not work with NVIDIA graphics yet. NVIDIA support is planned
-> and under development; [supporting the project](https://denialwm.org/support.html) helps it
-> move forward.
+> NVIDIA GPUs are supported on x86_64 through [GPU forwarding](docs/gpu-forwarding.md):
+> Android's Vulkan and OpenGL ES run on the host's NVIDIA driver. Setup turns it
+> on by itself when it finds an NVIDIA GPU.
 
 ## What you get
 

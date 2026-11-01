@@ -444,6 +444,7 @@ mod tests {
             share_user_folders: false,
             data_dir: PathBuf::from("/data"),
             runtime_dir: PathBuf::from("/run/droidloom/cells/test"),
+            gpu: Default::default(),
             render_node: PathBuf::from("/dev/dri/renderD128"),
             graphics_backend: crate::GraphicsBackend::default(),
             denial_socket: PathBuf::from("/run/user/1001/denial.sock"),

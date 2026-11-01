@@ -353,6 +353,42 @@ rust_library {
     ],
 }
 
+// Vulkan forwarding: Android's Vulkan driver for host GPUs without an Android
+// driver (NVIDIA). Every call is replayed by droidloom-gpu-server on the host
+// driver; the cell's `forwarding` graphics pairing selects it through
+// ro.hardware.vulkan. See docs/gpu-forwarding.md.
+rust_library {
+    name: "libdroidloom_gpu_protocol",
+    crate_name: "droidloom_gpu_protocol",
+    crate_root: "graphics/droidloom-gpu-protocol/src/lib.rs",
+    edition: "2024",
+    vendor: true,
+    rustlibs: ["liblibc"],
+}
+
+rust_ffi_static {
+    name: "libdroidloom_vulkan",
+    crate_name: "droidloom_vulkan",
+    crate_root: "android/gpu/droidloom-vulkan/src/lib.rs",
+    edition: "2024",
+    vendor: true,
+    rustlibs: [
+        "libdroidloom_gpu_protocol",
+        "libdroidloom_minigbm",
+        "liblibc",
+    ],
+}
+
+// Rust shared libraries must be named lib<crate>.so; the HAL loader wants
+// vulkan.<ro.hardware.vulkan>.so.
+cc_library_shared {
+    name: "vulkan.droidloom",
+    vendor: true,
+    relative_install_path: "hw",
+    whole_static_libs: ["libdroidloom_vulkan"],
+    shared_libs: ["liblog", "libnativewindow"],
+}
+
 // Exact parser for the pinned minigbm cros_gralloc_handle payload. Descriptor
 // ownership remains in the Binder-facing adapter.
 rust_library {

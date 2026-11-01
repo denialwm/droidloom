@@ -5,6 +5,7 @@
 - [Known issues](KNOWN_ISSUES.md): preview limitations and workarounds.
 - [Latency opportunities](latency-opportunities.md): where input and frames lose time, and what to try.
 
+- [GPU forwarding](gpu-forwarding.md): Android's Vulkan on an NVIDIA host driver.
 - [Architecture](architecture.md): Android cell, graphics path and source boundaries; [Linux host integration](architecture.md#host-service-integration) for audio. Telephony stays native, outside Droidloom.
 - [Desktop integration](desktop-integration.md): windows, clipboard, notifications and diagnostics.
 - [Native application integration proposal](native-app-integration.md): system-service backends and ordinary Linux application behavior.
