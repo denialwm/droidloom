@@ -124,12 +124,12 @@ impl Wire {
     }
 }
 
-fn count(requests: &[(u32, u16)], surface: &wl_surface::WlSurface, name: &str) -> usize {
+fn count<P: Proxy>(requests: &[(u32, u16)], proxy: &P, name: &str) -> usize {
     requests
         .iter()
         .filter(|(object, opcode)| {
-            *object == surface.id().protocol_id()
-                && wl_surface::WlSurface::interface().requests[usize::from(*opcode)].name == name
+            *object == proxy.id().protocol_id()
+                && P::interface().requests[usize::from(*opcode)].name == name
         })
         .count()
 }
@@ -239,7 +239,7 @@ fn geometry_changes_commit_without_replacing_the_read_identity() {
 }
 
 #[test]
-fn color_and_buffer_solid_transitions_commit_and_detach_invalidates_both_kinds() {
+fn color_and_buffer_solid_transitions_commit_and_hiding_invalidates_both_kinds() {
     let mut wire = Wire::new();
     let mut view = wire.view();
     wire.update(&mut view, geometry(), Content::Buffer { id: 10, ticket: 1 });
@@ -262,13 +262,18 @@ fn color_and_buffer_solid_transitions_commit_and_detach_invalidates_both_kinds()
     ] {
         wire.update(&mut view, geometry(), content);
         wire.requests();
-        view.hide();
+        view.hide(&wire.buffer);
         let requests = wire.requests();
         assert_eq!(count(&requests, &view.surface, "attach"), 1);
         assert_eq!(count(&requests, &view.surface, "commit"), 1);
-        assert_eq!(count(&requests, &view.surface, "damage_buffer"), 0);
+        assert_eq!(count(&requests, &view.surface, "damage_buffer"), 1);
+        // The pixel keeps no old size or position that could stretch the
+        // window's surface tree.
+        assert_eq!(count(&requests, &view.viewport, "set_destination"), 1);
+        assert_eq!(count(&requests, &view.role, "set_position"), 1);
+        assert_eq!(view.geometry, None);
         assert_eq!(view.source(), None);
-        view.hide();
+        view.hide(&wire.buffer);
         assert!(wire.requests().is_empty());
         wire.update(&mut view, geometry(), content);
         let requests = wire.requests();
@@ -316,7 +321,7 @@ fn replacement_scene_keeps_old_roles_alive_until_synchronized_state_applies() {
     wire.root.commit();
     wire.requests();
 
-    recycle_views(&mut views, &mut spare, &BTreeSet::from([2]));
+    recycle_views(&mut views, &mut spare, &BTreeSet::from([2]), &wire.buffer);
     assert_eq!(spare.len(), 1);
     assert_eq!(spare[0].geometry, None);
     let view = view_for_layer(&mut views, &mut spare, 2, || {
@@ -329,7 +334,7 @@ fn replacement_scene_keeps_old_roles_alive_until_synchronized_state_applies() {
     wire.root.commit();
     // The peer sends no events: no replacement frame has completed. A destroy
     // here would unmap the preceding frame immediately despite its parent's
-    // GPU acquire blocker; attach(NULL) and the new buffer remain synchronized.
+    // GPU acquire blocker; the clear pixel and the new buffer remain synchronized.
     let requests = wire.requests();
     assert_eq!(count(&requests, &surface, "destroy"), 0);
     assert!(!requests.iter().any(|(object, opcode)| {
@@ -350,7 +355,7 @@ fn changing_layer_ids_reuses_a_bounded_pool_and_hidden_views_do_not_resurrect() 
     let mut allocations = 0;
     for scene in 0..100_u64 {
         let ids: BTreeSet<_> = (0..1 + scene % 3).map(|id| scene * 3 + id).collect();
-        recycle_views(&mut views, &mut spare, &ids);
+        recycle_views(&mut views, &mut spare, &ids, &wire.buffer);
         for id in &ids {
             let view = view_for_layer(&mut views, &mut spare, *id, || {
                 allocations += 1;
@@ -372,7 +377,7 @@ fn changing_layer_ids_reuses_a_bounded_pool_and_hidden_views_do_not_resurrect() 
         }
     }
     assert_eq!(allocations, 3);
-    recycle_views(&mut views, &mut spare, &BTreeSet::new());
+    recycle_views(&mut views, &mut spare, &BTreeSet::new(), &wire.buffer);
     wire.root.commit();
     assert!(views.is_empty());
     assert_eq!(spare.len(), 3);

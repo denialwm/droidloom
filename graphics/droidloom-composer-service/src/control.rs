@@ -18,6 +18,9 @@ use droidloom_task_control::{
 const AID_ROOT: u32 = 0;
 const AID_SYSTEM: u32 = 1_000;
 const CONFIGURE_TIMEOUT: Duration = Duration::from_secs(5);
+/// How long an orphaned task may wait for Denial to hand back its buffers.
+const ORPHAN_RELEASE_TIMEOUT: Duration = Duration::from_secs(2);
+const ORPHAN_RETRY_INTERVAL: Duration = Duration::from_millis(20);
 
 type ControlFailure = (ControlErrorCode, String);
 
@@ -34,6 +37,13 @@ struct State {
     direct_tasks: BTreeMap<TaskId, TaskObjectId>,
     direct_android_displays: BTreeMap<TaskObjectId, u32>,
     direct_incarnations: BTreeMap<TaskObjectId, u64>,
+    /// The process whose task-command subscription is current: the Android
+    /// framework. Tasks outlive neither it nor SurfaceFlinger, whose death
+    /// restarts it.
+    framework: Option<u32>,
+    /// SurfaceFlinger's built-in display. It belongs to Composer, not to
+    /// any framework.
+    bootstrap: Option<TaskObjectId>,
 }
 
 /// Cloneable coordinator shared by the control listener and Denial event pump.
@@ -67,6 +77,8 @@ impl TaskCoordinator {
                     direct_tasks: BTreeMap::new(),
                     direct_android_displays: BTreeMap::new(),
                     direct_incarnations: BTreeMap::new(),
+                    framework: None,
+                    bootstrap: None,
                 }),
                 Condvar::new(),
             )),
@@ -89,7 +101,15 @@ impl TaskCoordinator {
         })? {
             ControlResponse::Reserved {
                 object, display, ..
-            } => Ok((TaskObjectId(object), DisplayId(display))),
+            } => {
+                let object = TaskObjectId(object);
+                self.state
+                    .0
+                    .lock()
+                    .map_err(|_| "task-control state lock is poisoned".to_owned())?
+                    .bootstrap = Some(object);
+                Ok((object, DisplayId(display)))
+            }
             _ => Err("bootstrap display reservation returned an unexpected response".to_owned()),
         }
     }
@@ -305,7 +325,7 @@ impl TaskCoordinator {
             std::thread::Builder::new()
                 .name("droidloom-task-client".to_owned())
                 .spawn(move || {
-                    if let Err(error) = coordinator.serve_connection(&socket) {
+                    if let Err(error) = coordinator.serve_connection(&socket, credentials.pid) {
                         eprintln!("Droidloom task-control client closed: {error}");
                     }
                 })
@@ -313,7 +333,7 @@ impl TaskCoordinator {
         }
     }
 
-    fn serve_connection(&self, socket: &SeqPacket) -> Result<(), String> {
+    fn serve_connection(&self, socket: &SeqPacket, peer: u32) -> Result<(), String> {
         let mut ready = false;
         loop {
             let record = socket
@@ -326,6 +346,7 @@ impl TaskCoordinator {
                 .map_err(|error| format!("decode task-control record: {error}"))?;
             if let ControlRequest::Subscribe { request_id } = request {
                 if ready {
+                    self.adopt_framework(peer)?;
                     return self.serve_commands(socket, request_id);
                 }
             }
@@ -470,6 +491,74 @@ impl TaskCoordinator {
             .map_err(|error| error.to_string())?;
         self.commands.1.notify_all();
         Ok(())
+    }
+
+    /// A subscription from a new process is a restarted framework. The tasks
+    /// the old one registered died with it, and nothing else retires them:
+    /// SurfaceFlinger, which normally reports a destroyed task, may have died
+    /// too. The same process subscribing again keeps its tasks.
+    fn adopt_framework(&self, pid: u32) -> Result<(), String> {
+        let orphans: Vec<TaskObjectId> = {
+            let mut state = self
+                .state
+                .0
+                .lock()
+                .map_err(|_| "task-control state lock is poisoned".to_owned())?;
+            let bootstrap = state.bootstrap;
+            match state.framework.replace(pid) {
+                Some(previous) if previous != pid => state
+                    .registry
+                    .objects()
+                    .filter(|object| Some(*object) != bootstrap)
+                    .collect(),
+                _ => Vec::new(),
+            }
+        };
+        if orphans.is_empty() {
+            return Ok(());
+        }
+        eprintln!("Droidloom framework restarted: retiring {} tasks", orphans.len());
+        let coordinator = self.clone();
+        std::thread::Builder::new()
+            .name("droidloom-orphans".to_owned())
+            .spawn(move || coordinator.retire_orphans(orphans))
+            .map_err(|error| format!("start orphan retirement: {error}"))?;
+        Ok(())
+    }
+
+    /// Each orphan's window closes at the first attempt. Its Composer display
+    /// goes once Denial has handed back the buffers it still holds.
+    fn retire_orphans(&self, mut orphans: Vec<TaskObjectId>) {
+        let deadline = Instant::now() + ORPHAN_RELEASE_TIMEOUT;
+        loop {
+            orphans.retain(|object| {
+                let Ok(_operation) = self.operation_gate.lock() else { return true };
+                let retired = self
+                    .state
+                    .0
+                    .lock()
+                    .is_ok_and(|state| state.registry.get(*object).is_err());
+                !retired && self.remove_internal(*object).is_err()
+            });
+            if orphans.is_empty() {
+                return;
+            }
+            if Instant::now() >= deadline {
+                for object in &orphans {
+                    let error = self.operation_gate.lock().ok().and_then(|_operation| {
+                        self.remove_internal(*object).err()
+                    });
+                    if let Some((code, message)) = error {
+                        eprintln!(
+                            "Droidloom could not retire task object {} ({code:?}): {message}",
+                            object.0
+                        );
+                    }
+                }
+                return;
+            }
+            std::thread::sleep(ORPHAN_RETRY_INTERVAL);
+        }
     }
 
     fn serve_commands(&self, socket: &SeqPacket, request_id: u64) -> Result<(), String> {

@@ -141,15 +141,36 @@ impl View {
         Ok(())
     }
 
-    fn hide(&mut self) {
+    /// Show `clear`, a transparent pixel, instead of unmapping: a compositor
+    /// may show a newly mapped surface's first buffer a frame late, and an
+    /// empty full-window layer reads as a black flash.
+    fn hide(&mut self, clear: &wl_buffer::WlBuffer) {
         if self.content.take().is_some() {
-            self.surface.attach(None, 0, 0);
+            if let Some(sync) = self.sync.take() {
+                sync.destroy();
+            }
+            // The pixel neither holds the old crop nor covers what lies
+            // below, and it shrinks into the window's corner: an old size
+            // or position would stretch the surface tree's bounds past a
+            // resized window. Showing again resends all of them.
+            self.viewport.set_source(-1.0, -1.0, -1.0, -1.0);
+            self.viewport.set_destination(-1, -1);
+            self.role.set_position(0, 0);
+            self.surface.set_opaque_region(None);
+            self.geometry = None;
+            self.surface.attach(Some(clear), 0, 0);
+            self.surface.damage_buffer(0, 0, i32::MAX, i32::MAX);
             self.surface.commit();
         }
     }
 }
 
-fn recycle_views(views: &mut BTreeMap<u64, View>, spare: &mut Vec<View>, ids: &BTreeSet<u64>) {
+fn recycle_views(
+    views: &mut BTreeMap<u64, View>,
+    spare: &mut Vec<View>,
+    ids: &BTreeSet<u64>,
+    clear: &wl_buffer::WlBuffer,
+) {
     let removed: Vec<_> = views
         .keys()
         .filter(|id| !ids.contains(id))
@@ -157,12 +178,11 @@ fn recycle_views(views: &mut BTreeMap<u64, View>, spare: &mut Vec<View>, ids: &B
         .collect();
     for id in removed {
         let mut view = views.remove(&id).expect("removed view exists");
-        view.hide();
+        view.hide(clear);
         // Subsurface destruction unmaps immediately, even while the parent's
         // replacement transaction is blocked on an acquire fence. Retain the
-        // role and synchronize its detach/reassignment with that transaction.
+        // role and synchronize its hiding/reassignment with that transaction.
         // Reassignment also needs fresh stacking relative to the new peers.
-        view.geometry = None;
         spare.push(view);
     }
 }
@@ -256,6 +276,8 @@ pub(super) struct Stream {
     reads: Vec<Read>,
     imports: imports::Imports<zwp_linux_buffer_params_v1::ZwpLinuxBufferParamsV1>,
     root: Option<((u32, u32), wl_buffer::WlBuffer)>,
+    /// Transparent pixel hidden views show.
+    clear: Option<wl_buffer::WlBuffer>,
     root_logical_size: Option<(u32, u32)>,
     active: bool,
     connected: bool,
@@ -420,8 +442,12 @@ impl Stream {
         if !self.active {
             return false;
         }
+        let clear = self
+            .clear
+            .as_ref()
+            .expect("an active stream has its clear pixel");
         for view in self.views.values_mut() {
-            view.hide();
+            view.hide(clear);
         }
         self.active = false;
         true
@@ -492,6 +518,9 @@ impl Drop for Stream {
         if let Some((_, b)) = self.root.take() {
             b.destroy();
         }
+        if let Some(b) = self.clear.take() {
+            b.destroy();
+        }
         for pending in self.imports.drain() {
             pending.params.destroy();
         }
@@ -516,7 +545,7 @@ fn carrier_size(width: u32, height: u32) -> Result<(u32, u32), PresenterError> {
         return Err(PresenterError::Configuration("empty layer task size"));
     }
     // Mobile shells can use the root buffer's aspect when fitting the whole
-    // surface tree. Preserve that aspect for the constant black backing.
+    // surface tree. Preserve that aspect for the constant backing.
     // Reduce the dimensions to avoid allocating a full task-sized blank image.
     let (mut a, mut b) = (width, height);
     while b != 0 {
@@ -543,6 +572,10 @@ fn covered_by_opaque_layer<'a>(
         })
 }
 
+/// Dark gray #0d1117 beneath the layers. SurfaceFlinger composes tasks over
+/// the same colour, so a gap reads as the window's background.
+const BACKING: u32 = 0x000d_1117;
+
 fn carrier(
     globals: &Globals,
     qh: &QueueHandle<App>,
@@ -554,19 +587,7 @@ fn carrier(
         .and_then(|bytes| i32::try_from(bytes).ok())
         .ok_or(PresenterError::Configuration("layer root buffer too large"))?;
     let mut file = tempfile::tempfile()?;
-    file.set_len(bytes as u64)?;
-    // Opt-in visual diagnosis: distinguish an exposed carrier from black app
-    // pixels without capturing or inspecting the user's screen.
-    if env::var_os("DROIDLOOM_DEBUG_LAYER_BACKING").as_deref()
-        == Some(std::ffi::OsStr::new("magenta"))
-    {
-        let length = usize::try_from(bytes)
-            .map_err(|_| PresenterError::Configuration("layer root buffer too large"))?;
-        let pixels = 0x00ff00ff_u32.to_ne_bytes().repeat(1024);
-        for offset in (0..length).step_by(pixels.len()) {
-            file.write_all(&pixels[..pixels.len().min(length - offset)])?;
-        }
-    }
+    file.write_all(&BACKING.to_ne_bytes().repeat(bytes as usize / 4))?;
     let pool = globals.shm.create_pool(file.as_fd(), bytes, qh, ());
     let buffer = pool.create_buffer(
         0,
@@ -629,6 +650,7 @@ impl App {
             parked: None,
             views: BTreeMap::new(),
             spare_views: Vec::new(),
+            clear: None,
             reads: Vec::new(),
             imports: imports::Imports::default(),
             root: None,
@@ -1149,8 +1171,8 @@ impl App {
         ))?;
         // Retain the last composed image when direct children fully cover it.
         // Some compositors publish root textures and child layouts separately;
-        // replacing the root with black can expose it during that handoff.
-        // Partial/transparent scenes still require black, and an initial direct
+        // replacing the root with the backing can expose it during that handoff.
+        // Partial/transparent scenes still require the backing, and an initial direct
         // scene needs a carrier to map its XDG root. No target is copied or
         // released here: normal compositor release fences retain ownership.
         let preserve_composed = task.composed_root
@@ -1200,7 +1222,15 @@ impl App {
             None
         };
         let ids: BTreeSet<_> = staged.iter().map(|(l, _)| l.id).collect();
-        recycle_views(&mut stream.views, &mut stream.spare_views, &ids);
+        if stream.clear.is_none() {
+            stream.clear = Some(pixel(&self.layer_globals, qh, 0)?);
+        }
+        recycle_views(
+            &mut stream.views,
+            &mut stream.spare_views,
+            &ids,
+            stream.clear.as_ref().unwrap(),
+        );
         let mut previous = root.clone();
         let mut previous_id = None;
         for (l, acquire) in staged.drain(..) {
@@ -1449,7 +1479,7 @@ impl App {
                 if preserve_composed {
                     "composed"
                 } else {
-                    "black"
+                    "carrier"
                 },
             );
         }

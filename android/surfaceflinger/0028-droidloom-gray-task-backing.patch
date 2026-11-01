@@ -1,0 +1,41 @@
+Subject: [PATCH] Droidloom: compose tasks over dark gray
+
+A task window's fill shows wherever its layers leave the window uncovered,
+for example while the app catches up with a resize. Fill Droidloom task
+targets with #0d1117, the colour of the presenter's carrier, so those gaps
+read as the window's background, not as black flashes. Screenshots keep
+their black fill.
+
+diff --git a/services/surfaceflinger/ScreenCaptureOutput.cpp b/services/surfaceflinger/ScreenCaptureOutput.cpp
+index 54c0207..303c8e2 100644
+--- a/services/surfaceflinger/ScreenCaptureOutput.cpp
++++ b/services/surfaceflinger/ScreenCaptureOutput.cpp
+@@ -277,7 +277,14 @@ ScreenCaptureOutput::generateClientCompositionRequests(
+     compositionengine::LayerFE::LayerSettings fillLayer;
+     fillLayer.name = "ScreenCaptureFillLayer";
+     fillLayer.source.buffer.buffer = nullptr;
+-    fillLayer.source.solidColor = half3(0.0f, 0.0f, 0.0f);
++    if (mDroidloomTarget) {
++        // Dark gray #0d1117, the same as the presenter's carrier, shows where
++        // the task's layers leave the window uncovered, such as while resizing.
++        fillLayer.source.solidColor = half3(13.0f / 255.0f, 17.0f / 255.0f, 23.0f / 255.0f);
++        fillLayer.sourceDataspace = ui::Dataspace::SRGB;
++    } else {
++        fillLayer.source.solidColor = half3(0.0f, 0.0f, 0.0f);
++    }
+     fillLayer.geometry.boundaries =
+             FloatRect(static_cast<float>(mSourceCrop.left), static_cast<float>(mSourceCrop.top),
+                       static_cast<float>(mSourceCrop.right),
+diff --git a/services/surfaceflinger/SurfaceFlinger.cpp b/services/surfaceflinger/SurfaceFlinger.cpp
+index 661d9db..8159f4c 100644
+--- a/services/surfaceflinger/SurfaceFlinger.cpp
++++ b/services/surfaceflinger/SurfaceFlinger.cpp
+@@ -3886,7 +3886,7 @@ CompositeResultsPerDisplay SurfaceFlinger::composite(
+             taskOutput.window->setContentDamage(fullDamage
+                             ? Rect(targetSize.width, targetSize.height)
+                             : output->getDroidloomDamage().getBounds());
+-            // The task output includes an opaque black fill beneath app layers.
++            // The task output includes an opaque gray fill beneath app layers.
+             // Intra-app transparency still blends with those layers and the fill.
+             taskOutput.window->setContentOpaque(true);
+             const sp<Fence>& renderFence =

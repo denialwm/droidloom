@@ -283,6 +283,11 @@ impl TaskControlRegistry {
         self.remove_in_phase(object, TaskRegistrationPhase::Removing)
     }
 
+    /// Every live registration's protocol object.
+    pub fn objects(&self) -> impl Iterator<Item = TaskObjectId> + '_ {
+        self.registrations.keys().copied()
+    }
+
     /// Borrow one live registration by protocol object.
     ///
     /// # Errors
@@ -400,6 +405,16 @@ mod tests {
 
         assert_eq!(next.reservation.display, DisplayId(2));
         assert_eq!(next.object, TaskObjectId(2));
+    }
+
+    #[test]
+    fn objects_lists_only_live_registrations() {
+        let mut registry = TaskControlRegistry::default();
+        let first = registry.reserve("org.example.first".to_owned()).unwrap();
+        let second = registry.reserve("org.example.second".to_owned()).unwrap();
+        registry.cancel_reservation(first.object).unwrap();
+
+        assert_eq!(registry.objects().collect::<Vec<_>>(), [second.object]);
     }
 
     #[test]

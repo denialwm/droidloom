@@ -116,14 +116,16 @@ multiple layers; it never checks application names.
 The authenticated Composer broker delegates a pair of task-scoped sequenced
 sockets. Image planes are registered once, imports are confirmed asynchronously,
 and a complete staged layer list commits atomically under the current configure.
-The root keeps the XDG role and task-relative input. A constant black XRGB SHM
+The root keeps the XDG role and task-relative input. A constant dark gray (#0d1117) XRGB SHM
 buffer supplies an opaque backing; its reduced dimensions preserve the task's
-aspect without allocating a full-window image. This matches the black fill in
+aspect without allocating a full-window image. This matches the gray fill in
 SurfaceFlinger's composed task output, including gaps between producer layers.
 Switching back to a composed target damages the whole root: Android's damage
 rectangles describe differences between app frames, not replacement of the
-presenter's constant backing. Already-hidden children are not detached again
-on subsequent composed frames.
+presenter's constant backing. Hidden children stay mapped and show one
+transparent pixel instead: a compositor may show a newly mapped surface's first
+buffer a frame late, and an empty full-window layer reads as a black flash.
+Already-hidden children are not hidden again on subsequent composed frames.
 Child input regions are empty. Source rectangles, orthogonal transforms, stacking,
 opaque coverage, per-layer alpha and constant-color layers are preserved. An
 unchanged scene retains its existing attachments instead of generating new work.
@@ -150,7 +152,7 @@ Scenes fall back as a whole for unsupported formats, failed imports, protected
 or secure content, HDR/LUT/color operations, effects, front buffers, duplicate
 source attachments, or geometry that cannot be represented exactly. Fractional
 host scales must preserve every layer edge in integer Wayland surface coordinates.
-The fallback renders into a host target and detaches the direct children in the
+The fallback renders into a host target and hides the direct children in the
 same root commit. Receiving a direct commit first drains older Composer records
 to preserve ordering across both sockets. The stream bounds scenes to 64 layers
 and caches to 128 source allocations per task.
@@ -183,7 +185,7 @@ Droidloom restart.
 
 Opaque coverage belongs to each rendered frame, independently of its ARGB
 allocation format. SurfaceFlinger's normal task output now includes an opaque
-black fill below the app layers. The private
+gray fill below the app layers. The private
 `PresentWithContent` request carries that opacity beside the buffer ID and
 original ready fence. Legacy `Present` requests conservatively mean unknown
 opacity. Unknown content bits and nonzero reserved fields are rejected.
@@ -194,7 +196,7 @@ opacity changes. The Wayland presenter applies an opaque region in logical
 surface coordinates to that commit and clears it for transparent successors;
 resizing invalidates the cached region. An ARGB buffer with opaque pixels
 therefore need not trigger unnecessary compositor backdrop work. Transparency
-within a normal app blends over its other layers and black backing; legacy
+within a normal app blends over its other layers and gray backing; legacy
 targets still honor their supplied opacity metadata. This requires no application-specific override,
 pixel readback, extra composition pass or compositor modification.
 
@@ -518,7 +520,7 @@ remain independently tracked; skipping a child commit never releases a read.
 When Android removes a layer, the presenter detaches its buffer through the
 synchronized child state and retains the subsurface for reuse. Destroying a
 subsurface unmaps it immediately, so destruction after queuing a parent commit
-could expose the black backing while replacement buffers wait on GPU fences.
+could expose the backing while replacement buffers wait on GPU fences.
 Reassigned views refresh geometry and stacking. The retained pool is bounded
 by the largest accepted scene (at most 64 layers) and is destroyed when the
 task retires.
@@ -527,7 +529,7 @@ When a direct scene contains a fully opaque layer covering the entire task,
 the root retains its last composed image beneath the synchronized children.
 This avoids exposing a blank root while the compositor switches textures and
 child layouts, and avoids the SHM attachment and upload on that transition.
-Partial or transparent scenes still attach the constant black backing, as do
+Partial or transparent scenes still attach the constant gray backing, as do
 initial direct scenes without a preceding composed image. The retained root
 uses the existing render target and normal release fences; no copy, additional
 target or early release is introduced.
