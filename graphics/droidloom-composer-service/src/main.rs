@@ -174,7 +174,8 @@ fn handshake(socket: &ProtocolSocket) -> Result<u64, String> {
                     | capability::LAZY_RENDER_TARGETS
                     | capability::SCENE_PRESENTATION
                     | capability::HOST_CLOCK
-                    | capability::KEEP_SCREEN_ON,
+                    | capability::KEEP_SCREEN_ON
+                    | capability::TASK_DENSITY,
             },
             &[],
         )
@@ -367,6 +368,21 @@ fn dispatch_event(
             }
         }
         AppliedDenialEvent::Presented(_) => {}
+        AppliedDenialEvent::Density { dpi } => {
+            if coordinator.is_direct_task(object) {
+                // Queued before the configure's resize, so Android lays the
+                // task out once at its new size and density.
+                if let Err(error) = coordinator.queue_window_command(
+                    object,
+                    droidloom_task_control::TaskAction::Density { dpi },
+                ) {
+                    eprintln!(
+                        "Droidloom deferred Android object {} density: {error}",
+                        object.0
+                    );
+                }
+            }
+        }
         AppliedDenialEvent::Visibility {
             visibility,
             focused,
@@ -422,6 +438,7 @@ fn task_object(message: &DenialMessage) -> Option<TaskObjectId> {
         | DenialMessage::UnregisterRenderTarget { object, .. }
         | DenialMessage::Configure { object, .. }
         | DenialMessage::Insets { object, .. }
+        | DenialMessage::Density { object, .. }
         | DenialMessage::Visibility { object, .. }
         | DenialMessage::Close { object }
         | DenialMessage::BufferReleased { object, .. }

@@ -99,6 +99,11 @@ pub enum AppliedDenialEvent {
         /// Host refresh policy in millihertz.
         refresh_millihz: u32,
     },
+    /// The task's density changed with the output it is on.
+    Density {
+        /// Dots per inch; 0 follows Android's display density.
+        dpi: u32,
+    },
     /// Denial-owned system-bar and cutout insets changed.
     Insets {
         /// Left logical inset.
@@ -442,6 +447,7 @@ impl DenialTaskBinding {
                 right: *right,
                 bottom: *bottom,
             }),
+            DenialMessage::Density { dpi, .. } => Ok(AppliedDenialEvent::Density { dpi: *dpi }),
             DenialMessage::Visibility {
                 visibility,
                 focused,
@@ -513,6 +519,7 @@ fn message_object(message: &DenialMessage) -> Option<TaskObjectId> {
         | DenialMessage::UnregisterRenderTarget { object, .. }
         | DenialMessage::Configure { object, .. }
         | DenialMessage::Insets { object, .. }
+        | DenialMessage::Density { object, .. }
         | DenialMessage::Visibility { object, .. }
         | DenialMessage::Close { object }
         | DenialMessage::BufferReleased { object, .. }

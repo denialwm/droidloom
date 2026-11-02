@@ -20,7 +20,7 @@ pub const MAGIC: [u8; 4] = *b"DLOM";
 /// Protocol major implemented by this crate.
 pub const PROTOCOL_MAJOR: u16 = 1;
 /// Protocol minor implemented by this crate.
-pub const PROTOCOL_MINOR: u16 = 10;
+pub const PROTOCOL_MINOR: u16 = 11;
 /// Wire version retained by existing records, including initial negotiation.
 pub const BASE_PROTOCOL_MINOR: u16 = 3;
 /// Wire version introducing task activation.
@@ -76,6 +76,8 @@ pub mod capability {
     pub const HOST_CLOCK: u64 = 1 << 13;
     /// Android tells the host which tasks keep the screen on.
     pub const KEEP_SCREEN_ON: u64 = 1 << 14;
+    /// The host gives each task the density of the output it is on.
+    pub const TASK_DENSITY: u64 = 1 << 15;
 
     /// Capabilities required for every protocol-v1 session.
     pub const REQUIRED_V1: u64 = TASK_WINDOWS
@@ -356,6 +358,13 @@ pub enum DenialMessage {
         transform: Transform,
         /// Current refresh rate in millihertz.
         refresh_millihz: u32,
+    },
+    /// The density Android lays the task out at, for the output it is on.
+    Density {
+        /// Task being laid out.
+        object: TaskObjectId,
+        /// Dots per inch; 0 follows Android's display density.
+        dpi: u32,
     },
     /// Update Denial-owned system-bar and cutout insets.
     Insets {
@@ -1239,6 +1248,7 @@ const OP_DISPLAY_POWER: u16 = 0x800e;
 const OP_REQUEST_INPUT_CHANNEL: u16 = 0x800f;
 const OP_SCENE_PRESENTED: u16 = 0x8010;
 const OP_FRAME_GRANT: u16 = 0x8011;
+const OP_DENSITY: u16 = 0x8012;
 
 /// Encode one Android-to-Denial message.
 ///
@@ -1797,6 +1807,10 @@ pub fn encode_denial(message: &DenialMessage) -> Result<EncodedPacket, WireError
             payload.u32(*refresh_millihz);
             (OP_CONFIGURE, valid_object(*object)?)
         }
+        DenialMessage::Density { object, dpi } => {
+            payload.u32(*dpi);
+            (OP_DENSITY, valid_object(*object)?)
+        }
         DenialMessage::Insets {
             object,
             left,
@@ -2054,6 +2068,13 @@ pub fn decode_denial(
                 scale_denominator,
                 transform,
                 refresh_millihz,
+            }
+        }
+        OP_DENSITY => {
+            valid_object(object)?;
+            DenialMessage::Density {
+                object,
+                dpi: payload.u32()?,
             }
         }
         OP_INSETS => {
@@ -2319,6 +2340,7 @@ fn finish_packet(
         OP_SCENE_PRESENTED => 8,
         OP_FRAME_GRANT => 9,
         OP_SET_KEEP_SCREEN_ON => 10,
+        OP_DENSITY => 11,
         _ => BASE_PROTOCOL_MINOR,
     };
     bytes.extend_from_slice(&minor.to_le_bytes());
@@ -2981,6 +3003,10 @@ mod tests {
                 scale_denominator: 2,
                 transform: Transform::Rotate90,
                 refresh_millihz: 120_000,
+            },
+            DenialMessage::Density {
+                object: OBJECT,
+                dpi: 230,
             },
             DenialMessage::Insets {
                 object: OBJECT,

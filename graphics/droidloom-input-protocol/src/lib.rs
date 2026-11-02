@@ -222,8 +222,8 @@ pub fn encode_key(
 /// The Android task stays at a private origin because the Wayland compositor
 /// owns its real desktop position. Its pixel bounds track the toplevel's
 /// physical Wayland buffer size. The scale remains explicit for coordinate
-/// conversion only; Android density is a separate persistent user setting and
-/// must not be overridden per task.
+/// conversion only; a task's density travels separately, as the output's
+/// density setting, never derived from this scale here.
 ///
 /// # Errors
 ///

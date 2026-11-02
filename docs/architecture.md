@@ -354,6 +354,17 @@ The Composer refresh path also updates the enabled vsync period and
 reannounces the existing Android display configuration, so SurfaceFlinger
 reloads its cached mode period. Disabled clocks remain disabled.
 
+The same output picks the task's density. The presenter reads
+`$XDG_CONFIG_HOME/droidloom/density-v1.json`, which gives dots per inch per unit
+of output scale: `dpiPerScale` for every output and `outputs` by connector name
+for one. A task on an output of scale 1.5 with 230 per scale gets 345 dpi, so
+its contents keep their logical size on every screen. The private protocol
+carries it as `Density` (minor 11, capability `TASK_DENSITY`), sent before the
+configure it belongs to; the framework sets it as the task's requested
+`densityDpi` override, or drops the override for 0 or the display's own
+density. The file is watched, so a change reaches open windows at once.
+Without it, every task keeps Android's display density.
+
 ### Vsync
 
 With Denial's frame timeline, Android has no clock of its own. The presenter

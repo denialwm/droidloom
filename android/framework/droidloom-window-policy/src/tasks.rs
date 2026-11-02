@@ -234,6 +234,7 @@ impl Backend {
             TaskAction::Close => (3, 0, 0),
             TaskAction::Hide => (4, 0, 0),
             TaskAction::Show => (5, 0, 0),
+            TaskAction::Density { dpi } => (6, u64::from(dpi), 0),
         };
         Some(CommandBinding {
             serial,

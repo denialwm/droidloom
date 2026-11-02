@@ -5,6 +5,7 @@
 mod activation;
 mod clipboard;
 mod clock;
+mod density;
 mod fence_wakeup;
 mod frame_timeline;
 mod imports;
@@ -77,8 +78,7 @@ use wayland_protocols::wp::fractional_scale::v1::client::{
     wp_fractional_scale_v1::{self, WpFractionalScaleV1},
 };
 use wayland_protocols::wp::idle_inhibit::zv1::client::{
-    zwp_idle_inhibit_manager_v1::ZwpIdleInhibitManagerV1,
-    zwp_idle_inhibitor_v1::ZwpIdleInhibitorV1,
+    zwp_idle_inhibit_manager_v1::ZwpIdleInhibitManagerV1, zwp_idle_inhibitor_v1::ZwpIdleInhibitorV1,
 };
 use wayland_protocols::wp::linux_dmabuf::zv1::client::{
     zwp_linux_buffer_params_v1, zwp_linux_dmabuf_feedback_v1,
@@ -241,6 +241,8 @@ struct TaskWindow {
     refresh_millihz: u32,
     entered_outputs: Vec<wl_output::WlOutput>,
     presentation_output: Option<wl_output::WlOutput>,
+    /// The density last sent for the task; None before the first.
+    density_dpi: Option<u32>,
     targets: BTreeMap<BufferId, RenderTarget>,
     pending: VecDeque<PendingFrame>,
     presentation_feedback: Vec<FrameFeedback>,
@@ -345,6 +347,8 @@ struct App {
     gbm: GbmDevice<File>,
     listener: DenialEndpointListener,
     window_policy: WindowPolicyStore,
+    /// The density each task gets on the output it is on.
+    densities: density::Densities,
     endpoint: Option<DenialEndpoint>,
     tasks: BTreeMap<TaskObjectId, TaskWindow>,
     task_work: readiness::Tasks,
@@ -501,7 +505,38 @@ impl App {
         })
     }
 
+    /// Gives the task the density of the output it is on, when that
+    /// changed: before its configure, so Android lays it out once.
+    fn update_task_density(&mut self, object: TaskObjectId) -> Result<(), PresenterError> {
+        let Some(task) = self.tasks.get(&object) else {
+            return Ok(());
+        };
+        if task.package == BOOTSTRAP_PACKAGE || task.configure_serial == 0 {
+            return Ok(());
+        }
+        let name = select_surface_output(
+            &task.entered_outputs,
+            task.presentation_output.as_ref(),
+            |output| self.output_state.info(output).map(|_| 0),
+        )
+        .and_then(|output| self.output_state.info(output))
+        .and_then(|info| info.name);
+        let dpi = self.densities.dpi(name.as_deref(), task.applied_scale_120);
+        if task.density_dpi == Some(dpi) {
+            return Ok(());
+        }
+        self.endpoint
+            .as_ref()
+            .ok_or(PresenterError::Configuration("endpoint disappeared"))?
+            .send_density(object, dpi)?;
+        if let Some(task) = self.tasks.get_mut(&object) {
+            task.density_dpi = Some(dpi);
+        }
+        Ok(())
+    }
+
     fn update_task_refresh(&mut self, object: TaskObjectId) -> Result<(), PresenterError> {
+        self.update_task_density(object)?;
         let refresh = self.task_refresh_millihz(object);
         let task = self
             .tasks
@@ -712,6 +747,7 @@ impl App {
                 refresh_millihz: 60_000,
                 entered_outputs: Vec::new(),
                 presentation_output: None,
+                density_dpi: None,
                 targets: BTreeMap::new(),
                 pending: VecDeque::new(),
                 presentation_feedback: Vec::new(),
@@ -836,6 +872,7 @@ impl App {
                 viewport.set_destination(destination_width, destination_height);
             }
         }
+        self.update_task_density(object)?;
         self.endpoint
             .as_mut()
             .ok_or(PresenterError::Configuration("endpoint disappeared"))?
@@ -1618,7 +1655,8 @@ impl App {
                     && let (Some(manager), Some(window)) =
                         (self.idle_inhibit_manager.as_ref(), task.window.as_ref())
                 {
-                    task.idle_inhibitor = Some(manager.create_inhibitor(window.wl_surface(), qh, ()));
+                    task.idle_inhibitor =
+                        Some(manager.create_inhibitor(window.wl_surface(), qh, ()));
                 }
             }
             EndpointAction::RequestActivation { object } => {
@@ -1707,7 +1745,8 @@ impl App {
                 let endpoint = endpoint
                     .with_direct_input()
                     .with_lazy_render_targets()
-                    .with_scene_presentation();
+                    .with_scene_presentation()
+                    .with_task_density();
                 let endpoint = if self.idle_inhibit_manager.is_some() {
                     endpoint.with_keep_screen_on()
                 } else {
@@ -3218,6 +3257,7 @@ fn run() -> Result<(), PresenterError> {
         gbm,
         listener,
         window_policy,
+        densities: density::Densities::load(env::var_os("XDG_CONFIG_HOME"), env::var_os("HOME")),
         endpoint: None,
         tasks: BTreeMap::new(),
         task_work: readiness::Tasks::default(),
@@ -3361,6 +3401,13 @@ fn poll_sources(
             revents: 0,
         });
     }
+    if let Some(fd) = app.densities.fd() {
+        descriptors.push(libc::pollfd {
+            fd,
+            events: libc::POLLIN,
+            revents: 0,
+        });
+    }
     for (fd, events) in app.text_input.fds().chain(app.clipboard.fds()) {
         descriptors.push(libc::pollfd {
             fd,
@@ -3448,6 +3495,17 @@ fn poll_sources(
         }
     }
     app.clipboard.notify_ready(descriptors);
+    let densities = app.densities.fd();
+    if descriptors
+        .iter()
+        .any(|event| Some(event.fd) == densities && event.revents & libc::POLLIN != 0)
+        && app.densities.changed()
+    {
+        let objects: Vec<TaskObjectId> = app.tasks.keys().copied().collect();
+        for object in objects {
+            app.update_task_density(object)?;
+        }
+    }
     app.direct_input.notify_ready(descriptors);
     if app
         .endpoint

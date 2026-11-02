@@ -1083,6 +1083,7 @@ fn task_object(message: &DenialMessage) -> Option<TaskObjectId> {
         | DenialMessage::UnregisterRenderTarget { object, .. }
         | DenialMessage::Configure { object, .. }
         | DenialMessage::Insets { object, .. }
+        | DenialMessage::Density { object, .. }
         | DenialMessage::Visibility { object, .. }
         | DenialMessage::Close { object }
         | DenialMessage::BufferReleased { object, .. }

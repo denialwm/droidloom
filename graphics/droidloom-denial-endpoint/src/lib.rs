@@ -337,6 +337,7 @@ pub struct DenialEndpoint {
     scene_presentation: bool,
     host_clock: bool,
     keep_screen_on: bool,
+    task_density: bool,
     tasks: BTreeMap<TaskObjectId, TaskEndpoint>,
 }
 
@@ -361,6 +362,7 @@ impl DenialEndpoint {
             scene_presentation: false,
             host_clock: false,
             keep_screen_on: false,
+            task_density: false,
             tasks: BTreeMap::new(),
         }
     }
@@ -876,6 +878,27 @@ impl DenialEndpoint {
         self
     }
 
+    /// Opt in when the host gives each task its output's density.
+    pub fn with_task_density(mut self) -> Self {
+        self.task_density = true;
+        self
+    }
+
+    /// Lays `object` out at `dpi`, 0 for Android's display density. Without
+    /// negotiated task density this is a no-op.
+    ///
+    /// # Errors
+    ///
+    /// Rejects unknown tasks and propagates codec or socket failure.
+    pub fn send_density(&self, object: TaskObjectId, dpi: u32) -> Result<(), EndpointError> {
+        if self.ready && self.task_density {
+            self.task(object)?;
+            self.socket
+                .send_denial(&DenialMessage::Density { object, dpi })?;
+        }
+        Ok(())
+    }
+
     /// Forward one host frame grant. Without a negotiated host clock this is
     /// a no-op; Android then runs its own timer.
     ///
@@ -1024,10 +1047,13 @@ impl DenialEndpoint {
         self.scene_presentation &= capabilities & capability::SCENE_PRESENTATION != 0;
         self.host_clock &= capabilities & capability::HOST_CLOCK != 0;
         self.keep_screen_on &= capabilities & capability::KEEP_SCREEN_ON != 0;
+        self.task_density &= capabilities & capability::TASK_DENSITY != 0;
         self.socket.send_denial(&DenialMessage::ServerHello {
             major: PROTOCOL_MAJOR,
-            minor: if self.keep_screen_on {
+            minor: if self.task_density {
                 PROTOCOL_MINOR
+            } else if self.keep_screen_on {
+                10
             } else if self.host_clock {
                 9
             } else if self.scene_presentation {
@@ -1060,6 +1086,11 @@ impl DenialEndpoint {
                 }
                 | if self.keep_screen_on {
                     capability::KEEP_SCREEN_ON
+                } else {
+                    0
+                }
+                | if self.task_density {
+                    capability::TASK_DENSITY
                 } else {
                     0
                 }
@@ -1820,6 +1851,61 @@ mod tests {
                             period_nanos: 10,
                         }
                     );
+                } else {
+                    assert_eq!(first, DenialMessage::DisplayPower { powered: true });
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn task_density_flows_only_when_negotiated() {
+        for host in [false, true] {
+            for client in [false, true] {
+                let (android, mut endpoint) = pair();
+                if host {
+                    endpoint = endpoint.with_task_density();
+                }
+                android
+                    .send_android(
+                        &AndroidMessage::ClientHello {
+                            min_major: 1,
+                            max_major: 1,
+                            capabilities: capability::REQUIRED_V1
+                                | if client { capability::TASK_DENSITY } else { 0 },
+                        },
+                        &[],
+                    )
+                    .unwrap();
+                endpoint.receive_action().unwrap();
+                let DenialMessage::ServerHello {
+                    minor,
+                    capabilities,
+                    ..
+                } = android.receive_denial().unwrap().message
+                else {
+                    panic!("hello");
+                };
+                let supported = host && client;
+                assert_eq!(capabilities & capability::TASK_DENSITY != 0, supported);
+                assert_eq!(minor, if supported { PROTOCOL_MINOR } else { 6 });
+                let object = TaskObjectId(1);
+                android
+                    .send_android(
+                        &AndroidMessage::CreateTask {
+                            object,
+                            display: AndroidDisplayId(1),
+                            package: "org.example.app".into(),
+                        },
+                        &[],
+                    )
+                    .unwrap();
+                endpoint.receive_action().unwrap();
+                endpoint.send_density(object, 230).unwrap();
+                endpoint.send_display_power(true).unwrap();
+                let first = android.receive_denial().unwrap().message;
+                if supported {
+                    assert_eq!(first, DenialMessage::Density { object, dpi: 230 });
                 } else {
                     assert_eq!(first, DenialMessage::DisplayPower { powered: true });
                 }

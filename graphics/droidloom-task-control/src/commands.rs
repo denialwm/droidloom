@@ -26,7 +26,16 @@ pub enum TaskAction {
     Hide,
     /// The host restored the window.
     Show,
+    /// Lay the task out at the density of the output its window is on; 0
+    /// follows the display's density.
+    Density {
+        /// Dots per inch.
+        dpi: u32,
+    },
 }
+
+/// The densities a task may be given, besides 0.
+pub const TASK_DENSITY_DPI: std::ops::RangeInclusive<u32> = 72..=1280;
 
 /// A host command bound to one registered native window, not just a task ID.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -62,6 +71,11 @@ impl TaskCommand {
         if let TaskAction::Resize { width, height } = self.action {
             if width == 0 || height == 0 || width > 16384 || height > 16384 {
                 return Err(CodecError::InvalidValue("task command bounds"));
+            }
+        }
+        if let TaskAction::Density { dpi } = self.action {
+            if dpi != 0 && !TASK_DENSITY_DPI.contains(&dpi) {
+                return Err(CodecError::InvalidValue("task command density"));
             }
         }
         Ok(())
@@ -116,6 +130,10 @@ impl CommandQueue {
             TaskAction::Hide | TaskAction::Show => {
                 !(entry.command.object == command.object
                     && matches!(entry.command.action, TaskAction::Hide | TaskAction::Show))
+            }
+            TaskAction::Density { .. } => {
+                !(entry.command.object == command.object
+                    && matches!(entry.command.action, TaskAction::Density { .. }))
             }
         });
         if self.pending.len() >= MAX_PENDING {
@@ -185,6 +203,37 @@ mod tests {
             android_display: 0,
             action,
         }
+    }
+
+    #[test]
+    fn a_density_replaces_the_last_and_goes_before_a_debounced_resize() {
+        let mut queue = CommandQueue::default();
+        let now = Instant::now();
+        let resize = |width| command(7, TaskAction::Resize { width, height: 600 });
+        queue.push(resize(400), now).unwrap();
+        let first = queue.ready(now).unwrap();
+        queue.acknowledge(first.serial);
+        queue.push(resize(500), now).unwrap();
+        queue
+            .push(command(7, TaskAction::Density { dpi: 460 }), now)
+            .unwrap();
+        queue
+            .push(command(7, TaskAction::Density { dpi: 230 }), now)
+            .unwrap();
+        let density = queue.ready(now).unwrap();
+        assert_eq!(density.command.action, TaskAction::Density { dpi: 230 });
+        queue.acknowledge(density.serial);
+        assert!(queue.ready(now).is_none());
+        assert!(
+            command(7, TaskAction::Density { dpi: 40 })
+                .validate()
+                .is_err()
+        );
+        assert!(
+            command(7, TaskAction::Density { dpi: 0 })
+                .validate()
+                .is_ok()
+        );
     }
 
     #[test]

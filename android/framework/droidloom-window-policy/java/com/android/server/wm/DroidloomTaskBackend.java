@@ -11,6 +11,7 @@ import android.app.WaitResult;
 import android.content.ComponentName;
 import android.content.Intent;
 import android.content.pm.ActivityInfo;
+import android.content.res.Configuration;
 import android.graphics.Rect;
 import android.os.Binder;
 import android.os.Handler;
@@ -269,11 +270,37 @@ final class DroidloomTaskBackend {
                 case 5:
                     setHostHidden(task, command[4] == 4);
                     break;
+                case 6:
+                    if (command[5] != 0 && (command[5] < 72 || command[5] > 1280)) return;
+                    setHostDensity(task, (int) command[5]);
+                    break;
                 default:
                     throw new IllegalArgumentException("Unknown host window command");
             }
         }
         schedule();
+    }
+
+    /**
+     * Lays the task out at the density of the host output its window is on,
+     * so it keeps its size in that output's units on every screen. 0, or the
+     * display's own density, drops the override. Activities that do not
+     * handle density changes relaunch, as for any configuration change.
+     */
+    private void setHostDensity(Task task, int dpi) {
+        final int inherited = task.getParent().getConfiguration().densityDpi;
+        final int wanted = dpi == 0 || dpi == inherited
+                ? Configuration.DENSITY_DPI_UNDEFINED : dpi;
+        final Configuration requested = task.getRequestedOverrideConfiguration();
+        if (requested.densityDpi == wanted) return;
+        final Configuration changed = new Configuration(requested);
+        changed.densityDpi = wanted;
+        task.onRequestedOverrideConfigurationChanged(changed);
+        // As WindowOrganizerController does for a configuration-only change.
+        task.forAllActivities(r -> {
+            if (r.isVisibleRequested()) r.ensureActivityConfiguration(true /* ignoreVisibility */);
+        });
+        mService.mWindowManager.mWindowPlacerLocked.requestTraversal();
     }
 
     /**

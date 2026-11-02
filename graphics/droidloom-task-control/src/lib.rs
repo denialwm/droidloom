@@ -11,7 +11,7 @@ use thiserror::Error;
 
 mod commands;
 pub mod framework;
-pub use commands::{CommandQueue, PendingCommand, TaskAction, TaskCommand};
+pub use commands::{CommandQueue, PendingCommand, TASK_DENSITY_DPI, TaskAction, TaskCommand};
 
 /// Protocol marker at the start of each sequenced-packet record.
 pub const MAGIC: [u8; 4] = *b"DLTC";
@@ -522,6 +522,7 @@ pub fn encode_response(response: &ControlResponse) -> Result<Vec<u8>, CodecError
                 TaskAction::Close => (3, 0, 0),
                 TaskAction::Hide => (4, 0, 0),
                 TaskAction::Show => (5, 0, 0),
+                TaskAction::Density { dpi } => (6, dpi, 0),
             };
             payload.u32(kind);
             payload.u32(width);
@@ -611,6 +612,7 @@ pub fn decode_response(record: &[u8]) -> Result<ControlResponse, CodecError> {
                 (3, 0, 0) => TaskAction::Close,
                 (4, 0, 0) => TaskAction::Hide,
                 (5, 0, 0) => TaskAction::Show,
+                (6, dpi, 0) => TaskAction::Density { dpi },
                 _ => return Err(CodecError::InvalidValue("task command action")),
             };
             let command = TaskCommand {
@@ -893,6 +895,7 @@ mod tests {
             TaskAction::Close,
             TaskAction::Hide,
             TaskAction::Show,
+            TaskAction::Density { dpi: 230 },
         ] {
             let response = ControlResponse::TaskCommand {
                 request_id: 9,
@@ -906,7 +909,7 @@ mod tests {
             };
             let mut bytes = encode_response(&response).unwrap();
             assert_eq!(decode_response(&bytes).unwrap(), response);
-            bytes[HEADER_BYTES + 28..HEADER_BYTES + 32].copy_from_slice(&6_u32.to_le_bytes());
+            bytes[HEADER_BYTES + 28..HEADER_BYTES + 32].copy_from_slice(&7_u32.to_le_bytes());
             assert!(decode_response(&bytes).is_err());
         }
         for command in [
@@ -977,7 +980,9 @@ mod tests {
 
     #[test]
     fn framework_publication_carries_keep_screen_on() {
-        for (activate, keep_screen_on) in [(false, false), (true, false), (false, true), (true, true)] {
+        for (activate, keep_screen_on) in
+            [(false, false), (true, false), (false, true), (true, true)]
+        {
             let request = super::ControlRequest::PublishFramework {
                 request_id: 7,
                 package: "org.example.app".into(),
