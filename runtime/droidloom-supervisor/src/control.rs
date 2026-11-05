@@ -627,7 +627,11 @@ impl Daemon {
         }
         self.progress.report("Starting Android again...");
         match (result, self.start(peer_uid, spec_path)) {
-            (Ok(message), Ok(_)) => Ok(self.success(format!("{message}; Android started again"))),
+            // A restore's warning about another release stays on its own line.
+            (Ok(message), Ok(_)) => Ok(self.success(match message.split_once('\n') {
+                Some((done, warning)) => format!("{done}; Android started again\n{warning}"),
+                None => format!("{message}; Android started again"),
+            })),
             (Err(error), Ok(_)) => Err(ControlError::Invalid(format!(
                 "{job} failed: {error}; Android started again on the storage it had"
             ))),
