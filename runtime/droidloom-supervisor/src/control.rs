@@ -93,6 +93,18 @@ pub enum ControlRequest {
         /// Android user identifier.
         user: u32,
     },
+    /// Write the cell's whole storage to the file descriptor supplied on this
+    /// connection. Android stops while it runs and starts again after.
+    Backup {
+        /// Cell specification whose storage is written.
+        spec: PathBuf,
+    },
+    /// Replace the cell's storage with the archive read from the file
+    /// descriptor supplied on this connection. Root only.
+    Restore {
+        /// Cell specification whose storage is replaced.
+        spec: PathBuf,
+    },
     /// Start the cell if it is not already running.
     Start {
         /// Cell specification to validate and activate.
@@ -448,6 +460,8 @@ impl Daemon {
                 size,
             } => self.application_icons(peer_uid, &components, user, size),
             ControlRequest::Install { user } => self.install(peer_uid, user, file),
+            ControlRequest::Backup { spec } => self.storage(peer_uid, &spec, file, false),
+            ControlRequest::Restore { spec } => self.storage(peer_uid, &spec, file, true),
             ControlRequest::Start { spec } => self.start(peer_uid, &spec),
             ControlRequest::Stop => self.stop(peer_uid),
             ControlRequest::Restart { spec } => self.restart(peer_uid, &spec),
@@ -564,6 +578,127 @@ impl Daemon {
             self.stop(peer_uid)?;
         }
         self.start(peer_uid, spec_path)
+    }
+
+    /// A backup or restore runs on stopped storage, so it stops the cell
+    /// first and starts it again once done, whatever the outcome.
+    fn storage(
+        &mut self,
+        peer_uid: u32,
+        spec_path: &Path,
+        file: Option<fs::File>,
+        restore: bool,
+    ) -> Result<ControlResponse, ControlError> {
+        let spec = load_authorized_spec(peer_uid, spec_path, &self.config.spec_directory)?;
+        let job = if restore { "restore" } else { "backup" };
+        if restore && peer_uid != 0 {
+            return Err(ControlError::Invalid(
+                "only root may restore Android storage".into(),
+            ));
+        }
+        let file = file.ok_or_else(|| {
+            ControlError::Invalid(format!(
+                "{job} requires a file descriptor; update both droidloomctl and droidloomd"
+            ))
+        })?;
+        let was_running = match &self.active {
+            Some(active) if active.spec == spec => true,
+            Some(active) => {
+                return Err(ControlError::Invalid(format!(
+                    "cell {} is running from {}",
+                    active.spec.id(),
+                    active.spec_path.display()
+                )));
+            }
+            None => false,
+        };
+        if was_running {
+            self.progress.report("Stopping Android...");
+            self.stop(peer_uid)?;
+        }
+        self.progress.report(if restore {
+            "Android is stopped. Unpacking and checking the backup..."
+        } else {
+            "Android is stopped. Writing the backup..."
+        });
+        let result = self.run_storage_job(spec_path, file, restore);
+        if !was_running || self.progress.shutting_down() {
+            return result.map(|message| self.success(message));
+        }
+        self.progress.report("Starting Android again...");
+        match (result, self.start(peer_uid, spec_path)) {
+            (Ok(message), Ok(_)) => Ok(self.success(format!("{message}; Android started again"))),
+            (Err(error), Ok(_)) => Err(ControlError::Invalid(format!(
+                "{job} failed: {error}; Android started again on the storage it had"
+            ))),
+            (Ok(message), Err(error)) => Err(ControlError::Invalid(format!(
+                "{message}, but Android did not start again: {error}"
+            ))),
+            (Err(error), Err(start)) => Err(ControlError::Invalid(format!(
+                "{job} failed: {error}; Android did not start again: {start}"
+            ))),
+        }
+    }
+
+    fn run_storage_job(
+        &self,
+        spec_path: &Path,
+        file: fs::File,
+        restore: bool,
+    ) -> Result<String, ControlError> {
+        use std::os::unix::process::CommandExt;
+        use std::process::{Command, Stdio};
+        let mut command = Command::new(&self.config.supervisor);
+        command
+            .arg(if restore { "storage-restore" } else { "storage-backup" })
+            .arg("--spec")
+            .arg(spec_path)
+            .stderr(Stdio::inherit())
+            // One group, so a cancelled job takes its tar and zstd with it.
+            .process_group(0);
+        if restore {
+            command.stdin(file).stdout(Stdio::piped());
+        } else {
+            command.stdin(Stdio::null()).stdout(file);
+        }
+        let mut child = command
+            .spawn()
+            .map_err(|source| io_error("start the storage job", source))?;
+        // The archive's end reaches the reader only once no copy stays open here.
+        drop(command);
+        let pid = libc::pid_t::try_from(child.id()).expect("child PIDs fit pid_t");
+        let status = loop {
+            if let Some(status) = child
+                .try_wait()
+                .map_err(|source| io_error("wait for the storage job", source))?
+            {
+                break status;
+            }
+            if let Err(error) = self.progress.check_cancelled() {
+                // SAFETY: kill only signals the job's own process group.
+                unsafe { libc::kill(-pid, libc::SIGKILL) };
+                let _ = child.wait();
+                return Err(io_error("storage job cancelled", error));
+            }
+            thread::sleep(Duration::from_millis(200));
+        };
+        let mut output = String::new();
+        if let Some(mut stdout) = child.stdout.take() {
+            stdout
+                .read_to_string(&mut output)
+                .map_err(|source| io_error("read the storage job's result", source))?;
+        }
+        if !status.success() {
+            return Err(ControlError::Invalid(format!(
+                "the storage job failed ({status}); the reason is in the droidloomd journal"
+            )));
+        }
+        let output = output.trim();
+        Ok(if output.is_empty() {
+            "backup written".to_owned()
+        } else {
+            output.to_owned()
+        })
     }
 
     fn status(&self, peer_uid: u32) -> Result<ControlResponse, ControlError> {
@@ -1163,6 +1298,21 @@ fn install_apk_reporting(
     )
 }
 
+/// Back up or restore the cell's storage through `file`, which the caller
+/// opened: an archive to write for `Backup`, one to read for `Restore`.
+///
+/// # Errors
+/// Returns transport or protocol failures. Job failures are returned in the
+/// control response.
+pub fn storage_with_progress(
+    socket: &Path,
+    request: &ControlRequest,
+    file: &fs::File,
+    report: &mut dyn FnMut(&str),
+) -> Result<ControlResponse, ControlError> {
+    progress::request(socket, request, Some(file), Some(report))
+}
+
 fn bind_listener(socket: &Path) -> Result<UnixListener, ControlError> {
     let parent = socket.parent().ok_or_else(|| {
         ControlError::Invalid("lifecycle socket must have a parent directory".into())
@@ -1227,9 +1377,16 @@ fn receive_request(
         progress::IncomingRequest::Progress(envelope) => (envelope.request, true),
         progress::IncomingRequest::Legacy(request) => (request, false),
     };
-    if file.is_some() && !matches!(request, ControlRequest::Install { .. }) {
+    if file.is_some()
+        && !matches!(
+            request,
+            ControlRequest::Install { .. }
+                | ControlRequest::Backup { .. }
+                | ControlRequest::Restore { .. }
+        )
+    {
         return Err(ControlError::Invalid(
-            "only install accepts a file descriptor".into(),
+            "only install, backup and restore accept a file descriptor".into(),
         ));
     }
     Ok((peer_uid, request, file, streaming))

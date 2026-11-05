@@ -137,10 +137,13 @@ droidloomctl window-mode windowed --width 900 --height 1200 --package org.mozill
 droidloomctl dpi 160
 droidloomctl logs com.whatsapp -n 500
 droidloomctl crashes
+droidloomctl backup ~/android-backup.tar.zst
 droidloomctl stop
 ```
 
-`install` updates an app that is already installed and keeps its data. See
+`install` updates an app that is already installed and keeps its data.
+`backup` writes all of Android's storage to one file, and `sudo droidloomctl
+restore FILE` puts it back ([details](docs/INSTALL.md#back-up-and-restore-android)). See
 [desktop integration](docs/desktop-integration.md) for windows, clipboard,
 notifications and diagnostics.
 

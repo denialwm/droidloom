@@ -16,6 +16,8 @@ droidloom-task-control = { path = "../../graphics/droidloom-task-control" }
 libc.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
+hex.workspace = true
 thiserror.workspace = true
 tempfile.workspace = true
 

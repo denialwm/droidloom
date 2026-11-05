@@ -17,6 +17,8 @@ use super::{
 
 pub(super) const LOG_HINT: &str = "Check the logs with:\n  journalctl -b -u droidloomd.service -n 200 --no-pager\n  journalctl --user -b -u droidloom.service -n 100 --no-pager";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(250);
+/// A backup or restore moves the whole storage, many gigabytes on a phone.
+const STORAGE_TIMEOUT: Duration = Duration::from_secs(3 * 60 * 60);
 const UPDATE_INTERVAL: Duration = Duration::from_secs(10);
 
 // Legacy clients still send a bare ControlRequest and receive one JSON object.
@@ -120,6 +122,18 @@ impl Reporter {
         }
     }
 
+    pub fn shutting_down(&self) -> bool {
+        self.shutdown.as_ref().is_some_and(|fd| {
+            let mut entry = libc::pollfd {
+                fd: fd.as_raw_fd(),
+                events: libc::POLLIN,
+                revents: 0,
+            };
+            // SAFETY: the descriptor stays owned until poll returns.
+            unsafe { libc::poll(&raw mut entry, 1, 0) > 0 }
+        })
+    }
+
     pub fn check_cancelled(&self) -> io::Result<()> {
         self.poll(None, Duration::ZERO).map(|_| ())
     }
@@ -203,10 +217,14 @@ pub(super) fn request(
         .write_all(remaining)
         .and_then(|()| stream.shutdown(std::net::Shutdown::Write))
         .map_err(|e| io_error("send lifecycle request", e))?;
+    let timeout = match request {
+        ControlRequest::Backup { .. } | ControlRequest::Restore { .. } => STORAGE_TIMEOUT,
+        _ => REQUEST_TIMEOUT,
+    };
     read_response(
         &mut stream,
         started,
-        REQUEST_TIMEOUT,
+        timeout,
         UPDATE_INTERVAL,
         progress,
     )

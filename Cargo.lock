@@ -746,9 +746,11 @@ dependencies = [
  "droidloom-cpu-placement",
  "droidloom-task-control",
  "droidloom-window-policy",
+ "hex",
  "libc",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
  "thiserror",
 ]

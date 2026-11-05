@@ -35,6 +35,7 @@ pub fn ensure() -> Result<()> {
         ("nsenter", "util-linux"),
         ("patch", "patch"),
         ("tar", "tar"),
+        ("zstd", "zstd"),
     ] {
         if !available(command) {
             if !arch {

@@ -20,6 +20,7 @@ pub mod host_storage;
 mod identity;
 pub mod linux_plan;
 mod package_cache;
+pub mod storage_backup;
 pub mod storage_migration;
 mod tracing;
 mod user_folders;

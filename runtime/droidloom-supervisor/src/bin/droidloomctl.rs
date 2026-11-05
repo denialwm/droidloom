@@ -46,6 +46,24 @@ enum Command {
         #[arg(long, default_value_t = 0)]
         user: u32,
     },
+    /// Write Android's whole storage to FILE, or to standard output for -.
+    /// Android stops while it runs and starts again after.
+    Backup {
+        /// New archive file (never overwritten), or - for standard output.
+        file: PathBuf,
+        /// Cell specification.
+        #[arg(long, default_value = DEFAULT_CELL_SPEC)]
+        spec: PathBuf,
+    },
+    /// Replace Android's storage with a backup from FILE, or from standard
+    /// input for -. Needs root. The replaced storage stays on disk beside it.
+    Restore {
+        /// Archive written by backup, or - for standard input.
+        file: PathBuf,
+        /// Cell specification.
+        #[arg(long, default_value = DEFAULT_CELL_SPEC)]
+        spec: PathBuf,
+    },
     /// Update a source installation, or show pacman package-update instructions.
     Update {
         /// Discard updater-owned build outputs before rebuilding.
@@ -221,6 +239,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             eprintln!("{message}");
         }
     };
+    if let Command::Backup { file, spec } | Command::Restore { file, spec } = &cli.command {
+        return storage(&cli, file, spec, &mut report);
+    }
     let wait_after_start = !cli.cell
         && matches!(
             cli.command,
@@ -236,6 +257,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         let control_request = match cli.command {
             Command::Install { .. } => unreachable!("handled with its APK file descriptor"),
+            Command::Backup { .. } | Command::Restore { .. } => {
+                unreachable!("handled with the archive's file descriptor")
+            }
             Command::Gpu { .. } => unreachable!("handled by package setup"),
             Command::Update { clean, build_only } => {
                 if PathBuf::from("/usr/share/droidloom/package.json").is_file() {
@@ -385,6 +409,56 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 println!("{}\t{}", application.name, application.component);
             }
         }
+    }
+    if response.ok {
+        Ok(())
+    } else {
+        Err(response.message.into())
+    }
+}
+
+/// The archive travels as a descriptor this client opened, so droidloomd
+/// writes or reads only what the caller may. Standard output carries the
+/// archive for `backup -`, so every message goes to standard error.
+fn storage(
+    cli: &Cli,
+    path: &std::path::Path,
+    spec: &std::path::Path,
+    report: &mut dyn FnMut(&str),
+) -> Result<(), Box<dyn std::error::Error>> {
+    use std::io::IsTerminal;
+    use std::os::fd::AsFd;
+    let restore = matches!(cli.command, Command::Restore { .. });
+    let stream = path == std::path::Path::new("-");
+    let file = match (restore, stream) {
+        (false, true) => {
+            if std::io::stdout().is_terminal() {
+                return Err("refusing to write the backup to a terminal".into());
+            }
+            fs::File::from(std::io::stdout().as_fd().try_clone_to_owned()?)
+        }
+        (true, true) => fs::File::from(std::io::stdin().as_fd().try_clone_to_owned()?),
+        (false, false) => fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(path)
+            .map_err(|error| format!("create {}: {error}", path.display()))?,
+        (true, false) => {
+            fs::File::open(path).map_err(|error| format!("open {}: {error}", path.display()))?
+        }
+    };
+    let request = if restore {
+        ControlRequest::Restore { spec: spec.into() }
+    } else {
+        ControlRequest::Backup { spec: spec.into() }
+    };
+    let response =
+        droidloom_supervisor::control::storage_with_progress(&cli.socket, &request, &file, report)?;
+    if cli.json {
+        eprintln!("{}", serde_json::to_string_pretty(&response)?);
+    } else if response.ok {
+        eprintln!("{}", response.message);
     }
     if response.ok {
         Ok(())

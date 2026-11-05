@@ -53,6 +53,22 @@ enum Command {
         #[arg(long, hide = true)]
         private_worker: bool,
     },
+    /// Private step of droidloomd: writes the stopped cell's storage as an
+    /// archive to standard output.
+    #[command(hide = true)]
+    StorageBackup {
+        /// Cell specification JSON.
+        #[arg(long)]
+        spec: PathBuf,
+    },
+    /// Private step of droidloomd: replaces the stopped cell's storage with
+    /// the archive on standard input.
+    #[command(hide = true)]
+    StorageRestore {
+        /// Cell specification JSON.
+        #[arg(long)]
+        spec: PathBuf,
+    },
     /// Private namespace re-entry used only by `development-run`.
     #[command(hide = true)]
     DevelopmentEnter {
@@ -105,6 +121,12 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 &destination,
                 private_worker,
             )?;
+        }
+        Command::StorageBackup { spec } => {
+            droidloom_supervisor::storage_backup::backup(&load_spec(&spec)?.data_dir)?;
+        }
+        Command::StorageRestore { spec } => {
+            droidloom_supervisor::storage_backup::restore(&load_spec(&spec)?.data_dir)?;
         }
         Command::DevelopmentEnter { spec } => {
             let spec = load_spec(&spec)?;
