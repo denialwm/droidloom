@@ -37,7 +37,7 @@ enum Action {
     Prepare,
     /// List the host's GPUs, or choose the one Android renders on.
     Gpu {
-        /// auto, amd, intel, nvidia or a PCI address.
+        /// auto, amd, intel, nvidia, qualcomm or a PCI address.
         choice: Option<GpuChoice>,
     },
     #[command(hide = true)]
@@ -173,7 +173,7 @@ fn chosen_gpu(spec: Option<&Value>) -> Result<GpuChoice> {
 /// The rendering `choice` names among the GPUs `sys` lists.
 fn graphics(sys: &Path, choice: &GpuChoice) -> Result<Graphics> {
     Graphics::resolve(choice, &HostGpu::list(sys)?).map_err(|error| {
-        format!("Droidloom needs an AMD, Intel or NVIDIA GPU: {error}. Configuration was not changed.").into()
+        format!("Droidloom needs an AMD, Intel, NVIDIA or Qualcomm Adreno GPU: {error}. Configuration was not changed.").into()
     })
 }
 /// What the GPU server reads: the forwarded GPU, if any.
@@ -392,7 +392,7 @@ fn gpu(choice: Option<GpuChoice>) -> Result<()> {
             Ok(graphics) => println!("GPU choice {current}: {graphics}."),
             Err(error) => println!("GPU choice {current}: {error}"),
         }
-        println!("Choose with: droidloomctl gpu auto|amd|intel|nvidia|PCI-ADDRESS");
+        println!("Choose with: droidloomctl gpu auto|amd|intel|nvidia|qualcomm|PCI-ADDRESS");
         return Ok(());
     };
     let graphics = graphics(sys, &choice)?;
@@ -534,7 +534,7 @@ mod tests {
         recipe
     }
     fn drm(node: u32) -> Graphics {
-        let gpu = HostGpu { render_node: format!("/dev/dri/renderD{node}"), pci: "0000:0a:00.0".into(), driver: "amdgpu".into() };
+        let gpu = HostGpu { render_node: format!("/dev/dri/renderD{node}"), device: "0000:0a:00.0".into(), driver: "amdgpu".into() };
         Graphics::resolve(&GpuChoice::Auto, &[gpu]).unwrap()
     }
     #[test]

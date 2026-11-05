@@ -163,7 +163,7 @@ enum Command {
     /// List the host's GPUs, or choose the one Android renders on. An NVIDIA
     /// GPU renders through GPU forwarding, AMD and Intel natively.
     Gpu {
-        /// auto (NVIDIA when present), amd, intel, nvidia or a PCI address.
+        /// auto (NVIDIA when present), amd, intel, nvidia, qualcomm or a PCI address.
         choice: Option<droidloom_supervisor::host_gpu::GpuChoice>,
     },
     /// Persist how size-less initial Wayland configures are resolved.

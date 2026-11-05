@@ -1,11 +1,12 @@
 //! Which host GPU renders for Android, and how.
 //!
-//! AMD and Intel GPUs have Android drivers (Mesa), so Android renders on them
-//! natively. NVIDIA's driver has no Android build: an NVIDIA GPU renders
+//! AMD, Intel and Qualcomm Adreno GPUs have Android drivers (Mesa), so
+//! Android renders on them natively. NVIDIA's driver has no Android build: an NVIDIA GPU renders
 //! through `droidloom-gpu-server`, and the cell's own render node stays on an
 //! AMD or Intel GPU when the host has one. The choice is `auto`, a vendor or
-//! a PCI address; GPUs are named by PCI address because render-node numbers
-//! follow driver load order and can change between boots.
+//! a PCI address; GPUs are named by PCI address, or an Adreno, which sits on
+//! the SoC, by its platform device, because render-node numbers follow driver
+//! load order and can change between boots.
 
 use std::fmt::{self, Display};
 use std::path::Path;
@@ -20,15 +21,17 @@ use crate::GraphicsBackend;
 pub struct HostGpu {
     /// `/dev/dri/renderD<number>`.
     pub render_node: String,
-    /// PCI address, e.g. `0000:04:00.0`.
-    pub pci: String,
+    /// PCI address, e.g. `0000:04:00.0`, or for an Adreno its platform
+    /// device, e.g. `ae01000.display-controller`.
+    pub device: String,
     /// Kernel driver, e.g. `amdgpu`.
     pub driver: String,
 }
 
 impl HostGpu {
-    /// Every render node that `sys` (`/sys/class/drm`) lists with a PCI
-    /// device and a bound driver, in node order.
+    /// Every render node that `sys` (`/sys/class/drm`) lists with a bound
+    /// driver, on a PCI device or, for an Adreno, a platform device, in node
+    /// order.
     pub fn list(sys: &Path) -> std::io::Result<Vec<Self>> {
         let mut nodes = std::fs::read_dir(sys)?.collect::<std::io::Result<Vec<_>>>()?;
         nodes.sort_by_key(|n| n.file_name());
@@ -42,16 +45,16 @@ impl HostGpu {
                 continue;
             }
             let device = node.path().join("device");
-            let (Ok(pci), Ok(driver)) = (std::fs::canonicalize(&device), std::fs::canonicalize(device.join("driver"))) else {
+            let (Ok(device), Ok(driver)) = (std::fs::canonicalize(&device), std::fs::canonicalize(device.join("driver"))) else {
                 continue;
             };
-            let (Some(pci), Some(driver)) = (pci.file_name().and_then(|p| p.to_str()), driver.file_name().and_then(|d| d.to_str())) else {
+            let (Some(device), Some(driver)) = (device.file_name().and_then(|p| p.to_str()), driver.file_name().and_then(|d| d.to_str())) else {
                 continue;
             };
-            if !is_pci_address(pci) {
-                continue;
+            let gpu = Self { render_node: format!("/dev/dri/{name}"), device: device.into(), driver: driver.into() };
+            if is_pci_address(device) || gpu.vendor() == Some(Vendor::Qualcomm) {
+                gpus.push(gpu);
             }
-            gpus.push(Self { render_node: format!("/dev/dri/{name}"), pci: pci.into(), driver: driver.into() });
         }
         Ok(gpus)
     }
@@ -62,19 +65,20 @@ impl HostGpu {
             "amdgpu" => Some(Vendor::Amd),
             "i915" | "xe" => Some(Vendor::Intel),
             "nvidia" => Some(Vendor::Nvidia),
+            "msm" | "msm_dpu" | "msm_mdp5" => Some(Vendor::Qualcomm),
             _ => None,
         }
     }
 
     fn native(&self) -> bool {
-        matches!(self.vendor(), Some(Vendor::Amd | Vendor::Intel))
+        matches!(self.vendor(), Some(Vendor::Amd | Vendor::Intel | Vendor::Qualcomm))
     }
 }
 
 impl Display for HostGpu {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let vendor = self.vendor().map_or("unsupported", Vendor::label);
-        write!(f, "{vendor} GPU {} ({}, {})", self.pci, self.driver, self.render_node)
+        write!(f, "{vendor} GPU {} ({}, {})", self.device, self.driver, self.render_node)
     }
 }
 
@@ -87,6 +91,8 @@ pub enum Vendor {
     Intel,
     /// `nvidia`, rendering through the GPU server.
     Nvidia,
+    /// `msm`, an Adreno on a Qualcomm SoC, rendering natively.
+    Qualcomm,
 }
 
 impl Vendor {
@@ -95,6 +101,7 @@ impl Vendor {
             Self::Amd => "AMD",
             Self::Intel => "Intel",
             Self::Nvidia => "NVIDIA",
+            Self::Qualcomm => "Qualcomm",
         }
     }
 }
@@ -103,7 +110,7 @@ impl Vendor {
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
 pub enum GpuChoice {
-    /// NVIDIA when the host has one, else the first AMD or Intel GPU.
+    /// NVIDIA when the host has one, else the first AMD, Intel or Qualcomm GPU.
     #[default]
     Auto,
     /// The first GPU of this vendor.
@@ -128,10 +135,11 @@ impl FromStr for GpuChoice {
             "amd" => Self::Vendor(Vendor::Amd),
             "intel" => Self::Vendor(Vendor::Intel),
             "nvidia" => Self::Vendor(Vendor::Nvidia),
+            "qualcomm" => Self::Vendor(Vendor::Qualcomm),
             pci if is_pci_address(pci) => Self::Pci(pci.into()),
             // `lspci` leaves out the PCI domain.
             pci if is_pci_address(&format!("0000:{pci}")) => Self::Pci(format!("0000:{pci}")),
-            _ => return Err(format!("GPU must be auto, amd, intel, nvidia or a PCI address such as 0000:04:00.0, not {value:?}")),
+            _ => return Err(format!("GPU must be auto, amd, intel, nvidia, qualcomm or a PCI address such as 0000:04:00.0, not {value:?}")),
         })
     }
 }
@@ -189,7 +197,7 @@ impl Graphics {
         let renderer = match choice {
             GpuChoice::Auto => supported().find(|g| g.vendor() == Some(Vendor::Nvidia)).or_else(|| supported().next()),
             GpuChoice::Vendor(vendor) => supported().find(|g| g.vendor() == Some(*vendor)),
-            GpuChoice::Pci(pci) => gpus.iter().find(|g| g.pci == *pci),
+            GpuChoice::Pci(pci) => gpus.iter().find(|g| g.device == *pci),
         };
         let found = || {
             if gpus.is_empty() {
@@ -200,7 +208,7 @@ impl Graphics {
         };
         let renderer = renderer.ok_or_else(|| format!("no GPU matches {choice}; found: {}", found()))?;
         if renderer.vendor().is_none() {
-            return Err(format!("{renderer} has no Droidloom driver; AMD (amdgpu), Intel (i915, xe) and NVIDIA (nvidia) are supported"));
+            return Err(format!("{renderer} has no Droidloom driver; AMD (amdgpu), Intel (i915, xe), NVIDIA (nvidia) and Qualcomm Adreno (msm) are supported"));
         }
         Ok(if renderer.native() {
             Self { renderer: renderer.clone(), render_node: renderer.render_node.clone(), backend: GraphicsBackend::Drm }
@@ -212,7 +220,7 @@ impl Graphics {
 
     /// The forwarded GPU's PCI address, for `droidloom-gpu-server`.
     pub fn forwarded(&self) -> Option<&str> {
-        (self.backend == GraphicsBackend::Forwarding).then_some(self.renderer.pci.as_str())
+        (self.backend == GraphicsBackend::Forwarding).then_some(self.renderer.device.as_str())
     }
 }
 
@@ -234,7 +242,7 @@ mod tests {
     use super::*;
 
     fn gpu(node: u32, pci: &str, driver: &str) -> HostGpu {
-        HostGpu { render_node: format!("/dev/dri/renderD{node}"), pci: pci.into(), driver: driver.into() }
+        HostGpu { render_node: format!("/dev/dri/renderD{node}"), device: pci.into(), driver: driver.into() }
     }
 
     #[test]
@@ -252,10 +260,24 @@ mod tests {
         node("renderD129", "0000:0a:00.0", "amdgpu");
         node("renderD128", "0000:04:00.0", "nvidia");
         std::fs::create_dir_all(root.join("drm/renderD130/device")).unwrap();
+        node("renderD131", "ae01000.display-controller", "msm_dpu");
+        node("renderD132", "1c00000.gpu", "vc4");
         assert_eq!(
             HostGpu::list(&root.join("drm")).unwrap(),
-            [gpu(128, "0000:04:00.0", "nvidia"), gpu(129, "0000:0a:00.0", "amdgpu")]
+            [
+                gpu(128, "0000:04:00.0", "nvidia"),
+                gpu(129, "0000:0a:00.0", "amdgpu"),
+                gpu(131, "ae01000.display-controller", "msm_dpu")
+            ]
         );
+    }
+
+    #[test]
+    fn an_adreno_renders_natively() {
+        let phone = [gpu(128, "ae01000.display-controller", "msm_dpu")];
+        let auto = Graphics::resolve(&GpuChoice::Auto, &phone).unwrap();
+        assert_eq!((auto.render_node.as_str(), auto.backend, auto.forwarded()), ("/dev/dri/renderD128", GraphicsBackend::Drm, None));
+        assert_eq!(Graphics::resolve(&"qualcomm".parse().unwrap(), &phone).unwrap(), auto);
     }
 
     #[test]
@@ -285,7 +307,7 @@ mod tests {
 
     #[test]
     fn choices_round_trip_and_reject_anything_else() {
-        for text in ["auto", "amd", "intel", "nvidia", "0000:04:00.0"] {
+        for text in ["auto", "amd", "intel", "nvidia", "qualcomm", "0000:04:00.0"] {
             assert_eq!(text.parse::<GpuChoice>().unwrap().to_string(), text);
         }
         assert_eq!("NVIDIA".parse::<GpuChoice>().unwrap(), GpuChoice::Vendor(Vendor::Nvidia));
