@@ -647,8 +647,10 @@ impl Daemon {
         restore: bool,
     ) -> Result<String, ControlError> {
         use std::os::unix::process::CommandExt;
-        use std::process::{Command, Stdio};
-        let mut command = Command::new(&self.config.supervisor);
+        use std::process::Stdio;
+        // droidloomd runs on the little cores; hashing and compressing the
+        // whole storage gets every CPU.
+        let mut command = droidloom_cpu_placement::command(&self.config.supervisor);
         command
             .arg(if restore { "storage-restore" } else { "storage-backup" })
             .arg("--spec")
