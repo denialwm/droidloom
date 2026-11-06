@@ -47,35 +47,33 @@ it. Package builds use rootless Podman and need no host sudo.
 
 ## Phone release loop
 
-ARM64 phones (aston, roadstr, iceland) get a release built on this workstation
-from main's last commit, only through the workspace's build tool: merge into
-main first (workspace AGENTS.md, "Building for a phone"), then
-`/mnt/development/denial-os/tools/build start droidloom DEVICE` and
-`tools/build wait DEVICE`. It runs android-build, host-build and bundle-stage
-with this checkout's `.work` caches, so repeats are incremental. Never run
-those steps by hand. STAGE is `/mnt/development/denial-os/builds/DEVICE/droidloom/latest`,
-the newest build that verified.
+Every ARM64 phone runs the aarch64 package pair, set up on the phone by
+`droidloom-package-helper setup`: its user, UID, data folder and GPU come from
+the phone, never from this checkout. A phone tries main's last commit as a
+candidate package pair built on this workstation, only through the workspace's
+build tool: merge into main first (workspace AGENTS.md, "Building for a
+phone"), then `/mnt/development/denial-os/tools/build start droidloom DEVICE`
+and `tools/build wait DEVICE`. It runs android-build, host-build,
+`droidloom-update candidate-stage` and `droidloom-package candidate` with this
+checkout's `.work` caches, so repeats are incremental. Never run those steps by
+hand. The packages are the same for every phone; DEVICE only picks the lock
+and the output folder, `/mnt/development/denial-os/builds/DEVICE/droidloom/latest`.
 
-Send `STAGE/` (the slash follows the link) over the phone's one stage,
-`/var/lib/droidloom/stage/current`, with
-`rsync -a --sparse --delete --compress --compress-choice=zstd`: the previous
-content is the delta basis, so only changed files travel. Run
-`STAGE/usr/bin/droidloom-update verify STAGE` there before activating.
+A candidate is pkgrel `R.N`: N commits after release R of
+`packaging/arch/version.json`, after the published R and before R + 1.
+Install both with `pacman -U`; the package hooks stop Droidloom and keep its
+data and setup. Copy them with `cat FILE | ssh HOST 'cat > /tmp/NAME'`.
+`pacman -Syu` goes back to the published release.
 
-Activate on the phone as root:
-1. Stop `droidloom.service` and `droidloom-applications.service` in the desktop
-   user's manager, then `droidloomd.service`. Wait until neither
-   `droidloom-andro` nor `droidloomd` runs.
-2. `STAGE/usr/bin/droidloom-update apply STAGE --uid UID --no-start`, with the
-   UID from `packaging/devices/DEVICE.json`.
-3. Activation disables autostart. Link `/usr/lib/systemd/user/droidloom.service`
-   into the user's `~/.config/systemd/user/graphical-session.target.wants/`,
-   then reload both managers.
-4. Start `droidloomd.service`, then the user's `droidloom.service`, and wait for
-   `sys.boot_completed`.
+Google apps name one runtime release exactly. With the local add-on in
+`.work/gapps-arm64` (its version in `package-version`; built once with
+`droidloom-gapps build`, see docs/BUILDING.md), the build checks it against
+the candidate's Android images and packs `droidloom-gapps` for the candidate;
+install it in the same `pacman -U` on a phone that has it. Going back to a
+published release needs the add-on packed for that release:
+`droidloom-gapps package --base-package-version VERSION-R`.
 
-The installed releases under `/usr/lib/droidloom/releases` are the rollback;
-the stage is only the transfer copy. The user's manager is reached as root with
+The user's manager is reached as root with
 `sudo -u USER XDG_RUNTIME_DIR=/run/user/UID DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/UID/bus systemctl --user`.
 Android tools run with
 `nsenter -t $(pgrep -o -f '^/init second_stage') -a /system/bin/TOOL`.

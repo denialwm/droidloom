@@ -11,7 +11,8 @@ follow [BUILDING.md](BUILDING.md), then return here.
 - An x86_64 machine running Arch Linux, or an aarch64 machine running Arch
   Linux ARM, with a Wayland desktop.
 - An AMD, Intel or NVIDIA GPU, or on aarch64 a Qualcomm Adreno through the
-  kernel's `msm` driver. AMD, Intel and Adreno render natively. NVIDIA, on
+  kernel's `msm` driver or an Arm Mali through `panthor` or `panfrost`. AMD,
+  Intel, Adreno and Mali render natively. NVIDIA, on
   x86_64, renders through [GPU forwarding](gpu-forwarding.md) and needs the
   proprietary driver with its Vulkan driver (`nvidia-utils`) and the
   `nvidia-drm` module. With several GPUs, setup picks NVIDIA when there is one;

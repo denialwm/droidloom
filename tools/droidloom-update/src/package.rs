@@ -120,7 +120,7 @@ pub fn stage(
         &host,
         stage.path(),
     )?;
-    package_layout(repo, &host, stage.path(), arch, recipe)?;
+    package_layout(repo, &host, stage.path(), arch, recipe, None)?;
     package_notices(repo, &work, stage.path())?;
     if destination.exists() {
         fs::remove_dir_all(destination)?;
@@ -132,6 +132,48 @@ pub fn stage(
     )?;
     fs::rename(stage.path(), destination)?;
     println!("Portable package payload: {}", destination.display());
+    Ok(())
+}
+
+/// A test package payload for the phones, from the Android and host builds a
+/// phone build has already made: the published release's layout, named as
+/// candidate `candidate` of the release after it. Nothing is compiled here.
+pub fn stage_candidate(
+    repo: &Path,
+    work: &Path,
+    host: &Path,
+    base: &Path,
+    product: &str,
+    candidate: u32,
+    destination: &Path,
+) -> Result<()> {
+    let (arch, recipe) = product_target(product)?;
+    let work = work.canonicalize()?;
+    let _lock = Lock::acquire(&work.join("package-build.lock"))?;
+    let _source_lock = Lock::acquire(&work.join("aosp-source-update.lock"))?;
+    assemble::check_base(repo, base, product)?;
+    let parent = destination
+        .parent()
+        .ok_or("candidate destination has no parent")?;
+    fs::create_dir_all(parent)?;
+    let stage = tempfile::Builder::new()
+        .prefix("candidate-stage-")
+        .tempdir_in(parent)?;
+    assemble::assemble_artifacts(
+        repo,
+        &work,
+        base,
+        &work.join("android-out/target/product").join(product),
+        host,
+        stage.path(),
+    )?;
+    package_layout(repo, host, stage.path(), arch, recipe, Some(candidate))?;
+    package_notices(repo, &work, stage.path())?;
+    if destination.exists() {
+        fs::remove_dir_all(destination)?;
+    }
+    fs::rename(stage.path(), destination)?;
+    println!("Candidate package payload: {}", destination.display());
     Ok(())
 }
 
@@ -167,7 +209,14 @@ fn normalize_source_cache(source: &Path) -> Result<()> {
     Ok(())
 }
 
-fn package_layout(repo: &Path, host: &Path, stage: &Path, arch: &str, recipe: &str) -> Result<()> {
+fn package_layout(
+    repo: &Path,
+    host: &Path,
+    stage: &Path,
+    arch: &str,
+    recipe: &str,
+    candidate: Option<u32>,
+) -> Result<()> {
     let runtime = stage.join("runtime");
     let image = stage.join("image");
     fs::create_dir_all(image.join("usr/lib/droidloom"))?;
@@ -207,7 +256,7 @@ fn package_layout(repo: &Path, host: &Path, stage: &Path, arch: &str, recipe: &s
     )?;
     write(
         &runtime.join("usr/share/droidloom/package.json"),
-        serde_json::to_vec_pretty(&package_identity(repo, arch)?)?,
+        serde_json::to_vec_pretty(&package_identity(repo, arch, candidate)?)?,
     )?;
     for (from, to) in [
         (
@@ -237,14 +286,18 @@ fn package_layout(repo: &Path, host: &Path, stage: &Path, arch: &str, recipe: &s
     Ok(())
 }
 
-/// The release from packaging/arch/version.json and the architecture built.
-fn package_identity(repo: &Path, arch: &str) -> Result<Value> {
+/// The release from packaging/arch/version.json and the architecture built;
+/// a phone test build also names its candidate number.
+fn package_identity(repo: &Path, arch: &str, candidate: Option<u32>) -> Result<Value> {
     let mut identity: Value =
         serde_json::from_slice(&fs::read(repo.join("packaging/arch/version.json"))?)?;
-    identity
+    let fields = identity
         .as_object_mut()
-        .ok_or("package version is not an object")?
-        .insert("architecture".into(), json!(arch));
+        .ok_or("package version is not an object")?;
+    fields.insert("architecture".into(), json!(arch));
+    if let Some(candidate) = candidate {
+        fields.insert("candidate".into(), json!(candidate));
+    }
     Ok(identity)
 }
 
@@ -325,7 +378,7 @@ mod tests {
                 .unwrap();
         for product in ["droidloom_x86_64", "droidloom_arm64"] {
             let (arch, recipe) = product_target(product).unwrap();
-            let identity = package_identity(&repo, arch).unwrap();
+            let identity = package_identity(&repo, arch, None).unwrap();
             assert_eq!(identity["architecture"], arch);
             assert_eq!(identity["version"], version["version"]);
             assert_eq!(identity["release"], version["release"]);

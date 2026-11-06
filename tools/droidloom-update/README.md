@@ -43,19 +43,22 @@ ABI 1; SystemUI and the presenter require notification ABI 3.
 SurfaceFlinger and the presenter negotiate asynchronous layer commits and bounded
 allocation imports separately.
 
-For a remote ARM64 host, build everything on the x86_64 workstation. These three
-commands are the whole recipe. Every cache is persistent, so repeating them after
-a change compiles only what changed:
+For an ARM64 phone, build everything on the x86_64 workstation as a candidate
+of the aarch64 package pair. These four commands are the whole recipe, which
+the workspace's `tools/build` runs (see `AGENTS.md`). Every cache is persistent,
+so repeating them after a change compiles only what changed:
 
 ```console
 cargo run --locked -j 1 -p droidloom-update -- --jobs 4 android-build \
   --work .work/arch/build --product droidloom_arm64
 cargo run --locked -j 1 -p droidloom-update -- host-build \
   --work .work/arch/build --sysroot /path/to/arm64-root
-cargo run --locked -j 1 -p droidloom-update -- bundle-stage \
+cargo run --locked -j 1 -p droidloom-update -- candidate-stage \
   --work .work/arch/build --product droidloom_arm64 \
   --host .work/arch/build/cargo-aarch64-unknown-linux-gnu/aarch64-unknown-linux-gnu/release \
-  --base /path/to/pinned-base/images --device aston --destination /path/to/new-bundle
+  --base /path/to/pinned-base/images --candidate N --destination OUT/payload
+cargo run --locked -j 1 -p droidloom-package -- candidate \
+  --payload OUT/payload --destination OUT --work .work/arch
 ```
 
 `host-build` cross-compiles the Linux programs:
@@ -65,20 +68,17 @@ cargo run --locked -j 1 -p droidloom-update -- bundle-stage \
 - Its Cargo output is kept in `cargo-aarch64-unknown-linux-gnu` below the work
   directory.
 
-`bundle-stage --device NAME` makes the cell from two tracked files:
-- `packaging/cell-spec-arm64.json` is the recipe: images, init and the Android
-  file mappings to the release.
-- `packaging/devices/NAME.json` sets the device fields: desktop user and UID,
-  subordinate ID ranges, data directory, render node, graphics backend, GApps
-  add-on and shared storage.
+`candidate-stage` lays out the published packages' payload from those builds:
+`packaging/cell-spec-arm64.json` is the recipe, images, init and the Android
+file mappings, and the package's `cell-template.json` carries it without any
+device field. The phone's own setup adds its user, UID, data directory and
+GPU, so every phone gets the same packages. `package.json` names the release
+and the candidate N; `droidloom-package candidate` packs them with the
+release's recipe as pkgrel `R.N`, without compiling anything.
 
-A profile cannot change runtime mappings, so every device gets the same release.
-To add a device, add a profile; a release never needs hand-edited overrides.
-`--cell-spec FILE --user USER` remains available for one-off cells.
-
-`bundle-stage` verifies pinned base-image hashes and the complete compiled ABI
-pairing without reading the workstation's device configuration or activating
-either machine. Compatibility declarations are image contents, not device
+`candidate-stage` verifies pinned base-image hashes and the complete compiled
+ABI pairing without reading the workstation's device configuration or
+activating either machine. Compatibility declarations are image contents, not device
 configuration:
 - the vendor image carries the touchscreen and orientation features,
   `ro.opengles.version` and `dalvik.vm.dex2oat64.enabled` (the 64-bit-only base
@@ -93,10 +93,10 @@ configuration:
   Play implies it only for apps targeting API 20 or older;
 - the compiled `services.jar` reports the detected Vulkan level and version.
 
-Check them in a staged bundle with `debugfs -R 'cat /build.prop'` on
-`var/lib/droidloom/images/images/vendor.raw.img`.
+Check them in a staged payload with `debugfs -R 'cat /build.prop'` on
+`image/usr/lib/droidloom/images/images/vendor.raw.img`.
 
-`bundle-stage` also compiles the system-server jars that depend on Droidloom's
+`android-build` also compiles the system-server jars that depend on Droidloom's
 `services.jar`, using the host `dex2oat64` that `android-build` produces from the
 base's own source. It reads each base odex for the boot
 image, class-loader context, compiler filter, profile and app image to use,
@@ -104,33 +104,14 @@ then checks that the new odex records the same boot image checksums and
 context. The release's `framework/oat/<isa>` replaces the base directory in the
 cell; see the [runtime layout](../../docs/contracts/runtime-layout-v1.md).
 
-On the target, copy the bundle with sparse-aware rsync, then run its verifier and
-installer as root:
-
-```console
-BUNDLE/usr/bin/droidloom-update verify BUNDLE
-BUNDLE/usr/bin/droidloom-update apply BUNDLE --uid UID --no-start
-```
-
-Root is needed because the release replaces files in `/usr`, `/etc` and the
-systemd unit directories. The verifier needs `unzip` on the target.
-Installation creates the profile's `data_dir` if it does not exist. That
-`data_dir` must be new or previously migrated direct storage (see
-`docs/INSTALL.md`). An optional GApps add-on must be installed at the profile's
-`gapps_dir`, root-owned, and its manifest must name the pinned base images.
-First GApps activation requires fresh Android data. Activation disables
-automatic startup. To start at boot again, link
-`/usr/lib/systemd/system/droidloomd.service` into
-`/etc/systemd/system/multi-user.target.wants/` and the user unit into
-`~/.config/systemd/user/graphical-session.target.wants/`. Do not use
-`systemctl enable`: those unit paths are symlinks into the active release, so
-enable would pin the current release's units.
+On the phone, install both packages with `pacman -U` as root; their hooks stop
+Droidloom first and keep its data and setup. Google apps are the
+`droidloom-gapps` package, packed for the candidate (`AGENTS.md`).
 After a capability change, clear the Play Store cache, as described in
 `AGENTS.md`. The ARM64 vendor includes Freedreno and Panfrost GLES; native
 ARM execution omits the x86 ISA translator. `graphics_backend=drm_dma_heap`
 selects linear DMA-heap images for DRM drivers without a native minigbm backend,
-while retaining Mesa's native render-node selection. Transfer bundles with
-resumable, sparse-aware rsync and verify them again on the target. Kernel and
+while retaining Mesa's native render-node selection. Kernel and
 device activation still follow that target's workspace rules.
 Check the live compositor as well as `droidloom-doctor`: the presenter requires
 `wp_linux_drm_syncobj_manager_v1`, and Denial's Smithay integration requires
@@ -141,19 +122,13 @@ node supports timelines. TB373FU's initial `6.1.138-tb373fu-droidloom1` passed
 the basic host probe but lacked the eventfd ioctl; Denial also selected the
 display-only device for protocol initialization. Its matching
 `6.1.138-tb373fu-syncobj1` kernel release and Denial's render-node selection
-resolve those prerequisites. Installation can be staged with `--no-start`
-while independently managed graphics prerequisites are fixed; a successful
-basic probe does not establish graphical readiness. Panthor also exposes an
+resolve those prerequisites. A successful basic probe does not establish
+graphical readiness. Panthor also exposes an
 empty driver date, covered by the pinned libdrm patch and regression test in
 `android/mesa/README.md`.
 The ARM build also prepares Panfrost's shader compiler as a native workstation
 tool and passes it explicitly to Meson; no target executable runs on the tablet
 during compilation. Optional Mesa dependencies do not trigger fallback downloads.
-The target-side activation worker also accepts `apply BUNDLE --uid UID --no-start`
-to install a verified release while leaving Android stopped, for example while
-a separately managed kernel update is pending. Its recorded readiness remains
-`not-started`; run the normal lifecycle and catalog checks after the target is
-ready. This mode still requires administrator access and never changes a kernel.
 
 Bootstrap from the checkout as the desktop user:
 

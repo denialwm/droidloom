@@ -68,6 +68,20 @@ enum Action {
         #[arg(long, conflicts_with = "component")]
         native_bridge_source: Option<PathBuf>,
     },
+    /// Pack a phone test payload (droidloom-update candidate-stage) as the
+    /// package pair, with the release's recipe in the same Arch builder.
+    Candidate {
+        #[arg(long)]
+        payload: PathBuf,
+        /// Folder the two packages are written to.
+        #[arg(long)]
+        destination: PathBuf,
+        /// The package workflow's folder: Podman storage and build/ cache.
+        #[arg(long)]
+        work: PathBuf,
+        #[arg(long)]
+        source: Option<PathBuf>,
+    },
     /// Exercise package install, setup, reinstall and removal in disposable Arch.
     Check {
         /// Directory containing the matching runtime and image packages.
@@ -579,6 +593,96 @@ fn build(
     );
     Ok(())
 }
+/// The payload's package.json names its release and candidate; the packages
+/// get the same names, built by the recipe the published release uses.
+fn candidate(
+    explicit: Option<PathBuf>,
+    payload: &Path,
+    destination: &Path,
+    work: &Path,
+) -> Result<()> {
+    require_user()?;
+    let repo = repository(explicit)?;
+    let payload = payload.canonicalize()?;
+    let work = work.canonicalize()?;
+    let identity: serde_json::Value = serde_json::from_slice(&fs::read(
+        payload.join("runtime/usr/share/droidloom/package.json"),
+    )?)?;
+    let architecture = match identity["architecture"].as_str() {
+        Some("aarch64") => Architecture::Aarch64,
+        Some("x86_64") => Architecture::X86_64,
+        _ => return Err("candidate payload names no architecture".into()),
+    };
+    let version = Version::read(&repo, architecture)?;
+    if identity["version"].as_str() != Some(version.version.as_str())
+        || identity["release"].as_u64() != Some(u64::from(version.release))
+    {
+        return Err("candidate payload comes from another release".into());
+    }
+    let number = identity["candidate"]
+        .as_u64()
+        .ok_or("payload is not a candidate")?;
+    fs::create_dir_all(destination)?;
+    let destination = destination.canonicalize()?;
+    // The builder's makepkg folder is the package build's too.
+    let lock = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(work.join("build.lock"))?;
+    if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX) } != 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    let image = "localhost/droidloom-arch-builder";
+    match podman(&work).args(["image", "exists", image]).status()?.code() {
+        Some(0) => {}
+        Some(1) => run(podman(&work)
+            .args(["build", "--tag", image, "--file"])
+            .arg(repo.join("packaging/arch/Containerfile"))
+            .arg(repo.join("packaging/arch")))?,
+        _ => return Err("cannot access rootless Podman package storage".into()),
+    }
+    let uid = unsafe { libc::getuid() };
+    let gid = unsafe { libc::getgid() };
+    run(podman(&work)
+        .args(["run", "--rm", "--userns=keep-id", "--user"])
+        .arg(format!("{uid}:{gid}"))
+        .args([
+            "--env",
+            "CARGO_TARGET_DIR=/build/driver",
+            "--env",
+            "DROIDLOOM_PREBUILT_PAYLOAD=/payload",
+            "--env",
+        ])
+        .arg(format!("DROIDLOOM_CANDIDATE={number}"))
+        .arg("--volume")
+        .arg(format!("{}:/source:ro", repo.display()))
+        .arg("--volume")
+        .arg(format!("{}:/build:rw", work.join("build").display()))
+        .arg("--volume")
+        .arg(format!("{}:/payload:ro", payload.display()))
+        .arg("--volume")
+        .arg(format!("{}:/output:rw", destination.display()))
+        .arg(image)
+        .args([
+            "cargo",
+            "run",
+            "--locked",
+            "--release",
+            "-j",
+            "1",
+            "-p",
+            "droidloom-package",
+            "--",
+            "in-container",
+            "--architecture",
+            architecture.name(),
+            "--jobs",
+            "1",
+        ]))?;
+    println!("Candidate packages in {}", destination.display());
+    Ok(())
+}
 fn quote_path(path: &Path) -> String {
     format!("'{}'", path.to_string_lossy().replace('\'', "'\\''"))
 }
@@ -629,9 +733,15 @@ fn in_container(
     fs::create_dir_all(&packaging)?;
     remove_staging(&packaging.join("src/payload"))?;
     remove_staging(&packaging.join("pkg"))?;
+    // A phone test build is candidate N of its release: pkgrel R.N sorts
+    // after the published R and before R + 1.
+    let release = match std::env::var("DROIDLOOM_CANDIDATE") {
+        Ok(candidate) if candidate != "0" => format!("{}.{candidate}", version.release),
+        _ => version.release.to_string(),
+    };
     let recipe = fs::read_to_string(repo.join("packaging/arch/PKGBUILD.in"))?
         .replace("@VERSION@", &version.version)
-        .replace("@RELEASE@", &version.release.to_string());
+        .replace("@RELEASE@", &release);
     fs::write(packaging.join("PKGBUILD"), recipe)?;
     let temporary = tempfile::Builder::new()
         .prefix(".packages-")
@@ -655,6 +765,10 @@ fn in_container(
     command.env("DROIDLOOM_COMPONENTS", serde_json::to_string(&components)?);
     if architecture == Architecture::Aarch64 {
         command.env("DROIDLOOM_SYSROOT", "/sysroot");
+    }
+    // A candidate's payload is built already: makepkg only packs it.
+    if std::env::var_os("DROIDLOOM_PREBUILT_PAYLOAD").is_some() {
+        command.arg("--nodeps");
     }
     if let Err(error) = run(&mut command) {
         cleanup_package_staging(&packaging);
@@ -710,6 +824,9 @@ fn remove_staging(path: &Path) -> Result<()> {
 }
 fn compile(source: &Path, work: &Path, destination: &Path, jobs: usize) -> Result<()> {
     require_user()?;
+    if let Some(payload) = std::env::var_os("DROIDLOOM_PREBUILT_PAYLOAD") {
+        return install_tree(Path::new(&payload), destination);
+    }
     let selected: Vec<components::Component> = serde_json::from_str(
         &std::env::var("DROIDLOOM_COMPONENTS").unwrap_or_else(|_| "[]".into()),
     )?;
@@ -805,6 +922,12 @@ fn execute() -> Result<()> {
             component,
             native_bridge_source,
         ),
+        Action::Candidate {
+            payload,
+            destination,
+            work,
+            source,
+        } => candidate(source, &payload, &destination, &work),
         Action::Check { packages, previous } => validation::check(&packages, previous.as_deref()),
         Action::InContainer {
             architecture,

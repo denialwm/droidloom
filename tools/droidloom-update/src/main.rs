@@ -39,23 +39,20 @@ struct Args {
 }
 #[derive(Subcommand)]
 enum Action {
-    /// Seal already cross-built outputs for a remote host, without activation.
-    BundleStage {
+    /// Assemble a phone test package payload from finished Android and ARM64
+    /// host builds; droidloom-package candidate packs it.
+    CandidateStage {
         #[arg(long)]
         work: PathBuf,
         #[arg(long)]
         host: PathBuf,
         #[arg(long)]
         base: PathBuf,
-        #[arg(long, value_parser = ["droidloom_x86_64", "droidloom_arm64"])]
+        #[arg(long, value_parser = ["droidloom_arm64"])]
         product: String,
-        /// Tracked profile in packaging/devices; supplies the cell and user.
-        #[arg(long, conflicts_with_all = ["cell_spec", "user"], required_unless_present_all = ["cell_spec", "user"])]
-        device: Option<String>,
-        #[arg(long, requires = "user")]
-        cell_spec: Option<PathBuf>,
-        #[arg(long, requires = "cell_spec")]
-        user: Option<String>,
+        /// Candidate number of the release after packaging/arch/version.json's.
+        #[arg(long)]
+        candidate: u32,
         #[arg(long)]
         destination: PathBuf,
     },
@@ -189,34 +186,21 @@ fn repository(explicit: Option<PathBuf>) -> Result<PathBuf> {
 }
 fn execute(args: Args) -> Result<()> {
     match &args.command {
-        Some(Action::BundleStage {
+        Some(Action::CandidateStage {
             work,
             host,
             base,
             product,
-            device,
-            cell_spec,
-            user,
+            candidate,
             destination,
         }) => {
-            let repo = repository(args.source.clone())?;
-            let (cell, user) = match (device, cell_spec, user) {
-                (Some(device), _, _) => assemble::device_cell(&repo, product, device)?,
-                (None, Some(spec), Some(user)) => {
-                    (serde_json::from_slice(&fs::read(spec)?)?, user.clone())
-                }
-                _ => return fail("bundle-stage needs --device, or --cell-spec with --user"),
-            };
-            return assemble::stage_cross(
-                &repo,
+            return package::stage_candidate(
+                &repository(args.source.clone())?,
                 work,
                 host,
                 base,
-                assemble::CrossTarget {
-                    product,
-                    cell: &cell,
-                    user: &user,
-                },
+                product,
+                *candidate,
                 destination,
             );
         }
