@@ -29,12 +29,16 @@ root/system. Regenerate them with `python3 tools/droidloom-systemui-stubs` when
 advancing the pinned framework interfaces; `--check` verifies the checked-in
 adapters. The updater also checks their source hashes against the build inputs.
 
-Unsupported biometric prompts cancel without credential attestation, quick
+Biometric prompts open a small dialog over the asking app, in its task: title,
+subtitle, description, a status line and the app's negative button or Cancel.
+A rejected finger shows "not recognized" and keeps listening; other errors close
+it after two seconds. A prompt with no sensor to use, such as a credential-only
+request, cancels without credential attestation. Quick
 settings tile requests return a negative result, and text toasts complete their
 hidden callback and release the framework token. Screenshot requests complete
 without an image, media projection requests cancel, and shell/proto output file
-descriptors close. A cell with an Android credential configured is reported as
-locked; this initial service has no Android credential-entry UI. Desktop locking
+descriptors close. A cell with an Android credential is reported as locked until the
+framework verifies Droidloom's own; there is no credential-entry UI. Desktop locking
 and notification presentation belong to the host.
 
 The same process hosts event-driven clipboard and notification adapters. Private
@@ -94,6 +98,21 @@ These checks require the prepared AOSP Vulkan headers and a host JDK/C++ compile
 the classpath-only `com.android.virt` projection (see `android/apex-compat`).
 The service would wait forever for its maintenance binder, in the daily idle
 job and after every package removal.
+
+`0009-droidloom-host-fingerprint-enrollment.patch` makes Droidloom's fingerprint
+HAL (`android/authentication`) the owner of its enrollment. The host's fprintd
+fingers are one Android template: internal cleanup adopts it instead of deleting
+it, and drops it when the host has no fingers or Android no credential. The HAL
+replaces `generation` in `/data/vendor/droidloom-authentication` when the
+enrollment or its authenticator ID changes; the provider then enumerates again
+and reloads the authenticator IDs.
+
+`DroidloomCredential` gives Android user 0 a random 32-character password,
+stored in `/data/system/droidloom/credential` and never typed. Fingerprints and
+auth-bound keys need a credential, and the gatekeeper's secure user ID comes from
+it. At each locked boot the framework verifies it, which unlocks the user, and
+sets `sys.droidloom.credential=verified`; SystemUI then reports the keyguard gone.
+A credential Droidloom did not set is left alone, and the cell stays locked.
 
 `droidloom-window-policy` implements the Droidloom replacement for
 PhoneWindowManager. `0004-droidloom-window-policy.patch` selects it at the existing

@@ -1,0 +1,121 @@
+From 92b28e65f4e8d3b29ed21d4facac73f3ab7d69a8 Mon Sep 17 00:00:00 2001
+From: Doctor Logix <doctor.logix@gmail.com>
+Date: Sun, 8 Nov 2026 22:30:15 +0100
+Subject: [PATCH] frameworks/base: Droidloom's fingerprint HAL owns its
+ enrollment
+
+Droidloom's fingerprint HAL enrolls the host's fingers: Android cannot
+enroll or remove them. Internal cleanup adopts the template the HAL
+enumerates instead of deleting it, as debuggable builds may, and drops it
+when the host has none. The HAL replaces a file in its state folder
+whenever the enrollment or its authenticator ID changes; the provider then
+enumerates again and reloads the authenticator IDs.
+---
+ .../sensors/InternalCleanupClient.java        |  7 ++--
+ .../fingerprint/aidl/FingerprintProvider.java | 32 ++++++++++++++++++-
+ 2 files changed, 36 insertions(+), 3 deletions(-)
+
+diff --git a/services/core/java/com/android/server/biometrics/sensors/InternalCleanupClient.java b/services/core/java/com/android/server/biometrics/sensors/InternalCleanupClient.java
+index 9afd97a0a..0f8ee0349 100644
+--- a/services/core/java/com/android/server/biometrics/sensors/InternalCleanupClient.java
++++ b/services/core/java/com/android/server/biometrics/sensors/InternalCleanupClient.java
+@@ -22,6 +22,7 @@ import android.hardware.biometrics.BiometricAuthenticator;
+ import android.hardware.biometrics.BiometricsProtoEnums;
+ import android.os.Build;
+ import android.os.IBinder;
++import android.os.SystemProperties;
+ import android.util.Slog;
+ 
+ import com.android.internal.annotations.VisibleForTesting;
+@@ -90,9 +91,11 @@ public abstract class InternalCleanupClient<S extends BiometricAuthenticator.Ide
+                 // InternalEnumerateClient. Finish this client.
+                 mCallback.onClientFinished(InternalCleanupClient.this, success);
+             } else {
+-                if (mFavorHalEnrollments && Build.isDebuggable()) {
++                if (mFavorHalEnrollments && (Build.isDebuggable() || SystemProperties.getBoolean(
++                        "ro.vendor.droidloom.surfaceflinger_tasks", false))) {
+                     // on debug builds, optionally allow the HAL be the source of
+-                    // truth for enrollments
++                    // truth for enrollments. Droidloom's HAL always is: its
++                    // enrollment is the host's fingerprint reader.
+                     try {
+                         for (UserTemplate template : mUnknownHALTemplates) {
+                             Slog.i(TAG, "Adding unknown HAL template: "
+diff --git a/services/core/java/com/android/server/biometrics/sensors/fingerprint/aidl/FingerprintProvider.java b/services/core/java/com/android/server/biometrics/sensors/fingerprint/aidl/FingerprintProvider.java
+index b28676829..6f6c88de7 100644
+--- a/services/core/java/com/android/server/biometrics/sensors/fingerprint/aidl/FingerprintProvider.java
++++ b/services/core/java/com/android/server/biometrics/sensors/fingerprint/aidl/FingerprintProvider.java
+@@ -47,10 +47,12 @@ import android.hardware.fingerprint.IFingerprintServiceReceiver;
+ import android.hardware.fingerprint.IUdfpsOverlayController;
+ import android.os.Binder;
+ import android.os.Build;
++import android.os.FileObserver;
+ import android.os.Handler;
+ import android.os.IBinder;
+ import android.os.RemoteException;
+ import android.os.ServiceManager;
++import android.os.SystemProperties;
+ import android.os.UserHandle;
+ import android.os.UserManager;
+ import android.util.Slog;
+@@ -90,6 +92,7 @@ import org.json.JSONArray;
+ import org.json.JSONException;
+ import org.json.JSONObject;
+ 
++import java.io.File;
+ import java.io.FileDescriptor;
+ import java.io.PrintWriter;
+ import java.util.ArrayList;
+@@ -110,6 +113,10 @@ public class FingerprintProvider implements IBinder.DeathRecipient, ServiceProvi
+     @NonNull
+     @VisibleForTesting
+     final SensorList<Sensor> mFingerprintSensors;
++    private static final boolean DROIDLOOM =
++            SystemProperties.getBoolean("ro.vendor.droidloom.surfaceflinger_tasks", false);
++    private static final String DROIDLOOM_STATE = "/data/vendor/droidloom-authentication";
++    @Nullable private FileObserver mDroidloomEnrollment;
+     @NonNull
+     private final Context mContext;
+     @NonNull
+@@ -210,6 +217,29 @@ public class FingerprintProvider implements IBinder.DeathRecipient, ServiceProvi
+         initAuthenticationBroadcastReceiver();
+         initFingerprintDanglingBroadcastReceiver();
+         initSensors(resetLockoutRequiresHardwareAuthToken, props, gestureAvailabilityDispatcher);
++        if (DROIDLOOM) watchDroidloomEnrollment();
++    }
++
++    /**
++     * Droidloom's HAL enrolls the host's fingers. It replaces this file whenever that
++     * enrollment or its authenticator ID changes; enumerating adopts or drops the template.
++     */
++    private void watchDroidloomEnrollment() {
++        mDroidloomEnrollment = new FileObserver(new File(DROIDLOOM_STATE), FileObserver.MOVED_TO) {
++            @Override
++            public void onEvent(int event, @Nullable String path) {
++                if (!"generation".equals(path)) return;
++                mHandler.post(() -> {
++                    for (int i = 0; i < mFingerprintSensors.size(); i++) {
++                        final int sensorId = mFingerprintSensors.keyAt(i);
++                        scheduleInternalCleanup(sensorId, ActivityManager.getCurrentUser(),
++                                null /* callback */);
++                        scheduleLoadAuthenticatorIds(sensorId);
++                    }
++                });
++            }
++        };
++        mDroidloomEnrollment.startWatching();
+     }
+ 
+     private void initAuthenticationBroadcastReceiver() {
+@@ -673,7 +703,7 @@ public class FingerprintProvider implements IBinder.DeathRecipient, ServiceProvi
+     @Override
+     public void scheduleInternalCleanup(int sensorId, int userId,
+             @Nullable ClientMonitorCallback callback) {
+-        scheduleInternalCleanup(sensorId, userId, callback, false /* favorHalEnrollments */);
++        scheduleInternalCleanup(sensorId, userId, callback, DROIDLOOM /* favorHalEnrollments */);
+     }
+ 
+     @Override
+-- 
+2.55.0
+

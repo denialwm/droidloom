@@ -77,8 +77,9 @@ const SHARED_SECRET: &str = "android.hardware.security.sharedsecret.ISharedSecre
 const STATE: &str = "/data/vendor/droidloom-authentication";
 /// The supervisor binds the broker's fingerprint socket here.
 const SOCKET: &str = "/dev/socket/droidloom/fingerprint";
-/// Changes whenever the enrollment Android should see changes.
-const GENERATION: &str = "vendor.droidloom.fingerprint.generation";
+/// Replaced whenever the enrollment Android should see changes.
+const GENERATION: &str = "generation";
+static GENERATIONS: AtomicU64 = AtomicU64::new(0);
 const SENSOR_ID: i32 = 0;
 /// Gatekeeper users at and above this are Android's credential protectors,
 /// not Android users.
@@ -134,6 +135,16 @@ impl Store {
         fs::rename(fresh, self.0.join(name))
     }
 
+    /// Tells Android's fingerprint service to read the enrollment again: it
+    /// watches this file being replaced.
+    fn changed(&self) {
+        let generation = GENERATIONS.fetch_add(1, Ordering::Relaxed);
+        let value = format!("{}.{generation}", boottime_ms());
+        if let Err(error) = self.write(GENERATION, value.as_bytes()) {
+            eprintln!("droidloom-authentication: enrollment change not announced: {error}");
+        }
+    }
+
     fn remove(&self, name: &str) {
         let _ = fs::remove_file(self.0.join(name));
     }
@@ -166,17 +177,6 @@ struct Authentication {
     shared: Mutex<Option<[u8; MAC_LEN]>>,
     gatekeeper: Mutex<()>,
     fingerprints: Mutex<Fingerprints>,
-}
-
-static GENERATIONS: AtomicU64 = AtomicU64::new(0);
-
-/// Tells Android's fingerprint service to read the enrollment again.
-fn changed() {
-    let generation = GENERATIONS.fetch_add(1, Ordering::Relaxed);
-    let value = format!("{}.{generation}", boottime_ms());
-    if let Err(error) = rustutils::android::system_properties::write(GENERATION, &value) {
-        eprintln!("droidloom-authentication: enrollment change not announced: {error}");
-    }
 }
 
 impl Authentication {
@@ -253,7 +253,7 @@ impl Authentication {
             .seen
             .insert(user, enrollment.clone());
         if before.is_some_and(|before| before != enrollment) {
-            changed();
+            self.store.changed();
         }
         enrollment
     }
@@ -375,7 +375,7 @@ impl IGatekeeper::IGatekeeper for Gatekeeper {
                 }
             }
         }
-        changed();
+        self.0.store.changed();
         Ok(())
     }
 
@@ -386,7 +386,7 @@ impl IGatekeeper::IGatekeeper for Gatekeeper {
         let _gatekeeper = lock(&self.0.gatekeeper);
         self.0.store.remove(&format!("gatekeeper-{uid}"));
         if uid < FIRST_PROTECTOR_UID {
-            changed();
+            self.0.store.changed();
         }
         Ok(())
     }
@@ -440,7 +440,7 @@ impl IGatekeeper::IGatekeeper for Gatekeeper {
         };
         self.0.save_gatekeeper_user(uid, &record);
         if renewed && uid < FIRST_PROTECTOR_UID {
-            changed();
+            self.0.store.changed();
         }
         Ok(GatekeeperEnrollResponse {
             statusCode: IGatekeeper::STATUS_OK,
@@ -491,7 +491,7 @@ impl IGatekeeper::IGatekeeper for Gatekeeper {
             self.0.save_gatekeeper_user(uid, &record);
         }
         if renewed && uid < FIRST_PROTECTOR_UID {
-            changed();
+            self.0.store.changed();
         }
         let sid = i64::from_ne_bytes(handle.sid.to_ne_bytes());
         let token = Token {

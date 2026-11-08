@@ -37,6 +37,7 @@ public final class DroidloomFrameworkControl {
         if (started) return;
         if (!DroidloomFrameworkNative.start()) throw new IllegalStateException("Framework native listener unavailable");
         configure();
+        DroidloomCredential.register(service.mContext);
         BroadcastReceiver changes = new BroadcastReceiver() {
             @Override public void onReceive(Context context, Intent intent) { DroidloomFrameworkNative.catalogChanged(); }
         };

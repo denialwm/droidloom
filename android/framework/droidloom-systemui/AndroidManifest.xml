@@ -9,6 +9,10 @@
     <uses-permission android:name="android.permission.ACCESS_KEYGUARD_SECURE_STORAGE" />
     <uses-permission android:name="android.permission.INTERACT_ACROSS_USERS_FULL" />
     <uses-permission android:name="android.permission.READ_CLIPBOARD_IN_BACKGROUND" />
+    <!-- The fingerprint prompt opens over the asking app, in its task. -->
+    <uses-permission android:name="android.permission.REAL_GET_TASKS" />
+    <uses-permission android:name="android.permission.START_TASKS_FROM_RECENTS" />
+    <uses-permission android:name="android.permission.START_ACTIVITIES_FROM_BACKGROUND" />
     <application android:label="Droidloom SystemUI" android:persistent="true"
         android:allowBackup="false" android:allowClearUserData="false"
         android:hardwareAccelerated="false" android:directBootAware="true"
@@ -24,6 +28,10 @@
             android:permission="android.permission.CONTROL_KEYGUARD" />
         <service android:name=".screenshot.TakeScreenshotService" android:exported="true"
             android:permission="com.android.systemui.permission.SELF" />
+        <activity android:name=".biometrics.FingerprintPrompt$PromptActivity"
+            android:exported="false" android:excludeFromRecents="true" android:noHistory="true"
+            android:taskAffinity="" android:hardwareAccelerated="true"
+            android:theme="@android:style/Theme.DeviceDefault.Dialog.NoActionBar" />
         <activity android:name=".mediaprojection.permission.MediaProjectionPermissionActivity"
             android:exported="true" android:excludeFromRecents="true"
             android:theme="@android:style/Theme.NoDisplay" />

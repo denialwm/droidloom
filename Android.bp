@@ -83,6 +83,7 @@ java_library {
     srcs: [
         "android/framework/droidloom-systemui/src/com/android/systemui/StatusBarCallbacks.java",
         "android/framework/droidloom-systemui/src/com/android/systemui/Unsupported.java",
+        "android/framework/droidloom-systemui/src/com/android/systemui/biometrics/*.java",
         "android/framework/droidloom-systemui/src/com/android/systemui/compat/*.java",
         "android/framework/droidloom-systemui/tests/CallbacksProbe.java",
         "android/framework/droidloom-systemui/tests/ChannelsProbe.java",
@@ -274,7 +275,6 @@ rust_binary {
         "libkmr_crypto_boring",
         "libkmr_wire",
         "liblibc",
-        "librustutils",
     ],
 }
 

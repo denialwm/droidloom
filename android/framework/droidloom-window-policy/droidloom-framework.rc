@@ -7,6 +7,7 @@ on early-init
 on post-fs-data
     mkdir /dev/socket/droidloom-framework 0700 system system
     setprop sys.droidloom.framework_ready 0
+    setprop sys.droidloom.credential locked
     # PackageManager applies these to all installers, including app stores,
     # sideloads, updates and bulk restores. No profile is required for speed.
     setprop pm.dexopt.install speed
@@ -21,9 +22,11 @@ on post-fs-data
 
 on property:init.svc.zygote=stopped
     setprop sys.droidloom.framework_ready 0
+    setprop sys.droidloom.credential locked
 
 on property:init.svc.zygote=restarting
     setprop sys.droidloom.framework_ready 0
+    setprop sys.droidloom.credential locked
 
 service droidloom-ime-setup /system/bin/sh /droidloom/ime/setup
     class late_start

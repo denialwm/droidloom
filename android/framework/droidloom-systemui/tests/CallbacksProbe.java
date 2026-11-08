@@ -25,7 +25,7 @@ public final class CallbacksProbe {
             }
         }, new int[0], true, false, 0, 0, "probe", 1);
         check(result[0] == BiometricPrompt.DISMISSED_REASON_USER_CANCEL,
-                "Unsupported authentication must complete as cancelled");
+                "A prompt with no sensor must complete as cancelled");
         result[0] = -1;
         callbacks.requestAddTile(2000, null, "probe", "probe", null,
                 new IAddTileResultCallback.Default() {
