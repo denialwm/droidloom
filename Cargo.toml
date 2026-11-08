@@ -5,6 +5,7 @@ members = [
     "android/power/droidloom-power",
     "android/haptics/droidloom-haptics",
     "android/camera/droidloom-camera",
+    "android/authentication/droidloom-authentication",
     "runtime/droidloom-applications",
     "runtime/droidloom-audio",
     "runtime/droidloom-audio-protocol",

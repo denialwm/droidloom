@@ -507,6 +507,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "droidloom-authentication"
+version = "0.1.0"
+
+[[package]]
 name = "droidloom-camera"
 version = "0.1.0"
 dependencies = [

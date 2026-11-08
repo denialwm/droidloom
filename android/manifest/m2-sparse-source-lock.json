@@ -864,7 +864,8 @@
         "camera/common/aidl",
         "camera/device/aidl",
         "camera/metadata/aidl",
-        "camera/provider/aidl"
+        "camera/provider/aidl",
+        "gatekeeper/aidl"
       ]
     },
     {

@@ -1,0 +1,15 @@
+# Gatekeeper, fingerprints and a Keystore shared-secret participant in one
+# service, so both kinds of auth token carry the key Keystore negotiated. The
+# fingerprint reader is the host user's, through the device broker's socket
+# the supervisor binds into the cell.
+on post-fs-data
+    mkdir /data/vendor/droidloom-authentication 0700 system system
+
+service vendor.authentication-droidloom /vendor/bin/hw/droidloom-authentication-service
+    class hal
+    user system
+    group system
+    interface aidl android.hardware.gatekeeper.IGatekeeper/default
+    interface aidl android.hardware.biometrics.fingerprint.IFingerprint/default
+    interface aidl android.hardware.security.sharedsecret.ISharedSecret/droidloom
+    stdio_to_kmsg

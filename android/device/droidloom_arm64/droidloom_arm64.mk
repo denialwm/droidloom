@@ -46,6 +46,7 @@ PRODUCT_PACKAGES += \
     android.hardware.power-service.droidloom \
     android.hardware.vibrator-service.droidloom \
     android.hardware.camera.provider-service.droidloom \
+    droidloom-authentication-service \
     com.android.hardware.audio.droidloom \
     DroidloomFrameworkDisplayOverlay \
     DroidloomConnectivityOverlay \

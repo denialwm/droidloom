@@ -783,6 +783,9 @@ pub fn build_targets(
         // The camera provider's VTS needs camera test libraries the sparse
         // tree omits; only its interface is built.
         "hardware/interfaces/camera/provider/aidl/vts",
+        // Upstream's software gatekeepers need system/gatekeeper, which the
+        // sparse tree omits; Droidloom's authentication service replaces them.
+        "hardware/interfaces/gatekeeper/aidl/software",
     ] {
         p.put(&source.join(relative).join(".find-ignore"), b"")?;
     }
@@ -804,6 +807,7 @@ pub fn build_targets(
         "android/power",
         "android/haptics",
         "android/camera",
+        "android/authentication",
         "android/lmkd-compat",
         "android/runtime",
         "android/native-bridge",

@@ -165,8 +165,8 @@ rust_binary {
     ],
 }
 
-// Records between the vibrator and camera HALs and the host user's device
-// broker, which reaches hapticd and braun.
+// Records between the vibrator, camera and fingerprint HALs and the host
+// user's device broker, which reaches hapticd, braun and fprintd.
 rust_library {
     name: "libdroidloom_device_protocol",
     crate_name: "droidloom_device_protocol",
@@ -235,6 +235,46 @@ rust_binary {
         "libdroidloom_device_protocol",
         "libdroidloom_minigbm",
         "liblibc",
+    ],
+}
+
+// Gatekeeper, fingerprint and shared-secret services. Keystore negotiates one
+// HMAC key with the service, which signs password and fingerprint tokens with
+// it; the fingerprint reader is the host user's fprintd, through the broker.
+rust_library {
+    name: "libdroidloom_authentication",
+    crate_name: "droidloom_authentication",
+    crate_root: "android/authentication/droidloom-authentication/src/lib.rs",
+    edition: "2024",
+    vendor: true,
+}
+
+rust_binary {
+    name: "droidloom-authentication-service",
+    crate_name: "droidloom_authentication_service",
+    crate_root: "android/authentication/droidloom-authentication-service/src/main.rs",
+    edition: "2024",
+    vendor: true,
+    relative_install_path: "hw",
+    init_rc: ["android/device/droidloom_arm64/droidloom-authentication.rc"],
+    vintf_fragments: ["android/device/droidloom_arm64/droidloom-authentication.xml"],
+    rustlibs: [
+        "android.hardware.biometrics.common-V4-rust",
+        "android.hardware.biometrics.fingerprint-V5-rust",
+        "android.hardware.gatekeeper-V1-rust",
+        "android.hardware.keymaster-V4-rust",
+        "android.hardware.security.keymint-V5-rust",
+        "android.hardware.security.secureclock-V1-rust",
+        "android.hardware.security.sharedsecret-V1-rust",
+        "libbinder_rs",
+        "libdroidloom_authentication",
+        "libdroidloom_denial_ipc",
+        "libdroidloom_device_protocol",
+        "libkmr_common",
+        "libkmr_crypto_boring",
+        "libkmr_wire",
+        "liblibc",
+        "librustutils",
     ],
 }
 
