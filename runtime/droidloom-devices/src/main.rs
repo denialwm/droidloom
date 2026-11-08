@@ -470,6 +470,9 @@ fn run(arguments: &Arguments) -> io::Result<()> {
                 }
                 if clients.fetch_add(1, Ordering::Relaxed) >= MAX_CLIENTS {
                     clients.fetch_sub(1, Ordering::Relaxed);
+                    eprintln!(
+                        "droidloom-devices: rejected a client, {MAX_CLIENTS} already connected"
+                    );
                     continue;
                 }
                 let (haptics, bus, clients) =

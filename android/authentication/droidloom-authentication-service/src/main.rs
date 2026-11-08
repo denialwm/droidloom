@@ -800,7 +800,13 @@ impl Session {
     fn start_authentication(&self, operationId: i64) -> Strong<dyn ICancellationSignal> {
         let operation = Arc::new(Operation::default());
         let (state, running) = (Arc::clone(&self.0), Arc::clone(&operation));
-        std::thread::spawn(move || state.authenticate(operationId, &running));
+        std::thread::spawn(move || {
+            state.authenticate(operationId, &running);
+            // Android keeps the cancellation signal, and with it the
+            // operation, until its garbage collector runs: the broker
+            // connection closes here, when the operation ends.
+            lock(&running.socket).take();
+        });
         signal(operation)
     }
 
