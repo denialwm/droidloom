@@ -1,10 +1,11 @@
 [Unit]
-Description=Droidloom private Android haptics and camera endpoints
+Description=Droidloom private Android haptics, camera and fingerprint endpoints
 PartOf=droidloom.service
 
 [Socket]
 ListenSequentialPacket=%t/droidloom/haptics.sock
 ListenSequentialPacket=%t/droidloom/camera.sock
+ListenSequentialPacket=%t/droidloom/fingerprint.sock
 SocketMode=0666
 DirectoryMode=0700
 RemoveOnStop=true

@@ -200,23 +200,27 @@ disabled. These projections may contain executable compatibility helpers, but
 they are not Android-writable storage and cannot target `/system`, `/vendor`,
 `/data`, or another Android namespace.
 
-## Private haptics and camera endpoints (DLDEV001)
+## Private haptics, camera and fingerprint endpoints (DLDEV001)
 
-The user `droidloom-devices.socket` unit owns `%t/droidloom/haptics.sock` and
-`%t/droidloom/camera.sock` under the same mode-0700 runtime directory. The
-supervisor may bind only those inodes at `/dev/socket/droidloom/haptics` and
-`/dev/socket/droidloom/camera`. One broker, `droidloom-devices`, runs as the
-host user and serves both; it authenticates the vibrator HAL's kernel-mapped
-UID (system, 1000) on the first and the camera provider's (cameraserver,
-1047) on the second.
+The user `droidloom-devices.socket` unit owns `%t/droidloom/haptics.sock`,
+`%t/droidloom/camera.sock` and `%t/droidloom/fingerprint.sock` under the same
+mode-0700 runtime directory. The supervisor may bind only those inodes at
+`/dev/socket/droidloom/haptics`, `/dev/socket/droidloom/camera` and
+`/dev/socket/droidloom/fingerprint`. One broker, `droidloom-devices`, runs as
+the host user and serves all three; it authenticates the kernel-mapped UID of
+the vibrator HAL (system, 1000), the camera provider (cameraserver, 1047) and
+the authentication service (system, 1000) on each.
 
 Records carry `DLDEV001`, a kind and bounded fields. Haptics clients send
 patterns of at most 64 steps and 30 seconds, which the broker plays through
 hapticd on the system bus; a client that disconnects stops its pattern. Camera
 clients list braun's cameras or ask for a braun session, which the broker
 passes on as braun's own session descriptor; the HAL then speaks braun's
-protocol directly. Without hapticd or braun the broker reports no vibrator and
-no cameras.
+protocol directly. Fingerprint clients ask for the reader and the user's
+enrolled fingers, and start or cancel a verification; the broker claims
+fprintd's reader for each verification only, listens again after a no-match,
+and stops and releases the reader however it ends. Without hapticd, braun or
+fprintd the broker reports no vibrator, no cameras and no reader.
 
 ## Private audio endpoint (DLAUD001)
 

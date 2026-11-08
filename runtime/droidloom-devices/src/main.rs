@@ -1,13 +1,16 @@
-//! The host user's broker for Android's haptics and cameras.
+//! The host user's broker for Android's haptics, cameras and fingerprints.
 //!
 //! Android's vibrator service sends patterns on one socket; they go to
 //! hapticd on the system bus, over one connection kept for the broker's life
 //! because hapticd cancels a connection's effects when it leaves. Android's
 //! camera service asks on the other for the host's cameras and for braun
 //! sessions: braun lets the user of an active local session in, and the
-//! session's socket goes to Android as it is. Neither D-Bus nor a device node
-//! enters Android. Without hapticd or braun, Android hears there is no
-//! vibrator or camera.
+//! session's socket goes to Android as it is. Android's fingerprint service
+//! verifies through fprintd on a third ([`fingerprint`]). Neither D-Bus nor a
+//! device node enters Android. Without hapticd, braun or fprintd, Android
+//! hears there is no vibrator, camera or fingerprint reader.
+
+mod fingerprint;
 
 use std::collections::HashMap;
 use std::io;
@@ -32,11 +35,11 @@ const BRAUN: &str = "org.braun";
 const BRAUN_PATH: &str = "/org/braun";
 const BRAUN_INTERFACE: &str = "org.braun.Camera1";
 const PROPERTIES: &str = "org.freedesktop.DBus.Properties";
-/// Android has one vibrator and one camera service; leave room for restarts.
+/// Android has one vibrator, camera and fingerprint service; leave room for restarts.
 const MAX_CLIENTS: usize = 8;
 
 #[derive(Parser)]
-#[command(about = "Host user's broker for Android's haptics and cameras")]
+#[command(about = "Host user's broker for Android's haptics, cameras and fingerprints")]
 struct Arguments {
     /// Haptics socket, when not started by its socket unit.
     #[arg(long)]
@@ -44,18 +47,25 @@ struct Arguments {
     /// Camera socket, when not started by its socket unit.
     #[arg(long)]
     camera_socket: Option<PathBuf>,
+    /// Fingerprint socket, when not started by its socket unit.
+    #[arg(long)]
+    fingerprint_socket: Option<PathBuf>,
     /// Host-mapped UID of Android's vibrator service (system).
     #[arg(long, default_value_t = 1000)]
     haptics_uid: u32,
     /// Host-mapped UID of Android's camera provider (cameraserver).
     #[arg(long, default_value_t = 1047)]
     camera_uid: u32,
+    /// Host-mapped UID of Android's fingerprint service (system).
+    #[arg(long, default_value_t = 1000)]
+    fingerprint_uid: u32,
 }
 
 #[derive(Clone, Copy)]
 enum Endpoint {
     Haptics,
     Camera,
+    Fingerprint,
 }
 
 /// The system bus, connected when first needed and again after a failure.
@@ -242,9 +252,15 @@ fn cameras(bus: &Bus) -> Vec<Camera> {
 
 fn braun_session(bus: &Bus) -> Result<OwnedFd, String> {
     bus.call(|bus| {
-        bus.call_method(Some(BRAUN), BRAUN_PATH, Some(BRAUN_INTERFACE), "Connect", &())?
-            .body()
-            .deserialize::<zbus::zvariant::OwnedFd>()
+        bus.call_method(
+            Some(BRAUN),
+            BRAUN_PATH,
+            Some(BRAUN_INTERFACE),
+            "Connect",
+            &(),
+        )?
+        .body()
+        .deserialize::<zbus::zvariant::OwnedFd>()
     })
     .map(OwnedFd::from)
     .map_err(|error| format!("braun refused a session: {error}"))
@@ -294,13 +310,7 @@ fn bound_path(fd: &OwnedFd) -> io::Result<PathBuf> {
     let mut length = libc::socklen_t::try_from(std::mem::size_of::<libc::sockaddr_un>())
         .expect("sockaddr_un fits socklen_t");
     // SAFETY: the address and length describe writable storage of that size.
-    if unsafe {
-        libc::getsockname(
-            fd.as_raw_fd(),
-            (&raw mut address).cast(),
-            &raw mut length,
-        )
-    } < 0
+    if unsafe { libc::getsockname(fd.as_raw_fd(), (&raw mut address).cast(), &raw mut length) } < 0
     {
         return Err(io::Error::last_os_error());
     }
@@ -317,6 +327,7 @@ fn endpoint_of(path: &Path) -> Option<Endpoint> {
     match path.file_name()?.to_str()? {
         "haptics.sock" => Some(Endpoint::Haptics),
         "camera.sock" => Some(Endpoint::Camera),
+        "fingerprint.sock" => Some(Endpoint::Fingerprint),
         _ => None,
     }
 }
@@ -358,13 +369,16 @@ fn listeners(arguments: &Arguments) -> io::Result<Vec<(Endpoint, SeqPacketListen
         if let Some(path) = &arguments.camera_socket {
             listeners.push((Endpoint::Camera, bind(path)?));
         }
+        if let Some(path) = &arguments.fingerprint_socket {
+            listeners.push((Endpoint::Fingerprint, bind(path)?));
+        }
         return Ok(listeners);
     }
     let count: i32 = std::env::var("LISTEN_FDS")
         .ok()
         .and_then(|value| value.parse().ok())
-        .filter(|count| (1..=2).contains(count))
-        .ok_or_else(|| io::Error::other("devices needs one or two activation sockets"))?;
+        .filter(|count| (1..=3).contains(count))
+        .ok_or_else(|| io::Error::other("devices needs one to three activation sockets"))?;
     let mut listeners = Vec::new();
     for raw in 3..3 + count {
         // SAFETY: fcntl validates the inherited descriptor before we own it.
@@ -374,7 +388,7 @@ fn listeners(arguments: &Arguments) -> io::Result<Vec<(Endpoint, SeqPacketListen
         // SAFETY: systemd passed descriptors 3.. to this PID.
         let fd = unsafe { OwnedFd::from_raw_fd(raw) };
         let endpoint = endpoint_of(&bound_path(&fd)?)
-            .ok_or_else(|| io::Error::other("activation socket is neither haptics nor camera"))?;
+            .ok_or_else(|| io::Error::other("activation socket is not a device endpoint"))?;
         listeners.push((
             endpoint,
             SeqPacketListener::from_owned_fd(fd).map_err(io::Error::other)?,
@@ -414,6 +428,7 @@ fn run(arguments: &Arguments) -> io::Result<()> {
     let mapping = std::fs::read_to_string("/proc/self/uid_map")?;
     check_peer_uid_mapping(&mapping, arguments.haptics_uid)?;
     check_peer_uid_mapping(&mapping, arguments.camera_uid)?;
+    check_peer_uid_mapping(&mapping, arguments.fingerprint_uid)?;
     let listeners = listeners(arguments)?;
     if listeners.is_empty() {
         return Err(io::Error::other("no device socket to serve"));
@@ -426,10 +441,12 @@ fn run(arguments: &Arguments) -> io::Result<()> {
     let clients = Arc::new(AtomicUsize::new(0));
     let mut accepting = Vec::new();
     for (endpoint, listener) in listeners {
-        let (haptics, bus, clients) = (Arc::clone(&haptics), Arc::clone(&bus), Arc::clone(&clients));
+        let (haptics, bus, clients) =
+            (Arc::clone(&haptics), Arc::clone(&bus), Arc::clone(&clients));
         let peer_uid = match endpoint {
             Endpoint::Haptics => arguments.haptics_uid,
             Endpoint::Camera => arguments.camera_uid,
+            Endpoint::Fingerprint => arguments.fingerprint_uid,
         };
         accepting.push(std::thread::spawn(move || -> io::Result<()> {
             loop {
@@ -458,7 +475,11 @@ fn run(arguments: &Arguments) -> io::Result<()> {
                 let (haptics, bus, clients) =
                     (Arc::clone(&haptics), Arc::clone(&bus), Arc::clone(&clients));
                 std::thread::spawn(move || {
-                    if let Err(error) = serve(&socket, endpoint, &haptics, &bus) {
+                    let served = match endpoint {
+                        Endpoint::Fingerprint => fingerprint::serve(&Arc::new(socket)),
+                        _ => serve(&socket, endpoint, &haptics, &bus),
+                    };
+                    if let Err(error) = served {
                         eprintln!("droidloom-devices: client ended: {error}");
                     }
                     if matches!(endpoint, Endpoint::Haptics) {
@@ -491,9 +512,18 @@ mod tests {
     #[test]
     fn braun_cameras_become_records() {
         let mut entry = HashMap::new();
-        entry.insert("id".to_owned(), OwnedValue::from(zbus::zvariant::Str::from("imx890")));
-        entry.insert("name".to_owned(), OwnedValue::from(zbus::zvariant::Str::from("IMX890")));
-        entry.insert("facing".to_owned(), OwnedValue::from(zbus::zvariant::Str::from("back")));
+        entry.insert(
+            "id".to_owned(),
+            OwnedValue::from(zbus::zvariant::Str::from("imx890")),
+        );
+        entry.insert(
+            "name".to_owned(),
+            OwnedValue::from(zbus::zvariant::Str::from("IMX890")),
+        );
+        entry.insert(
+            "facing".to_owned(),
+            OwnedValue::from(zbus::zvariant::Str::from("back")),
+        );
         entry.insert("width".to_owned(), OwnedValue::from(3072u32));
         entry.insert("height".to_owned(), OwnedValue::from(4096u32));
         entry.insert("lens".to_owned(), OwnedValue::from(true));
@@ -523,6 +553,10 @@ mod tests {
         assert!(matches!(
             endpoint_of(Path::new("/run/user/1000/droidloom/camera.sock")),
             Some(Endpoint::Camera)
+        ));
+        assert!(matches!(
+            endpoint_of(Path::new("/run/user/1000/droidloom/fingerprint.sock")),
+            Some(Endpoint::Fingerprint)
         ));
         assert!(endpoint_of(Path::new("/run/user/1000/droidloom/audio.sock")).is_none());
     }

@@ -1,9 +1,11 @@
-//! Records between Android's haptics and camera services and the host user's
-//! device broker, one per `SOCK_SEQPACKET` packet, little-endian.
+//! Records between Android's haptics, camera and fingerprint services and the
+//! host user's device broker, one per `SOCK_SEQPACKET` packet, little-endian.
 //!
 //! Every record starts with [`MAGIC`] and a 32-bit kind. Haptics are fire and
 //! forget except the query; the camera list and connect each get one reply.
 //! A camera session is braun's own socket, passed beside [`Message::CameraSession`].
+//! A fingerprint query gets one reply; a verification sends events until one
+//! that ends it ([`Scan::ends`]), also after a cancel.
 
 use std::fmt;
 
@@ -17,6 +19,8 @@ pub const MAX_PATTERN_MS: u32 = 30_000;
 pub const MAX_CAMERAS: usize = 16;
 /// Longest camera id, name or failure text.
 pub const MAX_TEXT: usize = 256;
+/// Most enrolled fingers one reader reports.
+pub const MAX_FINGERS: usize = 16;
 /// Largest record either side sends.
 pub const MAX_RECORD: usize = 8192;
 
@@ -29,6 +33,11 @@ const CAMERA_CAMERAS: u32 = 17;
 const CAMERA_CONNECT: u32 = 18;
 const CAMERA_SESSION: u32 = 19;
 const CAMERA_UNAVAILABLE: u32 = 20;
+const FINGERPRINT_QUERY: u32 = 32;
+const FINGERPRINT_READER: u32 = 33;
+const FINGERPRINT_VERIFY: u32 = 34;
+const FINGERPRINT_CANCEL: u32 = 35;
+const FINGERPRINT_SCAN: u32 = 36;
 
 /// One step of a haptic pattern: `intensity` from 0 to 1 for `ms`; 0 is a pause.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -69,6 +78,42 @@ pub struct Camera {
     pub lens: bool,
 }
 
+/// What happened during a fingerprint verification.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Scan {
+    /// A finger is on the reader.
+    Touch,
+    /// The finger left.
+    Lift,
+    /// The reader could not read that touch; it listens again.
+    Retry,
+    /// The finger is one of the user's. Ends the verification.
+    Match,
+    /// The finger is not one of the user's; the reader listens again.
+    NoMatch,
+    /// The reader is gone, busy or failed. Ends the verification.
+    Unavailable,
+    /// Android cancelled. Ends the verification.
+    Cancelled,
+}
+
+impl Scan {
+    /// No further event of this verification follows.
+    pub fn ends(self) -> bool {
+        matches!(self, Scan::Match | Scan::Unavailable | Scan::Cancelled)
+    }
+}
+
+const SCANS: [Scan; 7] = [
+    Scan::Touch,
+    Scan::Lift,
+    Scan::Retry,
+    Scan::Match,
+    Scan::NoMatch,
+    Scan::Unavailable,
+    Scan::Cancelled,
+];
+
 /// A record.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Message {
@@ -95,6 +140,21 @@ pub enum Message {
     CameraSession,
     /// No session, and why.
     CameraUnavailable(String),
+    /// Android asks for the host's fingerprint reader.
+    FingerprintQuery,
+    /// The host's fingerprint reader.
+    FingerprintReader {
+        /// There is one.
+        present: bool,
+        /// The fingers the user enrolled, by fprintd's names.
+        fingers: Vec<String>,
+    },
+    /// Start one verification against the user's enrolled fingers.
+    FingerprintVerify,
+    /// Stop the verification running.
+    FingerprintCancel,
+    /// An event of the verification running.
+    FingerprintScan(Scan),
 }
 
 /// A record that does not decode.
@@ -155,7 +215,10 @@ impl Reader<'_> {
     }
     fn f32(&mut self) -> Result<f32, Invalid> {
         let value = f32::from_le_bytes(self.take()?);
-        value.is_finite().then_some(value).ok_or(Invalid("not a number"))
+        value
+            .is_finite()
+            .then_some(value)
+            .ok_or(Invalid("not a number"))
     }
     fn text(&mut self) -> Result<String, Invalid> {
         let length = usize::from(u16::from_le_bytes(self.take()?));
@@ -173,7 +236,10 @@ impl Reader<'_> {
             .ok_or(Invalid("too many"))
     }
     fn end(&self) -> Result<(), Invalid> {
-        self.0.is_empty().then_some(()).ok_or(Invalid("trailing bytes"))
+        self.0
+            .is_empty()
+            .then_some(())
+            .ok_or(Invalid("trailing bytes"))
     }
 }
 
@@ -242,6 +308,28 @@ impl Message {
                 writer.text(reason);
                 writer
             }
+            Message::FingerprintQuery => Writer::new(FINGERPRINT_QUERY),
+            Message::FingerprintReader { present, fingers } => {
+                let mut writer = Writer::new(FINGERPRINT_READER);
+                writer.u8(u8::from(*present));
+                let fingers = &fingers[..fingers.len().min(MAX_FINGERS)];
+                // MAX_FINGERS fits a u32.
+                #[allow(clippy::cast_possible_truncation)]
+                writer.u32(fingers.len() as u32);
+                for finger in fingers {
+                    writer.text(finger);
+                }
+                writer
+            }
+            Message::FingerprintVerify => Writer::new(FINGERPRINT_VERIFY),
+            Message::FingerprintCancel => Writer::new(FINGERPRINT_CANCEL),
+            Message::FingerprintScan(scan) => {
+                let mut writer = Writer::new(FINGERPRINT_SCAN);
+                // SCANS has seven entries.
+                #[allow(clippy::cast_possible_truncation)]
+                writer.u8(SCANS.iter().position(|known| known == scan).unwrap_or(0) as u8);
+                writer
+            }
         };
         writer.0
     }
@@ -302,6 +390,23 @@ impl Message {
             CAMERA_CONNECT => Message::CameraConnect,
             CAMERA_SESSION => Message::CameraSession,
             CAMERA_UNAVAILABLE => Message::CameraUnavailable(reader.text()?),
+            FINGERPRINT_QUERY => Message::FingerprintQuery,
+            FINGERPRINT_READER => {
+                let present = reader.u8()? != 0;
+                let count = reader.count(MAX_FINGERS)?;
+                let mut fingers = Vec::with_capacity(count);
+                for _ in 0..count {
+                    fingers.push(reader.text()?);
+                }
+                Message::FingerprintReader { present, fingers }
+            }
+            FINGERPRINT_VERIFY => Message::FingerprintVerify,
+            FINGERPRINT_CANCEL => Message::FingerprintCancel,
+            FINGERPRINT_SCAN => Message::FingerprintScan(
+                *SCANS
+                    .get(usize::from(reader.u8()?))
+                    .ok_or(Invalid("unknown scan"))?,
+            ),
             _ => return Err(Invalid("unknown kind")),
         };
         reader.end()?;
@@ -345,7 +450,17 @@ mod tests {
             Message::CameraConnect,
             Message::CameraSession,
             Message::CameraUnavailable("braun is not installed".into()),
-        ] {
+            Message::FingerprintQuery,
+            Message::FingerprintReader {
+                present: true,
+                fingers: vec!["right-thumb".into(), "left-index-finger".into()],
+            },
+            Message::FingerprintVerify,
+            Message::FingerprintCancel,
+        ]
+        .into_iter()
+        .chain(SCANS.map(Message::FingerprintScan))
+        {
             assert_eq!(Message::decode(&message.encode()), Ok(message));
         }
     }

@@ -1,6 +1,6 @@
 [package]
 name = "droidloom-device-protocol"
-description = "Records between Android's haptics and camera services and the host user's device broker"
+description = "Records between Android's haptics, camera and fingerprint services and the host user's device broker"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

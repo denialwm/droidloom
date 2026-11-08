@@ -586,9 +586,11 @@ version = "0.1.0"
 name = "droidloom-devices"
 version = "0.1.0"
 dependencies = [
+ "async-channel",
  "clap",
  "droidloom-denial-ipc",
  "droidloom-device-protocol",
+ "futures-lite",
  "libc",
  "zbus",
 ]
