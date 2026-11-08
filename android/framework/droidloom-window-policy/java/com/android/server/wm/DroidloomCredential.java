@@ -1,11 +1,14 @@
 /* Copyright 2026 Droidloom. SPDX-License-Identifier: GPL-3.0-or-later */
 package com.android.server.wm;
 
+import android.app.ActivityManager;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.os.FileUtils;
+import android.os.IBinder;
+import android.os.Parcel;
 import android.os.SystemProperties;
 import android.util.AtomicFile;
 import android.util.Slog;
@@ -68,8 +71,22 @@ final class DroidloomCredential {
             Slog.e(TAG, "Android credential unavailable", error);
         }
         SystemProperties.set(STATE, verified ? "verified" : "locked");
-        // SystemUI's keyguard reads the state again.
-        SystemProperties.reportSyspropChanged();
+        announce();
+    }
+    /**
+     * Every app process runs its property callbacks, so SystemUI's keyguard reads the state
+     * again. SystemProperties.reportSyspropChanged() reaches only this process.
+     */
+    private static void announce() {
+        Parcel data = Parcel.obtain();
+        try {
+            ActivityManager.getService().asBinder()
+                    .transact(IBinder.SYSPROPS_TRANSACTION, data, null, 0);
+        } catch (Exception error) {
+            Slog.w(TAG, "Credential state not announced", error);
+        } finally {
+            data.recycle();
+        }
     }
     private static String read() {
         if (!FILE.exists()) return null;

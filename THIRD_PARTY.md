@@ -48,8 +48,9 @@ licenses; applying a patch does not give Droidloom ownership of that code.
   MIT terms and copyright notices and is retained as well.
 - These interface definitions retain their existing MIT terms:
   `protocol/denial-frame-timeline-v1.xml`,
-  `graphics/droidloom-wayland/protocol/denial-text-input-panel-v1.xml`, and
-  `graphics/droidloom-wayland/protocol/denial-insets-v1.xml`.
+  `graphics/droidloom-wayland/protocol/denial-text-input-panel-v1.xml`,
+  `graphics/droidloom-wayland/protocol/denial-insets-v1.xml`, and
+  `runtime/droidloom-devices/protocol/denial-fingerprint-verify-v1.xml`.
   Their copyright holders are recorded in the files. The interface license
   does not change the GPL license of Droidloom's implementation.
 - Android applications installed by users, including WhatsApp, remain under

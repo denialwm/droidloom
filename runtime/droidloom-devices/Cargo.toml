@@ -9,11 +9,14 @@ repository.workspace = true
 
 [dependencies]
 async-channel = "2.5.0"
+async-io = "2.6.0"
 clap.workspace = true
 droidloom-denial-ipc = { path = "../../graphics/droidloom-denial-ipc" }
 droidloom-device-protocol = { path = "../droidloom-device-protocol" }
 futures-lite = "2.6.1"
 libc.workspace = true
+wayland-client.workspace = true
+wayland-scanner = "0.31.10"
 zbus = { version = "5.18.0", default-features = false, features = ["async-io", "blocking-api"] }
 
 [lints.rust]

@@ -12,7 +12,7 @@ import com.android.internal.statusbar.IStatusBarService;
 import java.io.FileDescriptor;
 import java.io.PrintWriter;
 
-/** The entire resident UI service: a Binder endpoint with no resident windows or scheduled work. */
+/** The entire resident UI service: a Binder endpoint with no windows or scheduled work. */
 public class SystemUIService extends Service {
     private StatusBarCallbacks callbacks;
     private com.android.systemui.notifications.NotificationBridge notifications;
@@ -20,7 +20,7 @@ public class SystemUIService extends Service {
     @Override public void onCreate() {
         super.onCreate();
         if (UserHandle.myUserId() != 0) return;
-        callbacks = new StatusBarCallbacks(this);
+        callbacks = new StatusBarCallbacks();
         try {
             IStatusBarService.Stub.asInterface(ServiceManager.getService("statusbar"))
                     .registerStatusBar(callbacks);

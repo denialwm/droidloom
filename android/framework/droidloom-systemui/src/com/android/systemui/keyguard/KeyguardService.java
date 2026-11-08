@@ -4,7 +4,9 @@ package com.android.systemui.keyguard;
 import android.app.Service;
 import android.content.Intent;
 import android.os.Bundle;
+import android.os.Handler;
 import android.os.IBinder;
+import android.os.Looper;
 import android.os.RemoteException;
 import android.os.SystemProperties;
 import com.android.internal.policy.*;
@@ -21,6 +23,7 @@ import java.util.ArrayList;
  * in Android, the cell is reported locked.
  */
 public final class KeyguardService extends Service {
+    private static final Handler MAIN = new Handler(Looper.getMainLooper());
     private volatile int userId;
     private LockPatternUtils locks;
     private final ArrayList<IKeyguardStateCallback> callbacks = new ArrayList<>();
@@ -54,6 +57,11 @@ public final class KeyguardService extends Service {
                 if (locked()) callback.onDismissError(); else callback.onDismissSucceeded();
             }
         }
+        /**
+         * The window manager marks the keyguard showing before it asks for the timeout lock, as
+         * a phone locks the screen. The host owns locking: the state is told again.
+         */
+        @Override public void doKeyguardTimeout(Bundle options) { announce(); }
         @Override public void setCurrentUser(int currentUser) { userId = currentUser; }
         @Override public void onScreenTurningOn(int reason, IKeyguardDrawnCallback callback)
                 throws RemoteException { if (callback != null) callback.onDrawn(); }
@@ -62,6 +70,9 @@ public final class KeyguardService extends Service {
                 boolean timeoutRequested, Bundle options) throws RemoteException {
             userId = restored.userId;
             monitor(callback);
+            // A timeout requested before SystemUI connected marks the keyguard showing right
+            // after this call returns.
+            if (timeoutRequested) MAIN.post(KeyguardService.this::announce);
             if (drawn != null) drawn.onDrawn();
         }
     };
@@ -70,7 +81,7 @@ public final class KeyguardService extends Service {
         locks = new LockPatternUtils(this);
         SystemProperties.addChangeCallback(this::announce);
     }
-    /** Resends the state when the credential is verified, or the framework restarts. */
+    /** Resends the state when the credential is verified, or the window manager assumed a lock. */
     private void announce() {
         synchronized (callbacks) {
             callbacks.removeIf(callback -> {

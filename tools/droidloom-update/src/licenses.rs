@@ -16,6 +16,7 @@ pub fn project(repo: &Path, destination: &Path) -> Result<()> {
         "protocol/denial-frame-timeline-v1.xml",
         "graphics/droidloom-wayland/protocol/denial-text-input-panel-v1.xml",
         "graphics/droidloom-wayland/protocol/denial-insets-v1.xml",
+        "runtime/droidloom-devices/protocol/denial-fingerprint-verify-v1.xml",
         "android/device/droidloom_arm64/android.software.activities_on_secondary_displays.xml",
     ] {
         copy(&repo.join(name), &destination.join("upstream").join(name))?;

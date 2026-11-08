@@ -39,6 +39,10 @@ fn shared_wayland_protocols_match_denial() {
             "protocol/denial-frame-timeline-v1.xml",
             "denial-frame-timeline-v1.xml",
         ),
+        (
+            "runtime/droidloom-devices/protocol/denial-fingerprint-verify-v1.xml",
+            "denial-fingerprint-verify-v1.xml",
+        ),
     ] {
         let local_bytes = fs::read(root.join(local)).unwrap();
         let upstream_bytes = fs::read(denial.join(name))
@@ -283,8 +287,9 @@ fn android_vendor_build_uses_the_safe_rust_composer_core() {
     assert!(android_bp.contains("name: \"vulkan.droidloom\""));
     assert!(android_bp.contains("crate_root: \"android/gpu/droidloom-vulkan/src/lib.rs\""));
     // Five shared transport/codec crates also build platform variants for WMS
-    // and its native input receiver.
-    assert_eq!(android_bp.matches("vendor: true").count(), 17);
+    // and its native input receiver. The haptics, camera and authentication
+    // HALs add the device protocol, their libraries and their services.
+    assert_eq!(android_bp.matches("vendor: true").count(), 24);
 
     let product = fs::read_to_string(
         repository_root().join("android/device/droidloom_arm64/droidloom_arm64.mk"),

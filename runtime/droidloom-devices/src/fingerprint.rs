@@ -1,9 +1,12 @@
 //! Android's fingerprint service verifies against the fingers the user
-//! enrolled in fprintd. Each verification owns a private system-bus
-//! connection pinned to fprintd's owner, claims the reader, and stops and
-//! releases it however it ends; closing the connection is the fallback. The
-//! reader is claimed only while Android waits for a finger, so Denial's lock
-//! screen finds it free.
+//! enrolled in fprintd. Under Denial the compositor runs the reader and marks
+//! the sensor ([`denial`]). Elsewhere each verification owns a private
+//! system-bus connection pinned to fprintd's owner, claims the reader, and
+//! stops and releases it however it ends; closing the connection is the
+//! fallback. The reader is claimed only while Android waits for a finger, so
+//! a lock screen finds it free.
+
+mod denial;
 
 use std::io;
 use std::sync::Arc;
@@ -164,6 +167,9 @@ fn stop_and_release(device: &Proxy<'_>) {
 /// is returned once the reader is let go, except a match, which is reported
 /// first so Android hears it at once.
 fn verify(cancel: &async_channel::Receiver<()>, report: &dyn Fn(Scan) -> bool) -> Scan {
+    if let Some(scan) = denial::verify(cancel, report) {
+        return scan;
+    }
     let connection =
         match Builder::system().and_then(|builder| builder.method_timeout(CALL_TIMEOUT).build()) {
             Ok(connection) => connection,

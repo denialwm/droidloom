@@ -217,7 +217,10 @@ hapticd on the system bus; a client that disconnects stops its pattern. Camera
 clients list braun's cameras or ask for a braun session, which the broker
 passes on as braun's own session descriptor; the HAL then speaks braun's
 protocol directly. Fingerprint clients ask for the reader and the user's
-enrolled fingers, and start or cancel a verification; the broker claims
+enrolled fingers, and start or cancel a verification. Where the compositor
+offers `denial_fingerprint_verifier_v1` (Denial), the broker asks it: Denial
+runs the reader, lights the panel and marks the sensor, and a pending
+verification waits while the session is locked. Elsewhere the broker claims
 fprintd's reader for each verification only, listens again after a no-match,
 and stops and releases the reader however it ends. Without hapticd, braun or
 fprintd the broker reports no vibrator, no cameras and no reader.
