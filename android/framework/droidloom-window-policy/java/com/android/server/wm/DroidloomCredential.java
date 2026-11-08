@@ -18,30 +18,36 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 /**
  * Android's fingerprint sensor and its auth-bound keys need an Android credential. Droidloom
  * sets a random password nobody types and verifies it at each start, which unlocks user 0 and
  * keeps its secure user ID. The host's lock screen stays the only lock: SystemUI reports the
- * keyguard gone once {@link #STATE} is "verified". A credential Droidloom did not set is left
- * alone and the cell stays locked, as before.
+ * keyguard gone once {@link #STATE} is "verified", and showing while {@link #HOST_LOCKED} says
+ * the host session is locked. Each host unlock verifies the credential again, which unlocks the
+ * keys that need an unlocked device. A credential Droidloom did not set is left alone and the
+ * cell stays locked, as before.
  */
 final class DroidloomCredential {
     static final String STATE = "sys.droidloom.credential";
+    static final String HOST_LOCKED = "sys.droidloom.host_locked";
     private static final String TAG = "DroidloomCredential";
     private static final File DIRECTORY = new File("/data/system/droidloom");
     private static final AtomicFile FILE = new AtomicFile(new File(DIRECTORY, "credential"));
     private static final String ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789";
     private static final int LENGTH = 32;
+    /** LockPatternUtils refuses to verify on the main thread; one worker keeps the order. */
+    private static final ExecutorService WORKER = Executors.newSingleThreadExecutor(
+            runnable -> { Thread thread = new Thread(runnable, TAG); thread.setDaemon(true); return thread; });
 
     /** Applies at user 0's locked boot; verifying the credential is what unlocks the user. */
     static void register(Context context) {
         BroadcastReceiver receiver = new BroadcastReceiver() {
             @Override public void onReceive(Context ignored, Intent intent) {
                 if (getSendingUserId() != 0) return;
-                // LockPatternUtils refuses to verify on the main thread.
-                Thread worker = new Thread(() -> apply(context), TAG);
-                worker.setDaemon(true); worker.start();
+                WORKER.execute(() -> apply(context));
             }
         };
         context.registerReceiver(receiver, new IntentFilter(Intent.ACTION_LOCKED_BOOT_COMPLETED),
@@ -86,6 +92,27 @@ final class DroidloomCredential {
             Slog.w(TAG, "Credential state not announced", error);
         } finally {
             data.recycle();
+        }
+    }
+    /** The host session locked or unlocked; Droidloom's supervisor follows logind's hint. */
+    static String hostLocked(Context context, boolean locked) {
+        WORKER.execute(() -> {
+            if (!locked) verify(context);
+            SystemProperties.set(HOST_LOCKED, locked ? "1" : "0");
+            announce();
+        });
+        return "locked=" + locked;
+    }
+    private static void verify(Context context) {
+        String stored = read();
+        LockPatternUtils locks = new LockPatternUtils(context);
+        if (stored == null || !locks.isSecure(0)) return;
+        try (LockscreenCredential credential = LockscreenCredential.createPassword(stored)) {
+            if (!locks.verifyCredential(credential, 0, 0).isMatched()) {
+                Slog.w(TAG, "Android's credential no longer matches Droidloom's");
+            }
+        } catch (Exception error) {
+            Slog.e(TAG, "Android credential not verified at the host unlock", error);
         }
     }
     private static String read() {

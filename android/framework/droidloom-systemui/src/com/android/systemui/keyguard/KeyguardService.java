@@ -2,6 +2,7 @@
 package com.android.systemui.keyguard;
 
 import android.app.Service;
+import android.app.trust.TrustManager;
 import android.content.Intent;
 import android.os.Bundle;
 import android.os.Handler;
@@ -20,21 +21,26 @@ import java.util.ArrayList;
 /**
  * Native desktop owns locking. The Android credential Droidloom manages is verified by the
  * framework at each start (DroidloomCredential); until then, or with a credential the user set
- * in Android, the cell is reported locked.
+ * in Android, the cell is reported locked. The keyguard also shows while the host session is
+ * locked, so Android locks the keys that need an unlocked device.
  */
 public final class KeyguardService extends Service {
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
     private volatile int userId;
     private LockPatternUtils locks;
     private final ArrayList<IKeyguardStateCallback> callbacks = new ArrayList<>();
-    private boolean locked() {
+    private Boolean reported;
+    private boolean credentialLocked() {
         return locks.isSecure(userId)
                 && !(userId == 0 && "verified".equals(SystemProperties.get("sys.droidloom.credential")));
+    }
+    private boolean locked() {
+        return credentialLocked() || "1".equals(SystemProperties.get("sys.droidloom.host_locked"));
     }
     private void state(IKeyguardStateCallback callback) throws RemoteException {
         if (callback == null) return;
         boolean locked = locked();
-        if (locked) Unsupported.report("Android credential lock");
+        if (credentialLocked()) Unsupported.report("Android credential lock");
         callback.onShowingStateChanged(locked, userId);
         callback.onInputRestrictedStateChanged(locked);
         callback.onTrustedChanged(false);
@@ -83,11 +89,17 @@ public final class KeyguardService extends Service {
     }
     /** Resends the state when the credential is verified, or the window manager assumed a lock. */
     private void announce() {
+        boolean locked;
         synchronized (callbacks) {
             callbacks.removeIf(callback -> {
                 try { state(callback); return false; } catch (RemoteException gone) { return true; }
             });
+            locked = locked();
+            if (Boolean.valueOf(locked).equals(reported)) return;
+            reported = locked;
         }
+        // Trust works out whether the device is locked and tells Keystore.
+        getSystemService(TrustManager.class).reportKeyguardShowingChanged();
     }
     @Override public IBinder onBind(Intent intent) { return binder; }
     @Override protected void dump(FileDescriptor fd, PrintWriter out, String[] args) {

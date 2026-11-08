@@ -779,11 +779,13 @@ dependencies = [
 name = "droidloom-supervisor"
 version = "0.1.0"
 dependencies = [
+ "async-io",
  "clap",
  "droidloom-contracts",
  "droidloom-cpu-placement",
  "droidloom-task-control",
  "droidloom-window-policy",
+ "futures-lite",
  "hex",
  "libc",
  "serde",
@@ -791,6 +793,7 @@ dependencies = [
  "sha2",
  "tempfile",
  "thiserror",
+ "zbus",
 ]
 
 [[package]]

@@ -8,6 +8,9 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+async-io = "2.6.0"
+futures-lite = "2.6.1"
+zbus = { version = "5.18.0", default-features = false, features = ["async-io"] }
 droidloom-cpu-placement = { path = "../droidloom-cpu-placement" }
 clap.workspace = true
 droidloom-contracts = { path = "../droidloom-contracts" }

@@ -116,6 +116,14 @@ sets `sys.droidloom.credential=verified`, then asks the activity manager to run
 every process's property callbacks; SystemUI then reports the keyguard gone. The
 window manager marks the keyguard showing before a timeout lock, so SystemUI
 tells the state again on each timeout request.
+
+The keyguard also follows the host session's lock. The lifecycle daemon reads
+logind's `LockedHint` for the owner's graphical session, which the compositor
+sets, and sends each change to the framework (`HOST_LOCK`). The framework sets
+`sys.droidloom.host_locked`; SystemUI reports the keyguard showing while it is
+`1` and tells Trust, which locks Keystore's keys that need an unlocked device.
+At each host unlock the framework verifies the Droidloom credential first, which
+unlocks those keys again.
 A credential Droidloom did not set is left alone, and the cell stays locked.
 
 `droidloom-window-policy` implements the Droidloom replacement for

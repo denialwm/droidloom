@@ -22,6 +22,8 @@ pub const PACKAGE_ACTION: u16 = 6;
 pub const DISPLAY: u16 = 7;
 /// Ask MediaProvider to rescan shared-storage paths the host changed.
 pub const MEDIA_SCAN: u16 = 8;
+/// Tell the framework whether the host session is locked.
+pub const HOST_LOCK: u16 = 9;
 /// Error bit in a response opcode.
 pub const ERROR: u16 = 0x8000;
 

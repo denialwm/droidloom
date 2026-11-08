@@ -48,6 +48,9 @@ pub use cell_watch::supervise_cell;
 #[path = "media_scan.rs"]
 mod media_scan;
 
+#[path = "host_lock.rs"]
+mod host_lock;
+
 use progress::{LOG_HINT, Reporter};
 
 /// Default root-owned lifecycle socket.
@@ -393,6 +396,8 @@ struct ActiveCell {
     started: Instant,
     /// Tells `MediaProvider` about host changes in the shared folders.
     _media: Option<media_scan::MediaWatch>,
+    /// Tells Android's keyguard whether the host session is locked.
+    _host_lock: Option<host_lock::HostLockWatch>,
 }
 impl ActiveCell {
     fn ready_init(&self, progress: &Reporter) -> Result<u32, ControlError> {
@@ -539,6 +544,7 @@ impl Daemon {
             ready_init: std::cell::Cell::new(None),
             started: Instant::now(),
             _media: media_scan::start(&spec, spec_path, &self.config.supervisor),
+            _host_lock: host_lock::start(&spec),
         });
         self.last_exit = None;
         Ok(ControlResponse {
