@@ -11,9 +11,10 @@
 
       Droidloom declares the features of a typical phone. Where the cell has
       no device behind one, Android's normal "absent or turned off" paths
-      apply: no camera or sensor is enumerated, location comes only from
-      network providers, and Bluetooth and Wi-Fi stay off (the
-      SettingsProvider overlay defaults Bluetooth off).
+      apply: no sensor is enumerated, cameras are those the host's braun
+      offers (none without it), location comes only from network providers,
+      and Bluetooth and Wi-Fi stay off (the SettingsProvider overlay
+      defaults Bluetooth off). No camera has a flash.
 
       Deliberately not declared, because they start stacks that need real
       hardware or conflict with the host: telephony and telecom (radio
@@ -30,7 +31,6 @@
     <feature name="android.hardware.camera" />
     <feature name="android.hardware.camera.any" />
     <feature name="android.hardware.camera.autofocus" />
-    <feature name="android.hardware.camera.flash" />
     <feature name="android.hardware.camera.front" />
     <feature name="android.hardware.microphone" />
     <feature name="android.hardware.audio.output" />

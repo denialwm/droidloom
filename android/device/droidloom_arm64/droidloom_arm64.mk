@@ -44,6 +44,8 @@ PRODUCT_PACKAGES += \
     android.hardware.security.keymint-service.nonsecure \
     android.hardware.health-service.example \
     android.hardware.power-service.droidloom \
+    android.hardware.vibrator-service.droidloom \
+    android.hardware.camera.provider-service.droidloom \
     com.android.hardware.audio.droidloom \
     DroidloomFrameworkDisplayOverlay \
     DroidloomConnectivityOverlay \

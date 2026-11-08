@@ -12,6 +12,7 @@ pub const HOST_PACKAGES: &[&str] = &[
     "droidloom-applications",
     "droidloom-audio",
     "droidloom-gpu-server",
+    "droidloom-devices",
     "droidloom-doctor",
     "droidloom-update",
     "droidloom-package-support",
@@ -24,6 +25,7 @@ pub const HOST_BINARIES: &[&str] = &[
     "droidloom-applications",
     "droidloom-audio",
     "droidloom-gpu-server",
+    "droidloom-devices",
     "droidloom-doctor",
     "droidloom-update",
 ];
@@ -548,6 +550,8 @@ pub fn assemble_artifacts(
         "user/droidloom-audio.socket",
         "user/droidloom-gpu.service",
         "user/droidloom-gpu.socket",
+        "user/droidloom-devices.service",
+        "user/droidloom-devices.socket",
     ] {
         copy(
             &repo.join("packaging/systemd").join(name),

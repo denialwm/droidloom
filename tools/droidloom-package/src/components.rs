@@ -22,6 +22,8 @@ pub enum Component {
     Audio,
     #[value(name = "droidloom-gpu-server", alias = "gpu")]
     Gpu,
+    #[value(name = "droidloom-devices", alias = "devices")]
+    Devices,
     #[value(name = "droidloom-doctor", alias = "doctor")]
     Doctor,
     #[value(name = "droidloom-package-support", alias = "package-support")]
@@ -36,6 +38,7 @@ impl Component {
             Self::Applications => "droidloom-applications",
             Self::Audio => "droidloom-audio",
             Self::Gpu => "droidloom-gpu-server",
+            Self::Devices => "droidloom-devices",
             Self::Doctor => "droidloom-doctor",
             Self::PackageSupport => "droidloom-package-support",
         }
@@ -52,6 +55,7 @@ impl Component {
             Self::Applications => &[("droidloom-applications", "usr/bin/droidloom-applications")],
             Self::Audio => &[("droidloom-audio", "usr/bin/droidloom-audio")],
             Self::Gpu => &[("droidloom-gpu-server", "usr/bin/droidloom-gpu-server")],
+            Self::Devices => &[("droidloom-devices", "usr/bin/droidloom-devices")],
             Self::Doctor => &[("droidloom-doctor", "usr/bin/droidloom-doctor")],
             Self::PackageSupport => &[(
                 "droidloom-package-helper",

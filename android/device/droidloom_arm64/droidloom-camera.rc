@@ -1,0 +1,9 @@
+# Cameras come from the host's braun through the user's device broker; the
+# supervisor binds its socket into the cell. The session's buffers come from
+# the camera service, so the provider runs as cameraserver.
+service vendor.camera-provider-droidloom /vendor/bin/hw/android.hardware.camera.provider-service.droidloom
+    class hal
+    user cameraserver
+    group camera graphics
+    interface aidl android.hardware.camera.provider.ICameraProvider/internal/0
+    stdio_to_kmsg

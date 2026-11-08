@@ -1,0 +1,20 @@
+[package]
+name = "droidloom-devices"
+description = "Host user's broker for Android's haptics and cameras"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+clap.workspace = true
+droidloom-denial-ipc = { path = "../../graphics/droidloom-denial-ipc" }
+droidloom-device-protocol = { path = "../droidloom-device-protocol" }
+libc.workspace = true
+zbus = { version = "5.18.0", default-features = false, features = ["async-io", "blocking-api"] }
+
+[lints.rust]
+unsafe_code = "allow"
+unsafe_op_in_unsafe_fn = "deny"
+missing_docs = "warn"

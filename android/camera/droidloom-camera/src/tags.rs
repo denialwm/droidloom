@@ -1,0 +1,149 @@
+//! The camera metadata tags this service writes or reads, numbered as the
+//! frozen `android.hardware.camera.metadata` V3 `CameraMetadataTag` numbers
+//! them, and the enum values it uses.
+
+#![allow(missing_docs, clippy::unreadable_literal)]
+
+pub const COLOR_CORRECTION_ABERRATION_MODE: u32 = 0x3;
+pub const COLOR_CORRECTION_AVAILABLE_ABERRATION_MODES: u32 = 0x4;
+pub const CONTROL_AE_ANTIBANDING_MODE: u32 = 0x10000;
+pub const CONTROL_AE_EXPOSURE_COMPENSATION: u32 = 0x10001;
+pub const CONTROL_AE_LOCK: u32 = 0x10002;
+pub const CONTROL_AE_MODE: u32 = 0x10003;
+pub const CONTROL_AE_TARGET_FPS_RANGE: u32 = 0x10005;
+pub const CONTROL_AE_PRECAPTURE_TRIGGER: u32 = 0x10006;
+pub const CONTROL_AF_MODE: u32 = 0x10007;
+pub const CONTROL_AF_REGIONS: u32 = 0x10008;
+pub const CONTROL_AF_TRIGGER: u32 = 0x10009;
+pub const CONTROL_AWB_LOCK: u32 = 0x1000a;
+pub const CONTROL_AWB_MODE: u32 = 0x1000b;
+pub const CONTROL_CAPTURE_INTENT: u32 = 0x1000d;
+pub const CONTROL_EFFECT_MODE: u32 = 0x1000e;
+pub const CONTROL_MODE: u32 = 0x1000f;
+pub const CONTROL_SCENE_MODE: u32 = 0x10010;
+pub const CONTROL_VIDEO_STABILIZATION_MODE: u32 = 0x10011;
+pub const CONTROL_AE_AVAILABLE_ANTIBANDING_MODES: u32 = 0x10012;
+pub const CONTROL_AE_AVAILABLE_MODES: u32 = 0x10013;
+pub const CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES: u32 = 0x10014;
+pub const CONTROL_AE_COMPENSATION_RANGE: u32 = 0x10015;
+pub const CONTROL_AE_COMPENSATION_STEP: u32 = 0x10016;
+pub const CONTROL_AF_AVAILABLE_MODES: u32 = 0x10017;
+pub const CONTROL_AVAILABLE_EFFECTS: u32 = 0x10018;
+pub const CONTROL_AVAILABLE_SCENE_MODES: u32 = 0x10019;
+pub const CONTROL_AVAILABLE_VIDEO_STABILIZATION_MODES: u32 = 0x1001a;
+pub const CONTROL_AWB_AVAILABLE_MODES: u32 = 0x1001b;
+pub const CONTROL_MAX_REGIONS: u32 = 0x1001c;
+pub const CONTROL_AE_STATE: u32 = 0x1001f;
+pub const CONTROL_AF_STATE: u32 = 0x10020;
+pub const CONTROL_AWB_STATE: u32 = 0x10022;
+pub const CONTROL_AE_LOCK_AVAILABLE: u32 = 0x10024;
+pub const CONTROL_AWB_LOCK_AVAILABLE: u32 = 0x10025;
+pub const CONTROL_AVAILABLE_MODES: u32 = 0x10026;
+pub const CONTROL_ZOOM_RATIO_RANGE: u32 = 0x1002e;
+pub const CONTROL_ZOOM_RATIO: u32 = 0x1002f;
+pub const EDGE_MODE: u32 = 0x30000;
+pub const EDGE_AVAILABLE_EDGE_MODES: u32 = 0x30002;
+pub const FLASH_MODE: u32 = 0x40002;
+pub const FLASH_STATE: u32 = 0x40005;
+pub const FLASH_INFO_AVAILABLE: u32 = 0x50000;
+pub const JPEG_ORIENTATION: u32 = 0x70003;
+pub const JPEG_QUALITY: u32 = 0x70004;
+pub const JPEG_THUMBNAIL_QUALITY: u32 = 0x70005;
+pub const JPEG_THUMBNAIL_SIZE: u32 = 0x70006;
+pub const JPEG_AVAILABLE_THUMBNAIL_SIZES: u32 = 0x70007;
+pub const JPEG_MAX_SIZE: u32 = 0x70008;
+pub const LENS_APERTURE: u32 = 0x80000;
+pub const LENS_FILTER_DENSITY: u32 = 0x80001;
+pub const LENS_FOCAL_LENGTH: u32 = 0x80002;
+pub const LENS_FOCUS_DISTANCE: u32 = 0x80003;
+pub const LENS_OPTICAL_STABILIZATION_MODE: u32 = 0x80004;
+pub const LENS_FACING: u32 = 0x80005;
+pub const LENS_STATE: u32 = 0x80009;
+pub const LENS_INFO_AVAILABLE_APERTURES: u32 = 0x90000;
+pub const LENS_INFO_AVAILABLE_FILTER_DENSITIES: u32 = 0x90001;
+pub const LENS_INFO_AVAILABLE_FOCAL_LENGTHS: u32 = 0x90002;
+pub const LENS_INFO_AVAILABLE_OPTICAL_STABILIZATION: u32 = 0x90003;
+pub const LENS_INFO_HYPERFOCAL_DISTANCE: u32 = 0x90004;
+pub const LENS_INFO_MINIMUM_FOCUS_DISTANCE: u32 = 0x90005;
+pub const LENS_INFO_FOCUS_DISTANCE_CALIBRATION: u32 = 0x90007;
+pub const NOISE_REDUCTION_MODE: u32 = 0xa0000;
+pub const NOISE_REDUCTION_AVAILABLE_NOISE_REDUCTION_MODES: u32 = 0xa0002;
+pub const REQUEST_MAX_NUM_OUTPUT_STREAMS: u32 = 0xc0006;
+pub const REQUEST_MAX_NUM_INPUT_STREAMS: u32 = 0xc0008;
+pub const REQUEST_PIPELINE_DEPTH: u32 = 0xc0009;
+pub const REQUEST_PIPELINE_MAX_DEPTH: u32 = 0xc000a;
+pub const REQUEST_PARTIAL_RESULT_COUNT: u32 = 0xc000b;
+pub const REQUEST_AVAILABLE_CAPABILITIES: u32 = 0xc000c;
+pub const REQUEST_AVAILABLE_REQUEST_KEYS: u32 = 0xc000d;
+pub const REQUEST_AVAILABLE_RESULT_KEYS: u32 = 0xc000e;
+pub const REQUEST_AVAILABLE_CHARACTERISTICS_KEYS: u32 = 0xc000f;
+pub const SCALER_CROP_REGION: u32 = 0xd0000;
+pub const SCALER_AVAILABLE_MAX_DIGITAL_ZOOM: u32 = 0xd0004;
+pub const SCALER_AVAILABLE_STREAM_CONFIGURATIONS: u32 = 0xd000a;
+pub const SCALER_AVAILABLE_MIN_FRAME_DURATIONS: u32 = 0xd000b;
+pub const SCALER_AVAILABLE_STALL_DURATIONS: u32 = 0xd000c;
+pub const SCALER_CROPPING_TYPE: u32 = 0xd000d;
+pub const SENSOR_EXPOSURE_TIME: u32 = 0xe0000;
+pub const SENSOR_FRAME_DURATION: u32 = 0xe0001;
+pub const SENSOR_SENSITIVITY: u32 = 0xe0002;
+pub const SENSOR_ORIENTATION: u32 = 0xe000e;
+pub const SENSOR_TIMESTAMP: u32 = 0xe0010;
+pub const SENSOR_TEST_PATTERN_MODE: u32 = 0xe0018;
+pub const SENSOR_AVAILABLE_TEST_PATTERN_MODES: u32 = 0xe0019;
+pub const SENSOR_ROLLING_SHUTTER_SKEW: u32 = 0xe001a;
+pub const SENSOR_INFO_ACTIVE_ARRAY_SIZE: u32 = 0xf0000;
+pub const SENSOR_INFO_MAX_FRAME_DURATION: u32 = 0xf0004;
+pub const SENSOR_INFO_PHYSICAL_SIZE: u32 = 0xf0005;
+pub const SENSOR_INFO_PIXEL_ARRAY_SIZE: u32 = 0xf0006;
+pub const SENSOR_INFO_TIMESTAMP_SOURCE: u32 = 0xf0008;
+pub const SENSOR_INFO_PRE_CORRECTION_ACTIVE_ARRAY_SIZE: u32 = 0xf000a;
+pub const SHADING_MODE: u32 = 0x100000;
+pub const STATISTICS_FACE_DETECT_MODE: u32 = 0x110000;
+pub const STATISTICS_SCENE_FLICKER: u32 = 0x11000e;
+pub const STATISTICS_LENS_SHADING_MAP_MODE: u32 = 0x110010;
+pub const STATISTICS_INFO_AVAILABLE_FACE_DETECT_MODES: u32 = 0x120000;
+pub const STATISTICS_INFO_MAX_FACE_COUNT: u32 = 0x120002;
+pub const STATISTICS_INFO_AVAILABLE_LENS_SHADING_MAP_MODES: u32 = 0x120007;
+pub const INFO_SUPPORTED_HARDWARE_LEVEL: u32 = 0x150000;
+pub const BLACK_LEVEL_LOCK: u32 = 0x160000;
+pub const SYNC_FRAME_NUMBER: u32 = 0x170000;
+pub const SYNC_MAX_LATENCY: u32 = 0x170001;
+
+/// `PixelFormat` values.
+pub mod format {
+    pub const RGBA_8888: i32 = 1;
+    pub const BLOB: i32 = 0x21;
+    pub const IMPLEMENTATION_DEFINED: i32 = 0x22;
+    pub const YCBCR_420_888: i32 = 0x23;
+}
+
+/// `ControlAfMode` values.
+pub mod af_mode {
+    pub const OFF: u8 = 0;
+    pub const AUTO: u8 = 1;
+    pub const CONTINUOUS_VIDEO: u8 = 3;
+    pub const CONTINUOUS_PICTURE: u8 = 4;
+}
+
+/// `ControlAfState` values.
+pub mod af_state {
+    pub const INACTIVE: u8 = 0;
+    pub const PASSIVE_FOCUSED: u8 = 2;
+    pub const ACTIVE_SCAN: u8 = 3;
+    pub const FOCUSED_LOCKED: u8 = 4;
+}
+
+/// `ControlAfTrigger` and `ControlAePrecaptureTrigger` values.
+pub mod trigger {
+    pub const IDLE: u8 = 0;
+    pub const START: u8 = 1;
+    pub const CANCEL: u8 = 2;
+}
+
+/// `ControlCaptureIntent` values, which match `RequestTemplate`.
+pub mod intent {
+    pub const PREVIEW: u8 = 1;
+    pub const STILL_CAPTURE: u8 = 2;
+    pub const VIDEO_RECORD: u8 = 3;
+    pub const VIDEO_SNAPSHOT: u8 = 4;
+}

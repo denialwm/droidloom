@@ -23,7 +23,7 @@ use thiserror::Error;
 const MAX_LOCK_BYTES: u64 = 1024 * 1024;
 const MAX_PROJECTS: usize = 256;
 const MAX_LINKS: usize = 64;
-const MAX_SPARSE_PATHS: usize = 128;
+const MAX_SPARSE_PATHS: usize = 160;
 const OFFICIAL_REMOTE: &str = "https://android.googlesource.com/";
 
 /// Exact sparse-source lock selected for one milestone.

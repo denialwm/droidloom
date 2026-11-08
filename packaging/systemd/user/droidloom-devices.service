@@ -1,0 +1,15 @@
+[Unit]
+Description=Droidloom host haptics and camera broker
+PartOf=droidloom.service
+Requires=droidloom-devices.socket
+
+[Service]
+ExecStart=/usr/bin/droidloom-devices
+Restart=on-failure
+RestartSec=1
+NoNewPrivileges=true
+RestrictSUIDSGID=true
+# Filesystem namespacing in a user unit implicitly creates a user namespace
+# mapping only the host user. That hides Android's system and cameraserver
+# UIDs from SO_PEERCRED, so these cross-UID endpoints keep the host user
+# namespace.

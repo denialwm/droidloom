@@ -1,0 +1,379 @@
+//! Records between Android's haptics and camera services and the host user's
+//! device broker, one per `SOCK_SEQPACKET` packet, little-endian.
+//!
+//! Every record starts with [`MAGIC`] and a 32-bit kind. Haptics are fire and
+//! forget except the query; the camera list and connect each get one reply.
+//! A camera session is braun's own socket, passed beside [`Message::CameraSession`].
+
+use std::fmt;
+
+/// First bytes of every record.
+pub const MAGIC: [u8; 8] = *b"DLDEV001";
+/// Most steps in one haptic pattern, as hapticd takes them.
+pub const MAX_STEPS: usize = 64;
+/// Longest haptic pattern, as hapticd takes it.
+pub const MAX_PATTERN_MS: u32 = 30_000;
+/// Most cameras one list carries.
+pub const MAX_CAMERAS: usize = 16;
+/// Longest camera id, name or failure text.
+pub const MAX_TEXT: usize = 256;
+/// Largest record either side sends.
+pub const MAX_RECORD: usize = 8192;
+
+const HAPTICS_QUERY: u32 = 1;
+const HAPTICS_DEVICE: u32 = 2;
+const HAPTICS_PLAY: u32 = 3;
+const HAPTICS_STOP: u32 = 4;
+const CAMERA_LIST: u32 = 16;
+const CAMERA_CAMERAS: u32 = 17;
+const CAMERA_CONNECT: u32 = 18;
+const CAMERA_SESSION: u32 = 19;
+const CAMERA_UNAVAILABLE: u32 = 20;
+
+/// One step of a haptic pattern: `intensity` from 0 to 1 for `ms`; 0 is a pause.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Step {
+    /// Milliseconds.
+    pub ms: u32,
+    /// Strength, 0 to 1.
+    pub intensity: f32,
+}
+
+/// Which way a camera looks.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Facing {
+    /// Toward the user.
+    Front,
+    /// Away from the user.
+    Back,
+    /// Plugged in.
+    External,
+}
+
+/// One host camera, as braun describes it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Camera {
+    /// braun's id.
+    pub id: String,
+    /// Model name.
+    pub name: String,
+    /// Which way it looks.
+    pub facing: Facing,
+    /// Full frame width, upright.
+    pub width: u32,
+    /// Full frame height, upright.
+    pub height: u32,
+    /// The main camera's zoom that shows what this one does; 0 when unknown.
+    pub zoom: f32,
+    /// It can focus.
+    pub lens: bool,
+}
+
+/// A record.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Message {
+    /// Android asks whether the host has a vibrator.
+    HapticsQuery,
+    /// The host's default vibrator.
+    HapticsDevice {
+        /// There is one.
+        present: bool,
+        /// It takes strengths between off and full.
+        intensity: bool,
+    },
+    /// Play this pattern now, replacing the one playing.
+    HapticsPlay(Vec<Step>),
+    /// Stop the pattern playing.
+    HapticsStop,
+    /// Android asks for the host's cameras.
+    CameraList,
+    /// The host's cameras.
+    Cameras(Vec<Camera>),
+    /// Android asks for a braun session.
+    CameraConnect,
+    /// A braun session; its socket travels beside this record.
+    CameraSession,
+    /// No session, and why.
+    CameraUnavailable(String),
+}
+
+/// A record that does not decode.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Invalid(&'static str);
+
+impl fmt::Display for Invalid {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "invalid device record: {}", self.0)
+    }
+}
+
+impl std::error::Error for Invalid {}
+
+struct Writer(Vec<u8>);
+
+impl Writer {
+    fn new(kind: u32) -> Self {
+        let mut bytes = Vec::with_capacity(64);
+        bytes.extend_from_slice(&MAGIC);
+        bytes.extend_from_slice(&kind.to_le_bytes());
+        Self(bytes)
+    }
+    fn u8(&mut self, value: u8) {
+        self.0.push(value);
+    }
+    fn u32(&mut self, value: u32) {
+        self.0.extend_from_slice(&value.to_le_bytes());
+    }
+    fn f32(&mut self, value: f32) {
+        self.0.extend_from_slice(&value.to_le_bytes());
+    }
+    fn text(&mut self, value: &str) {
+        let mut end = value.len().min(MAX_TEXT);
+        while !value.is_char_boundary(end) {
+            end -= 1;
+        }
+        // MAX_TEXT fits a u16.
+        #[allow(clippy::cast_possible_truncation)]
+        self.0.extend_from_slice(&(end as u16).to_le_bytes());
+        self.0.extend_from_slice(&value.as_bytes()[..end]);
+    }
+}
+
+struct Reader<'a>(&'a [u8]);
+
+impl Reader<'_> {
+    fn take<const N: usize>(&mut self) -> Result<[u8; N], Invalid> {
+        let (head, rest) = self.0.split_at_checked(N).ok_or(Invalid("short"))?;
+        self.0 = rest;
+        Ok(head.try_into().expect("split at N"))
+    }
+    fn u8(&mut self) -> Result<u8, Invalid> {
+        Ok(self.take::<1>()?[0])
+    }
+    fn u32(&mut self) -> Result<u32, Invalid> {
+        self.take().map(u32::from_le_bytes)
+    }
+    fn f32(&mut self) -> Result<f32, Invalid> {
+        let value = f32::from_le_bytes(self.take()?);
+        value.is_finite().then_some(value).ok_or(Invalid("not a number"))
+    }
+    fn text(&mut self) -> Result<String, Invalid> {
+        let length = usize::from(u16::from_le_bytes(self.take()?));
+        if length > MAX_TEXT {
+            return Err(Invalid("text too long"));
+        }
+        let (head, rest) = self.0.split_at_checked(length).ok_or(Invalid("short"))?;
+        self.0 = rest;
+        String::from_utf8(head.to_vec()).map_err(|_| Invalid("text not UTF-8"))
+    }
+    fn count(&mut self, most: usize) -> Result<usize, Invalid> {
+        usize::try_from(self.u32()?)
+            .ok()
+            .filter(|count| *count <= most)
+            .ok_or(Invalid("too many"))
+    }
+    fn end(&self) -> Result<(), Invalid> {
+        self.0.is_empty().then_some(()).ok_or(Invalid("trailing bytes"))
+    }
+}
+
+/// Whether hapticd takes this pattern: 1 to 64 steps, at most 30 s.
+pub fn valid_pattern(steps: &[Step]) -> bool {
+    !steps.is_empty()
+        && steps.len() <= MAX_STEPS
+        && steps
+            .iter()
+            .all(|step| step.intensity.is_finite() && (0.0..=1.0).contains(&step.intensity))
+        && steps
+            .iter()
+            .try_fold(0u32, |total, step| total.checked_add(step.ms))
+            .is_some_and(|total| total > 0 && total <= MAX_PATTERN_MS)
+}
+
+impl Message {
+    /// The record's bytes.
+    pub fn encode(&self) -> Vec<u8> {
+        let writer = match self {
+            Message::HapticsQuery => Writer::new(HAPTICS_QUERY),
+            Message::HapticsDevice { present, intensity } => {
+                let mut writer = Writer::new(HAPTICS_DEVICE);
+                writer.u8(u8::from(*present));
+                writer.u8(u8::from(*intensity));
+                writer
+            }
+            Message::HapticsPlay(steps) => {
+                let mut writer = Writer::new(HAPTICS_PLAY);
+                let steps = &steps[..steps.len().min(MAX_STEPS)];
+                // MAX_STEPS fits a u32.
+                #[allow(clippy::cast_possible_truncation)]
+                writer.u32(steps.len() as u32);
+                for step in steps {
+                    writer.u32(step.ms);
+                    writer.f32(step.intensity);
+                }
+                writer
+            }
+            Message::HapticsStop => Writer::new(HAPTICS_STOP),
+            Message::CameraList => Writer::new(CAMERA_LIST),
+            Message::Cameras(cameras) => {
+                let mut writer = Writer::new(CAMERA_CAMERAS);
+                let cameras = &cameras[..cameras.len().min(MAX_CAMERAS)];
+                #[allow(clippy::cast_possible_truncation)]
+                writer.u32(cameras.len() as u32);
+                for camera in cameras {
+                    writer.text(&camera.id);
+                    writer.text(&camera.name);
+                    writer.u8(match camera.facing {
+                        Facing::Front => 0,
+                        Facing::Back => 1,
+                        Facing::External => 2,
+                    });
+                    writer.u8(u8::from(camera.lens));
+                    writer.u32(camera.width);
+                    writer.u32(camera.height);
+                    writer.f32(camera.zoom);
+                }
+                writer
+            }
+            Message::CameraConnect => Writer::new(CAMERA_CONNECT),
+            Message::CameraSession => Writer::new(CAMERA_SESSION),
+            Message::CameraUnavailable(reason) => {
+                let mut writer = Writer::new(CAMERA_UNAVAILABLE);
+                writer.text(reason);
+                writer
+            }
+        };
+        writer.0
+    }
+
+    /// The record in `bytes`.
+    ///
+    /// # Errors
+    /// A record of another protocol, an unknown kind, or one whose fields do
+    /// not fit their bounds.
+    pub fn decode(bytes: &[u8]) -> Result<Self, Invalid> {
+        let mut reader = Reader(bytes);
+        if reader.take::<8>()? != MAGIC {
+            return Err(Invalid("not a device record"));
+        }
+        let message = match reader.u32()? {
+            HAPTICS_QUERY => Message::HapticsQuery,
+            HAPTICS_DEVICE => Message::HapticsDevice {
+                present: reader.u8()? != 0,
+                intensity: reader.u8()? != 0,
+            },
+            HAPTICS_PLAY => {
+                let count = reader.count(MAX_STEPS)?;
+                let mut steps = Vec::with_capacity(count);
+                for _ in 0..count {
+                    steps.push(Step {
+                        ms: reader.u32()?,
+                        intensity: reader.f32()?,
+                    });
+                }
+                if !valid_pattern(&steps) {
+                    return Err(Invalid("pattern out of bounds"));
+                }
+                Message::HapticsPlay(steps)
+            }
+            HAPTICS_STOP => Message::HapticsStop,
+            CAMERA_LIST => Message::CameraList,
+            CAMERA_CAMERAS => {
+                let count = reader.count(MAX_CAMERAS)?;
+                let mut cameras = Vec::with_capacity(count);
+                for _ in 0..count {
+                    cameras.push(Camera {
+                        id: reader.text()?,
+                        name: reader.text()?,
+                        facing: match reader.u8()? {
+                            0 => Facing::Front,
+                            1 => Facing::Back,
+                            2 => Facing::External,
+                            _ => return Err(Invalid("unknown facing")),
+                        },
+                        lens: reader.u8()? != 0,
+                        width: reader.u32()?,
+                        height: reader.u32()?,
+                        zoom: reader.f32()?,
+                    });
+                }
+                Message::Cameras(cameras)
+            }
+            CAMERA_CONNECT => Message::CameraConnect,
+            CAMERA_SESSION => Message::CameraSession,
+            CAMERA_UNAVAILABLE => Message::CameraUnavailable(reader.text()?),
+            _ => return Err(Invalid("unknown kind")),
+        };
+        reader.end()?;
+        Ok(message)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn records_round_trip() {
+        for message in [
+            Message::HapticsQuery,
+            Message::HapticsDevice {
+                present: true,
+                intensity: false,
+            },
+            Message::HapticsPlay(vec![
+                Step {
+                    ms: 12,
+                    intensity: 0.7,
+                },
+                Step {
+                    ms: 60,
+                    intensity: 0.0,
+                },
+            ]),
+            Message::HapticsStop,
+            Message::CameraList,
+            Message::Cameras(vec![Camera {
+                id: "imx890".into(),
+                name: "IMX890".into(),
+                facing: Facing::Back,
+                width: 3072,
+                height: 4096,
+                zoom: 1.0,
+                lens: true,
+            }]),
+            Message::CameraConnect,
+            Message::CameraSession,
+            Message::CameraUnavailable("braun is not installed".into()),
+        ] {
+            assert_eq!(Message::decode(&message.encode()), Ok(message));
+        }
+    }
+
+    #[test]
+    fn patterns_hapticd_refuses_do_not_decode() {
+        let long = Message::HapticsPlay(vec![Step {
+            ms: 30_001,
+            intensity: 1.0,
+        }]);
+        assert!(Message::decode(&long.encode()).is_err());
+        let silent = Message::HapticsPlay(vec![Step {
+            ms: 0,
+            intensity: 1.0,
+        }]);
+        assert!(Message::decode(&silent.encode()).is_err());
+        let loud = Message::HapticsPlay(vec![Step {
+            ms: 10,
+            intensity: 1.5,
+        }]);
+        assert!(Message::decode(&loud.encode()).is_err());
+    }
+
+    #[test]
+    fn other_records_are_refused() {
+        assert!(Message::decode(b"DLAUD001\x01\0\0\0").is_err());
+        let mut trailing = Message::HapticsStop.encode();
+        trailing.push(0);
+        assert!(Message::decode(&trailing).is_err());
+    }
+}

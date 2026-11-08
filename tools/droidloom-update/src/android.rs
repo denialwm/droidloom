@@ -780,6 +780,9 @@ pub fn build_targets(
         // test fixtures reference test-only HALs omitted from the sparse tree.
         "system/tools/hidl/test",
         "system/tools/hidl/hidl2aidl/test",
+        // The camera provider's VTS needs camera test libraries the sparse
+        // tree omits; only its interface is built.
+        "hardware/interfaces/camera/provider/aidl/vts",
     ] {
         p.put(&source.join(relative).join(".find-ignore"), b"")?;
     }
@@ -794,10 +797,13 @@ pub fn build_targets(
         "runtime/droidloom-cpu-placement",
         "runtime/droidloom-timing",
         "runtime/droidloom-audio-protocol",
+        "runtime/droidloom-device-protocol",
         "android/audio",
         "android/framework",
         "android/gpu",
         "android/power",
+        "android/haptics",
+        "android/camera",
         "android/lmkd-compat",
         "android/runtime",
         "android/native-bridge",

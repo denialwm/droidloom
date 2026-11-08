@@ -1,0 +1,8 @@
+# Vibration reaches the host user's device broker through the socket the
+# supervisor binds into the cell.
+service vendor.vibrator-droidloom /vendor/bin/hw/android.hardware.vibrator-service.droidloom
+    class hal
+    user system
+    group system
+    interface aidl android.hardware.vibrator.IVibratorManager/default
+    stdio_to_kmsg

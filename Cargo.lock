@@ -507,6 +507,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "droidloom-camera"
+version = "0.1.0"
+dependencies = [
+ "droidloom-device-protocol",
+]
+
+[[package]]
 name = "droidloom-classpath-wrapper"
 version = "0.1.0"
 dependencies = [
@@ -569,6 +576,21 @@ version = "0.1.0"
 dependencies = [
  "droidloom-transport",
  "thiserror",
+]
+
+[[package]]
+name = "droidloom-device-protocol"
+version = "0.1.0"
+
+[[package]]
+name = "droidloom-devices"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "droidloom-denial-ipc",
+ "droidloom-device-protocol",
+ "libc",
+ "zbus",
 ]
 
 [[package]]
@@ -654,6 +676,13 @@ dependencies = [
  "libc",
  "wayland-client",
  "wayland-protocols",
+]
+
+[[package]]
+name = "droidloom-haptics"
+version = "0.1.0"
+dependencies = [
+ "droidloom-device-protocol",
 ]
 
 [[package]]

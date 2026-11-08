@@ -165,6 +165,79 @@ rust_binary {
     ],
 }
 
+// Records between the vibrator and camera HALs and the host user's device
+// broker, which reaches hapticd and braun.
+rust_library {
+    name: "libdroidloom_device_protocol",
+    crate_name: "droidloom_device_protocol",
+    crate_root: "runtime/droidloom-device-protocol/src/lib.rs",
+    edition: "2024",
+    vendor: true,
+}
+
+// Vibrator AIDL V4 service: effects and compositions as hapticd patterns.
+rust_library {
+    name: "libdroidloom_haptics",
+    crate_name: "droidloom_haptics",
+    crate_root: "android/haptics/droidloom-haptics/src/lib.rs",
+    edition: "2024",
+    vendor: true,
+    rustlibs: ["libdroidloom_device_protocol"],
+}
+
+rust_binary {
+    name: "android.hardware.vibrator-service.droidloom",
+    crate_name: "droidloom_haptics_service",
+    crate_root: "android/haptics/droidloom-haptics-service/src/main.rs",
+    edition: "2024",
+    vendor: true,
+    relative_install_path: "hw",
+    init_rc: ["android/device/droidloom_arm64/droidloom-haptics.rc"],
+    vintf_fragments: ["android/device/droidloom_arm64/droidloom-haptics.xml"],
+    rustlibs: [
+        "android.hardware.vibrator-V4-rust",
+        "libbinder_rs",
+        "libdroidloom_denial_ipc",
+        "libdroidloom_device_protocol",
+        "libdroidloom_haptics",
+    ],
+}
+
+// Camera provider AIDL V4 service: braun's cameras, previews and photos.
+rust_library {
+    name: "libdroidloom_camera",
+    crate_name: "droidloom_camera",
+    crate_root: "android/camera/droidloom-camera/src/lib.rs",
+    edition: "2024",
+    vendor: true,
+    rustlibs: ["libdroidloom_device_protocol"],
+}
+
+rust_binary {
+    name: "android.hardware.camera.provider-service.droidloom",
+    crate_name: "droidloom_camera_service",
+    crate_root: "android/camera/droidloom-camera-service/src/main.rs",
+    edition: "2024",
+    vendor: true,
+    relative_install_path: "hw",
+    init_rc: ["android/device/droidloom_arm64/droidloom-camera.rc"],
+    vintf_fragments: ["android/device/droidloom_arm64/droidloom-camera.xml"],
+    rustlibs: [
+        "android.hardware.camera.common-V1-rust",
+        "android.hardware.camera.device-V4-rust",
+        "android.hardware.camera.provider-V4-rust",
+        "android.hardware.common-V2-rust",
+        "android.hardware.common.fmq-V1-rust",
+        "android.hardware.graphics.common-V7-rust",
+        "libbinder_rs",
+        "libdroidloom_camera",
+        "libdroidloom_denial_ipc",
+        "libdroidloom_device_protocol",
+        "libdroidloom_minigbm",
+        "liblibc",
+    ],
+}
+
 // Safe fixed-record encoder used after Denial has selected one Android task.
 rust_library {
     name: "libdroidloom_input_protocol",
