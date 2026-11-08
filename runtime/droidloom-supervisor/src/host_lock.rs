@@ -122,12 +122,19 @@ async fn follow(
         .map_err(error)?;
     let mut locked: bool = session.get_property("LockedHint").await.map_err(error)?;
     let mut changes = session.receive_property_changed::<bool>("LockedHint").await;
+    let mut failed = false;
     loop {
         if *announced != Some(locked) {
             match announce(spec, locked) {
-                Ok(()) => *announced = Some(locked),
-                // Android's framework is not listening yet, or restarted.
-                Err(error) if announced.is_some() => eprintln!("host lock not announced: {error}"),
+                Ok(()) => {
+                    *announced = Some(locked);
+                    failed = false;
+                }
+                // Android's framework may not be listening yet; it is asked again.
+                Err(error) if !failed => {
+                    eprintln!("host lock not announced yet, retrying: {error}");
+                    failed = true;
+                }
                 Err(_) => {}
             }
         }
@@ -208,7 +215,7 @@ fn announce(spec: &CellSpec, locked: bool) -> Result<(), String> {
     stream
         .set_write_timeout(timeout)
         .map_err(|error| error.to_string())?;
-    let request = serde_json::to_vec(&serde_json::json!({"locked": locked}))
+    let request = serde_json::to_vec(&serde_json::json!({"user": 0, "locked": locked}))
         .map_err(|error| error.to_string())?;
     framework_wire::write(
         &mut stream,
