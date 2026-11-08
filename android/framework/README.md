@@ -108,10 +108,14 @@ replaces `generation` in `/data/vendor/droidloom-authentication` when the
 enrollment or its authenticator ID changes; the provider then enumerates again
 and reloads the authenticator IDs.
 
-`DroidloomCredential` gives Android user 0 a random 32-character password,
-stored in `/data/system/droidloom/credential` and never typed. Fingerprints and
-auth-bound keys need a credential, and the gatekeeper's secure user ID comes from
-it. At each locked boot the framework verifies it, which unlocks the user, and
+`DroidloomCredential` gives Android user 0 a random 32-character password that
+nobody types. The lifecycle daemon keeps it beside the cell's storage on the
+host, readable by root alone, and gives it to system_server at each start
+(`CREDENTIAL`), after checking that the framework's socket belongs to a
+system-user child of the cell's zygote; it never enters Android's storage.
+Fingerprints and auth-bound keys need a credential, and the gatekeeper's secure
+user ID comes from it. Once the user reaches its locked boot and the password
+has arrived, the framework verifies it, which unlocks the user, and
 sets `sys.droidloom.credential=verified`, then asks the activity manager to run
 every process's property callbacks; SystemUI then reports the keyguard gone. The
 window manager marks the keyguard showing before a timeout lock, so SystemUI

@@ -1,0 +1,49 @@
+From: Droidloom development build
+Subject: [PATCH] keymint: a per-start agreement key in a cell
+
+The non-secure KeyMint derives the HMAC key it shares with Keystore and the
+other participants from an all-zero key agreement key. In a Droidloom cell
+Android's system UID is the host user, so anyone who can ask the participants
+for their public nonces could derive the shared key and sign their own auth
+tokens.
+
+When DROIDLOOM_CELL is set, KeyMint reads the agreement key the supervisor
+writes for each cell start, readable only by KeyMint's user and root.
+Outside a marked cell the upstream constant stays.
+
+diff --git a/security/keymint/aidl/default/ta/soft.rs b/security/keymint/aidl/default/ta/soft.rs
+index 45eab05..dd67acb 100644
+--- a/security/keymint/aidl/default/ta/soft.rs
++++ b/security/keymint/aidl/default/ta/soft.rs
+@@ -18,11 +18,14 @@
+ use kmr_common::{
+     crypto,
+     crypto::{Hkdf, Rng},
+-    Error,
++    km_err, Error,
+ };
+ use kmr_crypto_boring::{hmac::BoringHmac, rng::BoringRng};
+ use kmr_ta::device::RetrieveKeyMaterial;
+ 
++/// Written by Droidloom's supervisor at each cell start, readable only by KeyMint and root.
++const DROIDLOOM_AGREEMENT_KEY: &str = "/dev/droidloom-agreement-key";
++
+ /// Root key retrieval using hard-coded fake keys.
+ ///
+ /// This implementation is not suitable for use in a real device, as it is insecure (known keys).
+@@ -34,6 +37,15 @@ impl RetrieveKeyMaterial for Keys {
+         Ok(crypto::hmac::Key::new([0; 16].to_vec()).into())
+     }
+     fn kak(&self) -> Result<crypto::OpaqueOr<crypto::aes::Key>, Error> {
++        // In a Droidloom cell the system UID is the host user, so the key the shared HMAC key
++        // derives from must not be a known constant: a fresh one comes with each start.
++        if std::env::var_os("DROIDLOOM_CELL").is_some() {
++            let key: [u8; 32] = std::fs::read(DROIDLOOM_AGREEMENT_KEY)
++                .ok()
++                .and_then(|bytes| bytes.try_into().ok())
++                .ok_or_else(|| km_err!(HardwareNotYetAvailable, "no Droidloom agreement key"))?;
++            return Ok(crypto::aes::Key::Aes256(key).into());
++        }
+         // Matches `kFakeKeyAgreementKey` in
+         // system/keymaster/km_openssl/soft_keymaster_enforcement.cpp.
+         Ok(crypto::aes::Key::Aes256([0; 32]).into())

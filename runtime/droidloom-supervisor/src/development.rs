@@ -896,6 +896,8 @@ pub fn enter_development_cell(spec: &CellSpec) -> Result<(), DevelopmentError> {
     mount_host_storage(&spec.data_dir.join("metadata"), &root.join("metadata"))?;
     mount_proc_and_sys(spec, &root)?;
     create_private_dev(spec, &root)?;
+    crate::authentication::prepare(spec, &root)
+        .map_err(|source| io_error("prepare Android authentication secrets", source))?;
     mount_first_stage_runtime_filesystems(&root)?;
     bind_boot_parameters(spec, &root)?;
     let controllers = crate::cpu_placement::prepare(&root, spec.id().as_str())
@@ -911,6 +913,7 @@ pub fn enter_development_cell(spec: &CellSpec) -> Result<(), DevelopmentError> {
     }
     bind_adb_configuration(spec, &root)?;
     bind_product_properties(spec, &root)?;
+    bind_root_servicemanager(spec, &root)?;
 
     // The reusable base is a system-as-root image, but Droidloom has already
     // supplied the mounts that Android first-stage init normally constructs.
@@ -2252,6 +2255,30 @@ fn bind_product_properties(spec: &CellSpec, root: &Path) -> Result<(), Developme
     bind_mount(&source, &target, true)
 }
 
+/// Android's system user is the host user in a cell. servicemanager, which
+/// tells every process where each service is, runs as root so that user can
+/// neither change its answers nor kill it; its patch keeps the authentication
+/// services' names for root.
+fn bind_root_servicemanager(spec: &CellSpec, root: &Path) -> Result<(), DevelopmentError> {
+    let target = root.join("system/etc/init/servicemanager.rc");
+    let original =
+        fs::read_to_string(&target).map_err(|e| io_error("read servicemanager service", e))?;
+    let service = root_servicemanager(&original).ok_or_else(|| {
+        DevelopmentError::InvalidInput("servicemanager.rc has no `user system` line".into())
+    })?;
+    let source = spec.runtime_dir.join("android-servicemanager.rc");
+    fs::write(&source, service).map_err(|e| io_error("write servicemanager service", e))?;
+    set_mode(&source, 0o644)?;
+    bind_mount(&source, &target, true)
+}
+
+fn root_servicemanager(original: &str) -> Option<String> {
+    const SYSTEM: &str = "\n    user system\n";
+    original
+        .contains(SYSTEM)
+        .then(|| original.replacen(SYSTEM, "\n    user root\n", 1))
+}
+
 fn bind_cpu_policy(spec: &CellSpec, root: &Path, policy: &str) -> Result<(), DevelopmentError> {
     let directory = spec.runtime_dir.join("cgroup-policy");
     // Preserve the already projected init file, including the classpath and
@@ -2457,6 +2484,15 @@ fn io_error(context: &str, source: io::Error) -> DevelopmentError {
 mod tests {
     use super::*;
     use std::io::Write;
+
+    #[test]
+    fn servicemanager_runs_as_root_and_keeps_its_groups() {
+        let original = "service servicemanager /system/bin/servicemanager\n    class core animation\n    user system\n    group system readproc\n    critical\n";
+        let service = root_servicemanager(original).unwrap();
+        assert!(service.contains("\n    user root\n    group system readproc\n"));
+        assert!(!service.contains("user system"));
+        assert_eq!(root_servicemanager("service servicemanager x\n    user root\n"), None);
+    }
 
     #[test]
     fn physical_input_hotplug_cannot_create_nodes() {

@@ -5,22 +5,31 @@
 //! participant as it does with KeyMint, and both kinds of auth token are
 //! signed with it, so keys bound to the lock screen or to fingerprints work.
 //!
-//! The fingerprint sensor is the host user's fprintd reader, reached through
-//! the device broker. One enrollment stands for every finger the user enrolled
-//! on the host; it exists while the host has fingers and the Android user has
-//! a secure ID. When either changes, a property tells Android's fingerprint
-//! service to read the enrollment again. Removing it from Android does
-//! nothing: the host alone decides.
+//! The fingerprint sensor is the host user's fprintd reader. The device broker
+//! asks Denial to run it, and Denial shows the sensor; a match counts only once
+//! Droidloom's supervisor, which runs as root, has seen fprintd report it. One
+//! enrollment stands for every finger the user enrolled on the host; it exists
+//! while the host has fingers and the Android user has a secure ID. When either
+//! changes, a property tells Android's fingerprint service to read the
+//! enrollment again. Removing it from Android does nothing: the host alone
+//! decides.
+//!
+//! The service runs as root: Android's system user is the host user in a
+//! Droidloom cell, so its keys, records and the shared HMAC key stay out of
+//! that user's reach.
 
 #![deny(unsafe_op_in_unsafe_fn)]
 #![allow(non_snake_case)]
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::io::{self, Write};
-use std::path::PathBuf;
+use std::io::{self, Read, Write};
+use std::os::fd::AsRawFd;
+use std::os::unix::fs::PermissionsExt;
+use std::os::unix::net::{UnixListener, UnixStream};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use android_hardware_biometrics_common::aidl::android::hardware::biometrics::common::{
@@ -73,8 +82,18 @@ use kmr_wire::keymint::Digest;
 const GATEKEEPER: &str = "android.hardware.gatekeeper.IGatekeeper/default";
 const FINGERPRINT_SERVICE: &str = "android.hardware.biometrics.fingerprint.IFingerprint/default";
 const SHARED_SECRET: &str = "android.hardware.security.sharedsecret.ISharedSecret/droidloom";
-/// Created by the service's init file, owned by system.
+/// Created by the service's init file: root's, readable by system, whose
+/// fingerprint service watches [`GENERATION`] here.
 const STATE: &str = "/data/vendor/droidloom-authentication";
+/// The service's key and records, root's alone.
+const PRIVATE: &str = "/data/vendor/droidloom-authentication/private";
+/// Written by the supervisor at each cell start, readable by KeyMint and root.
+const AGREEMENT_KEY: &str = "/dev/droidloom-agreement-key";
+/// The supervisor reports fprintd's verify results here, one byte each.
+const FPRINTD: &str = "/dev/socket/droidloom-authentication";
+const FPRINTD_MATCH: u8 = 1;
+/// How long a match the broker reports waits for fprintd's.
+const FPRINTD_WAIT: Duration = Duration::from_secs(2);
 /// The supervisor binds the broker's fingerprint socket here.
 const SOCKET: &str = "/dev/socket/droidloom/fingerprint";
 /// Replaced whenever the enrollment Android should see changes.
@@ -119,7 +138,15 @@ fn hmac(key: &[u8], parts: &[&[u8]]) -> Option<[u8; MAC_LEN]> {
     operation.finish().ok()?.try_into().ok()
 }
 
-/// Files under [`STATE`], each replaced whole.
+fn replace(directory: &Path, name: &str, bytes: &[u8]) -> io::Result<()> {
+    let fresh = directory.join(format!("{name}.new"));
+    let mut file = fs::File::create(&fresh)?;
+    file.write_all(bytes)?;
+    file.sync_all()?;
+    fs::rename(fresh, directory.join(name))
+}
+
+/// Files under [`PRIVATE`], each replaced whole.
 struct Store(PathBuf);
 
 impl Store {
@@ -128,11 +155,7 @@ impl Store {
     }
 
     fn write(&self, name: &str, bytes: &[u8]) -> io::Result<()> {
-        let fresh = self.0.join(format!("{name}.new"));
-        let mut file = fs::File::create(&fresh)?;
-        file.write_all(bytes)?;
-        file.sync_all()?;
-        fs::rename(fresh, self.0.join(name))
+        replace(&self.0, name, bytes)
     }
 
     /// Tells Android's fingerprint service to read the enrollment again: it
@@ -140,7 +163,7 @@ impl Store {
     fn changed(&self) {
         let generation = GENERATIONS.fetch_add(1, Ordering::Relaxed);
         let value = format!("{}.{generation}", boottime_ms());
-        if let Err(error) = self.write(GENERATION, value.as_bytes()) {
+        if let Err(error) = replace(Path::new(STATE), GENERATION, value.as_bytes()) {
             eprintln!("droidloom-authentication: enrollment change not announced: {error}");
         }
     }
@@ -172,7 +195,12 @@ struct Fingerprints {
 struct Authentication {
     store: Store,
     key: [u8; MAC_LEN],
+    /// The key every shared-secret participant derives the HMAC key from.
+    agreement: [u8; 32],
     nonce: [u8; 32],
+    /// Matches fprintd reported since the service started.
+    fprintd_matches: Mutex<u64>,
+    fprintd_matched: Condvar,
     /// The HMAC key Keystore negotiated; auth tokens are signed with it.
     shared: Mutex<Option<[u8; MAC_LEN]>>,
     gatekeeper: Mutex<()>,
@@ -188,6 +216,27 @@ impl Authentication {
     fn signed(&self, token: &Token, mac: &[u8]) -> bool {
         self.sign(token)
             .is_some_and(|expected| same_mac(&expected, mac))
+    }
+
+    fn fprintd_matches(&self) -> u64 {
+        *lock(&self.fprintd_matches)
+    }
+
+    fn fprintd_match(&self) {
+        *lock(&self.fprintd_matches) += 1;
+        self.fprintd_matched.notify_all();
+    }
+
+    /// Whether fprintd reported a match after `since` matches, waiting a
+    /// little: Denial passes the match on after fprintd announces it.
+    fn fprintd_matched_since(&self, since: u64) -> bool {
+        let (count, _) = self
+            .fprintd_matched
+            .wait_timeout_while(lock(&self.fprintd_matches), FPRINTD_WAIT, |count| {
+                *count == since
+            })
+            .unwrap_or_else(PoisonError::into_inner);
+        *count != since
     }
 
     fn gatekeeper_user(&self, uid: u32) -> Option<GatekeeperUser> {
@@ -294,11 +343,11 @@ impl ISharedSecret::ISharedSecret for SharedSecret {
         let Some(context) = shared_secret_context(&participants, &self.0.nonce) else {
             return illegal();
         };
-        // Every participant derives the key from the same all-zero
-        // agreement key, as Android's non-secure KeyMint does.
+        // Every participant derives the key from the agreement key the
+        // supervisor gives KeyMint and this service at each cell start.
         let key: [u8; MAC_LEN] = BoringAesCmac
             .ckdf(
-                &crypto::aes::Key::Aes256([0; 32]).into(),
+                &crypto::aes::Key::Aes256(self.0.agreement).into(),
                 ISharedSecret::KEY_AGREEMENT_LABEL.as_bytes(),
                 &[&context],
                 MAC_LEN,
@@ -723,6 +772,7 @@ impl SessionState {
             let _ = cb.onError(Error::CANCELED, 0);
             return;
         }
+        let since = self.authentication.fprintd_matches();
         if socket
             .send_record(&Message::FingerprintVerify.encode(), &[])
             .is_err()
@@ -756,6 +806,13 @@ impl SessionState {
                 }
                 Scan::NoMatch => {}
                 Scan::Match if lockout == Lockout::None => {
+                    if !self.authentication.fprintd_matched_since(since) {
+                        eprintln!(
+                            "droidloom-authentication: the broker reported a match fprintd did not"
+                        );
+                        let _ = cb.onError(Error::HW_UNAVAILABLE, 0);
+                        return;
+                    }
                     self.matched();
                     let _ = cb.onAcquired(AcquiredInfo::GOOD, 0);
                     match self.token(challenge, sid, &fingers) {
@@ -986,23 +1043,104 @@ impl ISession for Session {
     }
 }
 
-fn main() {
-    let store = Store(PathBuf::from(STATE));
-    let key = match store.key() {
-        Ok(key) => key,
-        Err(error) => {
-            eprintln!("droidloom-authentication: no key in {STATE}: {error}");
-            std::process::exit(1);
-        }
+fn peer_uid(stream: &UnixStream) -> Option<u32> {
+    let mut credentials = libc::ucred {
+        pid: 0,
+        uid: u32::MAX,
+        gid: u32::MAX,
     };
+    let mut length = libc::socklen_t::try_from(size_of::<libc::ucred>()).ok()?;
+    // SAFETY: `credentials` and `length` are valid storage for SO_PEERCRED.
+    let result = unsafe {
+        libc::getsockopt(
+            stream.as_raw_fd(),
+            libc::SOL_SOCKET,
+            libc::SO_PEERCRED,
+            (&raw mut credentials).cast(),
+            &raw mut length,
+        )
+    };
+    (result == 0).then_some(credentials.uid)
+}
+
+/// Takes fprintd's results from the supervisor, the only source of a match:
+/// the broker and Denial run the reader, but cannot make one up.
+fn serve_fprintd(authentication: Arc<Authentication>) -> io::Result<()> {
+    let _ = fs::remove_file(FPRINTD);
+    let listener = UnixListener::bind(FPRINTD)?;
+    fs::set_permissions(FPRINTD, fs::Permissions::from_mode(0o600))?;
+    std::thread::Builder::new()
+        .name("fprintd".into())
+        .spawn(move || {
+            for stream in listener.incoming().flatten() {
+                if peer_uid(&stream) != Some(0) {
+                    continue;
+                }
+                let authentication = Arc::clone(&authentication);
+                std::thread::spawn(move || {
+                    for byte in stream.bytes() {
+                        match byte {
+                            Ok(FPRINTD_MATCH) => authentication.fprintd_match(),
+                            Ok(_) => {}
+                            Err(_) => break,
+                        }
+                    }
+                });
+            }
+        })?;
+    Ok(())
+}
+
+/// Records written while the service ran as Android's system user sat beside
+/// the generation file; they move into the private folder once.
+fn migrate() {
+    let Ok(entries) = fs::read_dir(STATE) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let target = Path::new(PRIVATE).join(&name);
+        if name.to_string_lossy().starts_with(GENERATION)
+            || !entry.file_type().is_ok_and(|kind| kind.is_file())
+            || target.exists()
+        {
+            continue;
+        }
+        if let Err(error) = fs::rename(entry.path(), target) {
+            eprintln!("droidloom-authentication: {name:?} not moved: {error}");
+        }
+    }
+}
+
+fn fail(message: &str) -> ! {
+    eprintln!("droidloom-authentication: {message}");
+    std::process::exit(1);
+}
+
+fn main() {
+    migrate();
+    let store = Store(PathBuf::from(PRIVATE));
+    let key = store
+        .key()
+        .unwrap_or_else(|error| fail(&format!("no key in {PRIVATE}: {error}")));
+    let agreement: [u8; 32] = fs::read(AGREEMENT_KEY)
+        .ok()
+        .and_then(|bytes| bytes.try_into().ok())
+        .unwrap_or_else(|| fail(&format!("no agreement key in {AGREEMENT_KEY}")));
     let authentication = Arc::new(Authentication {
         store,
         key,
+        agreement,
         nonce: random(),
+        fprintd_matches: Mutex::new(0),
+        fprintd_matched: Condvar::new(),
         shared: Mutex::new(None),
         gatekeeper: Mutex::new(()),
         fingerprints: Mutex::new(Fingerprints::default()),
     });
+    if let Err(error) = serve_fprintd(Arc::clone(&authentication)) {
+        fail(&format!("{FPRINTD} unavailable: {error}"));
+    }
     ProcessState::start_thread_pool();
     // Keystore negotiates with every declared participant before the first
     // token is signed, so the shared secret registers first.

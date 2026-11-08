@@ -56,8 +56,8 @@ struct Arguments {
     /// Host-mapped UID of Android's camera provider (cameraserver).
     #[arg(long, default_value_t = 1047)]
     camera_uid: u32,
-    /// Host-mapped UID of Android's fingerprint service (system).
-    #[arg(long, default_value_t = 1000)]
+    /// Host-mapped UID of Droidloom's authentication service (root).
+    #[arg(long, default_value_t = 0)]
     fingerprint_uid: u32,
 }
 

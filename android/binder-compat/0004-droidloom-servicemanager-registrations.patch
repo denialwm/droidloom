@@ -1,0 +1,78 @@
+From: Droidloom development build
+Subject: [PATCH] servicemanager: guard authentication registrations in a cell
+
+A development cell has no Android SELinux policy and no user namespace:
+Android's system UID is the host user, and upstream servicemanager lets any
+non-app UID register any name, replacing the live service. A process of the
+host user could therefore stand in for the fingerprint or gatekeeper HAL, or
+for system_server's own services.
+
+When DROIDLOOM_CELL is set, the authentication service's names register only
+from root, KeyMint's only from its own user (nobody) or root, and a name held
+by a live service registers again only from the same process. Outside a
+marked cell nothing changes.
+
+diff --git a/cmds/servicemanager/ServiceManager.cpp b/cmds/servicemanager/ServiceManager.cpp
+index 0697c36..21ca963 100644
+--- a/cmds/servicemanager/ServiceManager.cpp
++++ b/cmds/servicemanager/ServiceManager.cpp
+@@ -26,6 +26,7 @@
+ #include <binder/Stability.h>
+ #include <cutils/android_filesystem_config.h>
+ #include <cutils/multiuser.h>
++#include <cstdlib>
+ #include <thread>
+ 
+ #if !defined(VENDORSERVICEMANAGER) && !defined(__ANDROID_RECOVERY__)
+@@ -137,6 +138,29 @@ struct AidlName {
+     }
+ };
+ 
++// In a Droidloom cell, Android's system UID is also the host user and no SELinux policy says
++// who may register what. The authentication services therefore register only from root, and
++// KeyMint's from its own user, and a live service is never taken over by another process.
++static bool isDroidloomCell() {
++    static const bool cell = getenv("DROIDLOOM_CELL") != nullptr;
++    return cell;
++}
++
++static bool droidloomMayRegister(const std::string& name, uid_t uid) {
++    if (uid == AID_ROOT) return true;
++    for (const char* prefix : {"android.hardware.biometrics.fingerprint.IFingerprint/",
++                               "android.hardware.gatekeeper.IGatekeeper/",
++                               "android.hardware.security.sharedsecret.ISharedSecret/droidloom"}) {
++        if (base::StartsWith(name, prefix)) return false;
++    }
++    for (const char* prefix : {"android.hardware.security.keymint.",
++                               "android.hardware.security.secureclock.",
++                               "android.hardware.security.sharedsecret."}) {
++        if (base::StartsWith(name, prefix)) return uid == AID_NOBODY;
++    }
++    return true;
++}
++
+ static std::string getAidlInstanceName(const vintf::ManifestInstance& instance) {
+     return instance.package() + "." + instance.interface() + "/" + instance.instance();
+ }
+@@ -540,6 +564,21 @@ Status ServiceManager::addService(const std::string& name, const sp<IBinder>& bi
+     }
+ #endif  // !VENDORSERVICEMANAGER
+ 
++    if (isDroidloomCell()) {
++        if (!droidloomMayRegister(name, ctx.uid)) {
++            ALOGE("%s may not register %s in a Droidloom cell", ctx.toDebugString().c_str(),
++                  name.c_str());
++            return Status::fromExceptionCode(Status::EX_SECURITY, "Service reserved for root.");
++        }
++        auto held = mNameToService.find(name);
++        if (held != mNameToService.end() && held->second.ctx.debugPid != ctx.debugPid &&
++            held->second.binder != nullptr && held->second.binder->isBinderAlive()) {
++            ALOGE("%s may not take over %s from live PID %d", ctx.toDebugString().c_str(),
++                  name.c_str(), held->second.ctx.debugPid);
++            return Status::fromExceptionCode(Status::EX_SECURITY, "Service held by a live process.");
++        }
++    }
++
+     if ((dumpPriority & DUMP_FLAG_PRIORITY_ALL) == 0) {
+         ALOGW("%s Dump flag priority is not set when adding %s", ctx.toDebugString().c_str(),
+               name.c_str());

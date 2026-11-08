@@ -14,6 +14,10 @@ is present:
 - `0003` prevents ordinary service nodes from requesting unsupported transaction
   contexts and supplies the synthetic development-cell context used by the
   libselinux compatibility layer.
+- `0004` stands in for the registration policy SELinux would give: the
+  authentication service's names (fingerprint, gatekeeper, its shared-secret
+  participant) register only from root, KeyMint's only from its own user, and
+  a name a live service holds registers again only from that process.
 
 Outside a marked Droidloom cell, all upstream SID behavior remains unchanged.
 The development cell relies on the host sandbox as its security boundary;

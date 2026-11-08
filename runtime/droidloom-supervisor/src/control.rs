@@ -51,6 +51,9 @@ mod media_scan;
 #[path = "host_lock.rs"]
 mod host_lock;
 
+#[path = "fprintd_relay.rs"]
+mod fprintd_relay;
+
 use progress::{LOG_HINT, Reporter};
 
 /// Default root-owned lifecycle socket.
@@ -397,7 +400,8 @@ struct ActiveCell {
     /// Tells `MediaProvider` about host changes in the shared folders.
     _media: Option<media_scan::MediaWatch>,
     /// Tells Android's keyguard whether the host session is locked.
-    _host_lock: Option<host_lock::HostLockWatch>,
+    _host_lock: Option<host_lock::Watch>,
+    _fprintd_relay: Option<host_lock::Watch>,
 }
 impl ActiveCell {
     fn ready_init(&self, progress: &Reporter) -> Result<u32, ControlError> {
@@ -545,6 +549,7 @@ impl Daemon {
             started: Instant::now(),
             _media: media_scan::start(&spec, spec_path, &self.config.supervisor),
             _host_lock: host_lock::start(&spec),
+            _fprintd_relay: fprintd_relay::start(&spec),
         });
         self.last_exit = None;
         Ok(ControlResponse {
@@ -1413,6 +1418,10 @@ fn send_response(stream: &mut UnixStream, response: &ControlResponse) -> Result<
 }
 
 fn peer_uid(stream: &UnixStream) -> Result<u32, ControlError> {
+    peer_credentials(stream).map(|credentials| credentials.uid)
+}
+
+fn peer_credentials(stream: &UnixStream) -> Result<libc::ucred, ControlError> {
     let mut credentials = libc::ucred {
         pid: 0,
         uid: 0,
@@ -1435,7 +1444,7 @@ fn peer_uid(stream: &UnixStream) -> Result<u32, ControlError> {
             io::Error::last_os_error(),
         ));
     }
-    Ok(credentials.uid)
+    Ok(credentials)
 }
 
 fn load_spec(path: &Path) -> Result<CellSpec, ControlError> {

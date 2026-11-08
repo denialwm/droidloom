@@ -24,6 +24,8 @@ pub const DISPLAY: u16 = 7;
 pub const MEDIA_SCAN: u16 = 8;
 /// Tell the framework whether the host session is locked.
 pub const HOST_LOCK: u16 = 9;
+/// Give the framework Android's hidden credential, which only root keeps.
+pub const CREDENTIAL: u16 = 10;
 /// Error bit in a response opcode.
 pub const ERROR: u16 = 0x8000;
 

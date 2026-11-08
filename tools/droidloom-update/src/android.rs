@@ -140,6 +140,10 @@ const PATCHES: &[(&str, &str)] = &[
         "android/aosp-patches/0002-audio-default-only-service.patch",
     ),
     (
+        "hardware/interfaces",
+        "android/aosp-patches/0020-keymint-cell-agreement-key.patch",
+    ),
+    (
         "frameworks/av",
         "android/audio/0001-host-buffered-playback.patch",
     ),
@@ -158,6 +162,10 @@ const PATCHES: &[(&str, &str)] = &[
     (
         "",
         "android/binder-compat/0003-droidloom-cell-caller-context-fallback.patch",
+    ),
+    (
+        "frameworks/native",
+        "android/binder-compat/0004-droidloom-servicemanager-registrations.patch",
     ),
     (
         "frameworks/native",

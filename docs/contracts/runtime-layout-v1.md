@@ -209,7 +209,7 @@ mode-0700 runtime directory. The supervisor may bind only those inodes at
 `/dev/socket/droidloom/fingerprint`. One broker, `droidloom-devices`, runs as
 the host user and serves all three; it authenticates the kernel-mapped UID of
 the vibrator HAL (system, 1000), the camera provider (cameraserver, 1047) and
-the authentication service (system, 1000) on each.
+the authentication service (root, 0) on each.
 
 Records carry `DLDEV001`, a kind and bounded fields. Haptics clients send
 patterns of at most 64 steps and 30 seconds, which the broker plays through
@@ -224,6 +224,29 @@ verification waits while the session is locked. Elsewhere the broker claims
 fprintd's reader for each verification only, listens again after a no-match,
 and stops and releases the reader however it ends. Without hapticd, braun or
 fprintd the broker reports no vibrator, no cameras and no reader.
+
+The broker only runs the reader: the authentication service counts a match
+once the supervisor, as root, has seen fprintd announce it on the system bus,
+and passes it through `/dev/socket/droidloom-authentication` (root, 0600).
+
+## Authentication secrets
+
+Android's system user is the host user in a cell, so what makes an Android
+unlock or a fingerprint match stays with root:
+
+- At each start the supervisor writes a fresh 32-byte key agreement key at
+  `/dev/droidloom-agreement-key` (nobody, 0400). KeyMint and the
+  authentication service derive their shared HMAC key from it.
+- Android's hidden credential is `credential` in the cell's data directory
+  (root, 0600), outside Android's storage. The supervisor moves one an earlier
+  release left at `data/system/droidloom/credential` there, without following
+  links, and gives it only to system_server (`CREDENTIAL`, framework op 10).
+- servicemanager runs as root. In the cell it lets only root register the
+  fingerprint, gatekeeper and `ISharedSecret/droidloom` names, only KeyMint's
+  user (or root) register KeyMint's, and no process take over a name a live
+  service holds.
+- The authentication service runs as root and keeps its key and records in
+  `/data/vendor/droidloom-authentication/private` (root, 0700).
 
 ## Private audio endpoint (DLAUD001)
 

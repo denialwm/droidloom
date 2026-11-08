@@ -1,14 +1,18 @@
 # Gatekeeper, fingerprints and a Keystore shared-secret participant in one
 # service, so both kinds of auth token carry the key Keystore negotiated. The
 # fingerprint reader is the host user's, through the device broker's socket
-# the supervisor binds into the cell.
+# the supervisor binds into the cell; fprintd's results come from the
+# supervisor. It runs as root: Android's system user is the host user, so its
+# keys and records stay in a folder only root reads. Android's fingerprint
+# service reads the enrollment generation beside it.
 on post-fs-data
-    mkdir /data/vendor/droidloom-authentication 0700 system system
+    mkdir /data/vendor/droidloom-authentication 0750 root system
+    mkdir /data/vendor/droidloom-authentication/private 0700 root root
 
 service vendor.authentication-droidloom /vendor/bin/hw/droidloom-authentication-service
     class hal
-    user system
-    group system
+    user root
+    group root
     interface aidl android.hardware.gatekeeper.IGatekeeper/default
     interface aidl android.hardware.biometrics.fingerprint.IFingerprint/default
     interface aidl android.hardware.security.sharedsecret.ISharedSecret/droidloom
