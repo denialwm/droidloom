@@ -21,7 +21,7 @@ use android_hardware_vibrator::aidl::android::hardware::vibrator::{
     HapticGeneratorConfig::HapticGeneratorConfig,
     HapticGeneratorSession::HapticGeneratorSession,
     IVibrationSession::IVibrationSession,
-    IVibrator::{self, BnVibrator, IVibrator as _},
+    IVibrator::{self, BnVibrator},
     IVibratorCallback::IVibratorCallback,
     IVibratorManager::{BnVibratorManager, IVibratorManager},
     PrimitivePwle::PrimitivePwle,
