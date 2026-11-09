@@ -466,14 +466,17 @@ dependencies = [
 name = "droidloom-applications"
 version = "0.1.0"
 dependencies = [
+ "async-io",
  "clap",
  "droidloom-contracts",
  "droidloom-cpu-placement",
  "droidloom-supervisor",
+ "futures-lite",
  "serde",
  "serde_json",
  "tempfile",
  "thiserror",
+ "zbus",
 ]
 
 [[package]]

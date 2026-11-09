@@ -1,5 +1,5 @@
 [Unit]
-Description=Droidloom native application catalog
+Description=Droidloom native application catalog and theme
 PartOf=droidloom.service
 After=droidloom.service
 ConditionPathExists=/etc/droidloom/cell.json

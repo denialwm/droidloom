@@ -13,6 +13,8 @@ use clap::Parser;
 use droidloom_applications::{CatalogPaths, ControlCatalog, reconcile, remove_managed};
 use droidloom_supervisor::control::DEFAULT_CONTROL_SOCKET;
 
+mod theme;
+
 #[derive(Debug, Parser)]
 #[command(name = "droidloom-applications", version, about)]
 struct Cli {
@@ -58,6 +60,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
+    theme::follow(cli.socket.clone());
     loop {
         let mut events = match subscribe_applications(&cli.socket) {
             Ok(stream) => stream,

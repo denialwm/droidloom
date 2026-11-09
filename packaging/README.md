@@ -45,7 +45,10 @@ After the cell is ready it asks Android for enabled
 atomically reconciles ordinary XDG entries below
 `~/.local/share/applications/` with collision-resistant `droidloom-` names. It periodically checks for package
 changes while retaining the last good catalog across temporary Android
-restarts. The privileged daemon never writes into a user's home directory.
+restarts. It also sets Android's night mode from the desktop portal's
+`color-scheme`, at start and on each change, so Android follows the host's
+dark or light theme. The privileged daemon never writes into a user's home
+directory.
 
 The user-facing lifecycle is:
 

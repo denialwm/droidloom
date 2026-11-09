@@ -54,6 +54,9 @@ mod host_lock;
 #[path = "fprintd_relay.rs"]
 mod fprintd_relay;
 
+#[path = "ui_mode.rs"]
+mod ui_mode;
+
 use progress::{LOG_HINT, Reporter};
 
 /// Default root-owned lifecycle socket.
@@ -193,6 +196,11 @@ pub enum ControlRequest {
         spec: PathBuf,
         /// Android density in dots per inch.
         dpi: u32,
+    },
+    /// Turn Android's night mode on or off, to follow the host's theme.
+    SetNightMode {
+        /// Dark when true, light otherwise.
+        night: bool,
     },
 }
 
@@ -511,6 +519,7 @@ impl Daemon {
             } => self.application_icon(peer_uid, &component, user, size),
             ControlRequest::Display => self.display(peer_uid),
             ControlRequest::SetDpi { spec, dpi } => self.set_dpi(peer_uid, &spec, dpi),
+            ControlRequest::SetNightMode { night } => self.set_night_mode(peer_uid, night),
             ControlRequest::Stats => self.stats(peer_uid),
             ControlRequest::ApplicationDetails { package, user } => {
                 self.application_details(peer_uid, &package, user)
@@ -1064,6 +1073,16 @@ impl Daemon {
             application: None,
             display: None,
         })
+    }
+
+    fn set_night_mode(&self, peer_uid: u32, night: bool) -> Result<ControlResponse, ControlError> {
+        let active = self.require_active_cell(peer_uid, None)?;
+        ui_mode::set_night(active.ready_init(&self.progress)?, night)?;
+        Ok(self.success(if night {
+            "Android night mode is on"
+        } else {
+            "Android night mode is off"
+        }))
     }
 
     fn ensure_active_cell(&mut self, peer_uid: u32, spec_path: &Path) -> Result<(), ControlError> {
