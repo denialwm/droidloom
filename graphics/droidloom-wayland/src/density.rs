@@ -4,8 +4,9 @@
 //! connector name (`DP-1`) for one. A task on an output of scale 1.5 with
 //! 230 per scale is laid out at 345 dpi, so its contents keep their size in
 //! the output's logical units on every screen. Without the file, or without
-//! a value for the output, Android's display density stands. The file is
-//! watched, so a change reaches open windows at once.
+//! a value for the output, tasks take `DEFAULT_DPI_PER_SCALE`; a value out
+//! of Android's range leaves Android's display density. The file is watched,
+//! so a change reaches open windows at once.
 
 use std::collections::BTreeMap;
 use std::ffi::OsString;
@@ -21,6 +22,10 @@ use serde::Deserialize;
 const DPI: std::ops::RangeInclusive<u32> = 72..=1280;
 /// Wayland fractional scales are in 120ths.
 const SCALE_DENOMINATOR: f64 = 120.0;
+/// The density per unit of scale when nothing is chosen: 460 dpi at scale 2,
+/// which draws apps the size a stock Android phone does side by side.
+/// Android's own 160 per scale drew them smaller than the host's.
+const DEFAULT_DPI_PER_SCALE: f64 = 230.0;
 
 #[derive(Default, Deserialize, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -108,9 +113,9 @@ impl Densities {
 fn dpi(file: &File, output: Option<&str>, scale_120: u32) -> u32 {
     let per_scale = output
         .and_then(|name| file.outputs.get(name).copied())
-        .or(file.dpi_per_scale);
-    per_scale
-        .map(|per_scale| (per_scale * f64::from(scale_120) / SCALE_DENOMINATOR).round())
+        .or(file.dpi_per_scale)
+        .unwrap_or(DEFAULT_DPI_PER_SCALE);
+    Some((per_scale * f64::from(scale_120) / SCALE_DENOMINATOR).round())
         .filter(|dpi| dpi.is_finite() && *dpi >= 0.0 && *dpi <= f64::from(u32::MAX))
         .map(|dpi| dpi as u32)
         .filter(|dpi| DPI.contains(dpi))
@@ -161,10 +166,15 @@ mod tests {
     }
 
     #[test]
-    fn nothing_set_or_out_of_range_leaves_android_alone() {
-        assert_eq!(dpi(&File::default(), Some("DP-1"), 120), 0);
+    fn nothing_set_takes_the_default() {
+        assert_eq!(dpi(&File::default(), Some("DSI-1"), 240), 460);
+        let file: File = serde_json::from_str(r#"{"outputs": {"DP-1": 200}}"#).unwrap();
+        assert_eq!(dpi(&file, Some("HDMI-A-1"), 120), 230);
+    }
+
+    #[test]
+    fn out_of_range_leaves_android_alone() {
         let file: File = serde_json::from_str(r#"{"outputs": {"DP-1": 20}}"#).unwrap();
         assert_eq!(dpi(&file, Some("DP-1"), 120), 0);
-        assert_eq!(dpi(&file, Some("HDMI-A-1"), 120), 0);
     }
 }
