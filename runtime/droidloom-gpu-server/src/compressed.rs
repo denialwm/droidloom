@@ -233,7 +233,10 @@ pub unsafe fn h_vkGetPhysicalDeviceFormatProperties2(s: &mut Server, record: *mu
         let properties: *mut VkFormatProperties2 = rt::at(record, (*f).pFormatProperties);
         link_chain(record, (&raw mut (*properties).pNext).cast());
         let emulated = format((*f).format);
-        (s.fns.vkGetPhysicalDeviceFormatProperties2)(s.h((*f).physicalDevice) as usize, emulated.map_or((*f).format, |c| c.decoded), properties);
+        let physical = s.h((*f).physicalDevice) as usize;
+        let modifiers = crate::layouts::take(s, (*properties).pNext);
+        (s.fns.vkGetPhysicalDeviceFormatProperties2)(physical, emulated.map_or((*f).format, |c| c.decoded), properties);
+        crate::layouts::give(s, physical, (*f).format, modifiers);
         if emulated.is_some() {
             let base = &mut (*properties).formatProperties;
             base.linearTilingFeatures = 0;

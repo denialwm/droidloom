@@ -677,6 +677,8 @@ version = "0.1.0"
 dependencies = [
  "droidloom-gpu-protocol",
  "libc",
+ "wayland-client",
+ "wayland-protocols",
 ]
 
 [[package]]

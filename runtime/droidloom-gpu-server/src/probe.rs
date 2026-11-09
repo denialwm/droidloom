@@ -30,9 +30,10 @@ pub struct Shareable {
     pub vram: u32,
 }
 
-/// The name of the GPU at PCI address `gpu`, and the memory types it can
-/// share with a client.
-pub fn host_gpu(gpu: &str) -> (String, Shareable) {
+/// The name of the GPU at PCI address `gpu`, the memory types it can share
+/// with a client, and how many modifiers of its own Android sees for window
+/// buffers when the compositor imports `imported` (layouts.rs).
+pub fn host_gpu(gpu: &str, imported: Option<&[(u32, u64)]>) -> (String, Shareable, u32) {
     let mut pipe = [0; 2];
     // SAFETY: a fresh pipe; the child only probes, writes and exits.
     unsafe {
@@ -43,9 +44,9 @@ pub fn host_gpu(gpu: &str) -> (String, Shareable) {
             -1 => rt::fail("fork the probe"),
             0 => {
                 libc::close(pipe[0]);
-                let (name, shareable) = probe(gpu);
+                let (name, shareable, layouts) = probe(gpu, imported);
                 let mut out = std::fs::File::from_raw_fd(pipe[1]);
-                let _ = out.write_all(&[&shareable.memfd.to_le_bytes(), &shareable.vram.to_le_bytes(), name.as_bytes()].concat());
+                let _ = out.write_all(&[&shareable.memfd.to_le_bytes(), &shareable.vram.to_le_bytes(), &layouts.to_le_bytes(), name.as_bytes()].concat());
                 libc::_exit(0);
             }
             child => {
@@ -57,15 +58,15 @@ pub fn host_gpu(gpu: &str) -> (String, Shareable) {
                 if !libc::WIFEXITED(status) || libc::WEXITSTATUS(status) != 0 {
                     rt::fail("the probe failed");
                 }
-                let (masks, name) = bytes.split_at(8);
+                let (masks, name) = bytes.split_at(12);
                 let mask = |at: usize| u32::from_le_bytes([masks[at], masks[at + 1], masks[at + 2], masks[at + 3]]);
-                (String::from_utf8_lossy(name).into_owned(), Shareable { memfd: mask(0), vram: mask(4) })
+                (String::from_utf8_lossy(name).into_owned(), Shareable { memfd: mask(0), vram: mask(4) }, mask(8))
             }
         }
     }
 }
 
-unsafe fn probe(gpu: &str) -> (String, Shareable) {
+unsafe fn probe(gpu: &str, imported: Option<&[(u32, u64)]>) -> (String, Shareable, u32) {
     unsafe {
         let gipa = crate::load_vulkan();
         let lookup = |instance: VkInstance, name: &CStr| {
@@ -99,6 +100,7 @@ unsafe fn probe(gpu: &str) -> (String, Shareable) {
         let properties: PFN_vkGetPhysicalDeviceProperties = core::mem::transmute(lookup(instance, c"vkGetPhysicalDeviceProperties"));
         let properties2: PFN_vkGetPhysicalDeviceProperties2 = core::mem::transmute(lookup(instance, c"vkGetPhysicalDeviceProperties2"));
         let memory_properties: PFN_vkGetPhysicalDeviceMemoryProperties = core::mem::transmute(lookup(instance, c"vkGetPhysicalDeviceMemoryProperties"));
+        let format_properties2: PFN_vkGetPhysicalDeviceFormatProperties2 = core::mem::transmute(lookup(instance, c"vkGetPhysicalDeviceFormatProperties2"));
         let create_device: PFN_vkCreateDevice = core::mem::transmute(lookup(instance, c"vkCreateDevice"));
         let gdpa: PFN_vkGetDeviceProcAddr = core::mem::transmute(lookup(instance, c"vkGetDeviceProcAddr"));
         let mut count = 0;
@@ -157,7 +159,8 @@ unsafe fn probe(gpu: &str) -> (String, Shareable) {
             let vram = mappable_vram(device, gdpa, &memory);
             let destroy: PFN_vkDestroyDevice = core::mem::transmute(gdpa(device, c"vkDestroyDevice".as_ptr()));
             destroy(device, core::ptr::null());
-            return (name, Shareable { memfd: result.memoryTypeBits, vram });
+            let layouts = crate::layouts::count(format_properties2, physical, imported);
+            return (name, Shareable { memfd: result.memoryTypeBits, vram }, layouts);
         }
         rt::fail(&format!("the host's Vulkan has no GPU at {gpu}; is its Vulkan driver installed?"))
     }

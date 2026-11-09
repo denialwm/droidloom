@@ -68,6 +68,9 @@ pub struct Server {
     pub shown: HashMap<usize, usize>,
     /// Per shown device: the memory types whose mappings a client can share.
     pub host_memory: Vec<Shareable>,
+    /// The (DRM format, modifier) pairs the compositor imports, which the
+    /// modifiers Android sees are kept to (layouts.rs); None for all.
+    pub imported: Option<Vec<(u32, u64)>>,
     /// The PCI address of the one GPU shown to Android.
     pub gpu: String,
     /// The client is Android's loader; see `Hello::android`.
@@ -93,7 +96,7 @@ pub struct Server {
 }
 
 impl Server {
-    pub fn new(shm: Shm, socket: OwnedFd, drm: Drm, gipa: PFN_vkGetInstanceProcAddr, gpu: String, host_memory: Vec<Shareable>, android: bool) -> Self {
+    pub fn new(shm: Shm, socket: OwnedFd, drm: Drm, gipa: PFN_vkGetInstanceProcAddr, gpu: String, host_memory: Vec<Shareable>, imported: Option<Vec<(u32, u64)>>, android: bool) -> Self {
         // SAFETY: anonymous private mapping, zero-filled on touch; id 0 maps
         // to the null handle with no special case.
         let table = unsafe {
@@ -127,6 +130,7 @@ impl Server {
             shared: HashMap::new(),
             shown: HashMap::new(),
             host_memory,
+            imported,
             gpu,
             android,
             image_memory: HashMap::new(),

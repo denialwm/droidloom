@@ -9,6 +9,7 @@ mod astc_luts;
 mod compressed;
 mod generated;
 mod gpu;
+mod layouts;
 mod manual;
 mod probe;
 mod rt;
@@ -28,6 +29,8 @@ struct Options {
     /// PCI address.
     gpu: Option<String>,
     render_node: Option<String>,
+    /// Offer every modifier of the GPU, whatever the compositor imports.
+    all_layouts: bool,
 }
 
 fn options() -> Options {
@@ -35,6 +38,7 @@ fn options() -> Options {
         socket: std::env::var("XDG_RUNTIME_DIR").map_or_else(|_| "/tmp".into(), |dir| dir) + "/droidloom-gpu.sock",
         gpu: std::env::var("DROIDLOOM_GPU").ok().filter(|gpu| !gpu.is_empty()),
         render_node: None,
+        all_layouts: false,
     };
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
@@ -43,7 +47,8 @@ fn options() -> Options {
             "--socket" => options.socket = value(),
             "--gpu" => options.gpu = Some(value()),
             "--render-node" => options.render_node = Some(value()),
-            _ => rt::fail(&format!("unknown argument {arg}; use --socket PATH, --gpu PCI-ADDRESS, --render-node PATH")),
+            "--all-layouts" => options.all_layouts = true,
+            _ => rt::fail(&format!("unknown argument {arg}; use --socket PATH, --gpu PCI-ADDRESS, --render-node PATH, --all-layouts")),
         }
     }
     options
@@ -64,10 +69,17 @@ fn main() {
         unsafe { std::env::set_var("VK_LOADER_DRIVERS_SELECT", "*nvidia*") };
     }
     let listener = listener(&options.socket);
-    let (name, host_memory) = probe::host_gpu(&gpu);
     let source = if chosen { "chosen by Droidloom setup" } else { "the first NVIDIA GPU" };
+    // Without a window to show them in, tests take every layout.
+    let imported = (!options.all_layouts).then(layouts::imported);
+    let (name, host_memory, layouts) = probe::host_gpu(&gpu, imported.as_deref());
+    let buffers = match (layouts, &imported) {
+        (0, _) => "window buffers in system memory (the compositor imports none of its layouts)".to_owned(),
+        (count, None) => format!("window buffers in VRAM in any of its {count} layouts"),
+        (count, Some(_)) => format!("window buffers in VRAM (the compositor imports {count} of its layouts)"),
+    };
     eprintln!(
-        "droidloom-gpu-server: forwarding Android Vulkan to {name} at {gpu} ({source}) on {render_node}, shareable memory types {:x} in system memory and {:x} in VRAM, listening on {}",
+        "droidloom-gpu-server: forwarding Android Vulkan to {name} at {gpu} ({source}) on {render_node}, shareable memory types {:x} in system memory and {:x} in VRAM, {buffers}, listening on {}",
         host_memory.memfd,
         host_memory.vram,
         listener.local_addr().ok().and_then(|address| address.as_pathname().map(|path| path.display().to_string())).unwrap_or_else(|| "a socket from systemd".into())
@@ -80,7 +92,7 @@ fn main() {
         match unsafe { libc::fork() } {
             0 => {
                 drop(listener);
-                serve(OwnedFd::from(stream), &gpu, &render_node, vec![host_memory]);
+                serve(OwnedFd::from(stream), &gpu, &render_node, vec![host_memory], imported);
             }
             -1 => eprintln!("droidloom-gpu-server: fork: {}", std::io::Error::last_os_error()),
             _ => {}
@@ -103,7 +115,7 @@ fn listener(path: &str) -> UnixListener {
     UnixListener::bind(path).unwrap_or_else(|error| rt::fail(&format!("bind {path}: {error}")))
 }
 
-fn serve(socket: OwnedFd, gpu: &str, render_node: &str, host_memory: Vec<probe::Shareable>) -> ! {
+fn serve(socket: OwnedFd, gpu: &str, render_node: &str, host_memory: Vec<probe::Shareable>, imported: Option<Vec<(u32, u64)>>) -> ! {
     let mut hello = [0u8; size_of::<Hello>()];
     let size = sys::recv(socket.as_fd(), &mut hello).map_or(0, |(size, _)| size);
     // SAFETY: plain data of the checked size.
@@ -127,7 +139,7 @@ fn serve(socket: OwnedFd, gpu: &str, render_node: &str, host_memory: Vec<probe::
     let drm = Drm::open(&node).unwrap_or_else(|error| rt::fail(&format!("open {render_node}: {error}")));
     let gipa = load_vulkan();
     watch(socket.as_raw_fd(), client);
-    rt::Server::new(shm, socket, drm, gipa, gpu.into(), host_memory, hello.android != 0).run()
+    rt::Server::new(shm, socket, drm, gipa, gpu.into(), host_memory, imported, hello.android != 0).run()
 }
 
 /// The host's Vulkan loader.

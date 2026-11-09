@@ -135,7 +135,13 @@ expects.
   with the host driver's list, so a client can allocate a buffer in VRAM
   with plain Vulkan: an image created from that list, device-local memory
   exported as a DMA-BUF, and the modifier the driver chose read back. The
-  DMA-BUF keeps the memory after the client frees its allocation.
+  DMA-BUF keeps the memory after the client frees its allocation. Any such
+  buffer may end up in a window, so the list holds only what the compositor
+  imports (`layouts.rs`): the server asks it once, at start. A compositor
+  that renders on the same GPU takes the GPU's modifiers, and window buffers
+  lie in VRAM. A compositor on another GPU takes none of them, the list is
+  LINEAR alone, and buffers stay in system memory. The start-up line says
+  which. `--all-layouts` skips the question, for tests without a window.
 - **Video buffers.** Decoders fill YUV AHardwareBuffers: NV12, YV12 and
   P010. The driver reports them as external formats, which ANGLE samples
   through a YCbCr conversion; a named format would also have to be
