@@ -740,7 +740,8 @@ pub unsafe extern "system" fn vkCreateDevice(
 }
 
 /// The host answers with the result and, in the next word, how many 4 KiB
-/// pages of shared memory follow as a memfd (0: not host-visible here).
+/// pages of shared memory follow as a descriptor (0: not host-visible
+/// here): a memfd for system memory, a DMA-BUF for mappable VRAM.
 pub unsafe extern "system" fn vkAllocateMemory(
     device: VkDevice,
     pAllocateInfo: *const VkMemoryAllocateInfo,

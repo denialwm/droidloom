@@ -554,9 +554,23 @@ impl Gpu {
 }
 
 impl Gpu {
+    /// `check_memory_type` on every mappable memory type, system memory and
+    /// VRAM alike.
+    pub fn check_memory(&self) -> Result<String, String> {
+        let wanted = vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT;
+        let lines = (0..self.memory_types.memory_type_count)
+            .filter(|&index| self.memory_types.memory_types[index as usize].property_flags.contains(wanted))
+            .map(|index| self.check_memory_type(index))
+            .collect::<Result<Vec<_>, _>>()?;
+        if lines.is_empty() {
+            return Err("no host-visible coherent memory".into());
+        }
+        Ok(lines.join("\n"))
+    }
+
     /// Mapped memory both ways: the CPU writes a pattern, the GPU copies it
     /// and fills a tail, the CPU reads the result back.
-    pub fn check_memory(&self) -> Result<String, String> {
+    fn check_memory_type(&self, type_index: u32) -> Result<String, String> {
         const SIZE: u64 = 1 << 20;
         const TAIL: u64 = 4096;
         // SAFETY: every object is created, used and destroyed here, and the
@@ -575,13 +589,9 @@ impl Gpu {
                     )
                     .map_err(|error| format!("create buffer: {error}"))?;
                 let requirements = device.get_buffer_memory_requirements(buffer);
-                let wanted = vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT;
-                let type_index = (0..self.memory_types.memory_type_count)
-                    .find(|&index| {
-                        requirements.memory_type_bits & (1 << index) != 0
-                            && self.memory_types.memory_types[index as usize].property_flags.contains(wanted)
-                    })
-                    .ok_or("no host-visible coherent memory")?;
+                if requirements.memory_type_bits & (1 << type_index) == 0 {
+                    return Err(format!("buffers cannot use memory type {type_index}"));
+                }
                 let memory = device
                     .allocate_memory(
                         &vk::MemoryAllocateInfo::default().allocation_size(requirements.size).memory_type_index(type_index),
@@ -651,8 +661,10 @@ impl Gpu {
             if wrong != 0 {
                 return Err(format!("memory check: {wrong} of {} words wrong", SIZE / 4));
             }
+            let local = self.memory_types.memory_types[type_index as usize].property_flags.contains(vk::MemoryPropertyFlags::DEVICE_LOCAL);
             Ok(format!(
-                "memory check: 1 MiB written by the CPU, copied and filled by the GPU, read back exact (setup {:.0} µs, GPU {:.0} µs)",
+                "memory check, type {type_index} ({}): 1 MiB written by the CPU, copied and filled by the GPU, read back exact (setup {:.0} µs, GPU {:.0} µs)",
+                if local { "VRAM" } else { "system memory" },
                 setup.as_secs_f64() * 1e6,
                 gpu.as_secs_f64() * 1e6
             ))

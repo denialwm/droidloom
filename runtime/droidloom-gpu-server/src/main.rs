@@ -67,7 +67,9 @@ fn main() {
     let (name, host_memory) = probe::host_gpu(&gpu);
     let source = if chosen { "chosen by Droidloom setup" } else { "the first NVIDIA GPU" };
     eprintln!(
-        "droidloom-gpu-server: forwarding Android Vulkan to {name} at {gpu} ({source}) on {render_node}, shareable memory types {host_memory:x}, listening on {}",
+        "droidloom-gpu-server: forwarding Android Vulkan to {name} at {gpu} ({source}) on {render_node}, shareable memory types {:x} in system memory and {:x} in VRAM, listening on {}",
+        host_memory.memfd,
+        host_memory.vram,
         listener.local_addr().ok().and_then(|address| address.as_pathname().map(|path| path.display().to_string())).unwrap_or_else(|| "a socket from systemd".into())
     );
     // SAFETY: children are never waited for; the kernel reaps them.
@@ -101,7 +103,7 @@ fn listener(path: &str) -> UnixListener {
     UnixListener::bind(path).unwrap_or_else(|error| rt::fail(&format!("bind {path}: {error}")))
 }
 
-fn serve(socket: OwnedFd, gpu: &str, render_node: &str, host_memory: Vec<u32>) -> ! {
+fn serve(socket: OwnedFd, gpu: &str, render_node: &str, host_memory: Vec<probe::Shareable>) -> ! {
     let mut hello = [0u8; size_of::<Hello>()];
     let size = sys::recv(socket.as_fd(), &mut hello).map_or(0, |(size, _)| size);
     // SAFETY: plain data of the checked size.

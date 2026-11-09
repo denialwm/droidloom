@@ -15,6 +15,7 @@ use crate::generated::{
     patch_VkComputePipelineCreateInfo, patch_VkDeviceCreateInfo, patch_VkFenceCreateInfo, patch_VkGraphicsPipelineCreateInfo, patch_VkImageCreateInfo, patch_VkInstanceCreateInfo, patch_VkMemoryAllocateInfo, patch_VkSemaphoreCreateInfo, patch_VkSubmitInfo2,
     TABLE,
 };
+use crate::probe::Shareable;
 use crate::rt::{self, Server, Timeline, SLOTS};
 
 const VK_EXTERNAL_FENCE_HANDLE_TYPE_SYNC_FD_BIT: u32 = 0x8;
@@ -509,20 +510,20 @@ pub unsafe fn h_vkDestroySemaphore(s: &mut Server, record: *mut u8) -> *mut u8 {
 
 // ---------------------------------------------------------------- memory
 
-/// Mappable memory is shared through a memfd, which VRAM cannot back.
-/// Types the driver cannot import a memfd into, and device-local mappable
-/// (ReBAR) types, are offered without their host flags.
-fn hide_unshareable(memory: &mut VkPhysicalDeviceMemoryProperties, importable: u32) {
+/// Mappable memory is shared with the client: system memory through a
+/// memfd, mappable VRAM (ReBAR) through a DMA-BUF. Types the probe found
+/// no way to share are offered without their host flags.
+fn hide_unshareable(memory: &mut VkPhysicalDeviceMemoryProperties, shareable: Shareable) {
     for (index, kind) in memory.memoryTypes[..memory.memoryTypeCount as usize].iter_mut().enumerate() {
-        let rebar = kind.propertyFlags & (DEVICE_LOCAL | HOST_VISIBLE) == DEVICE_LOCAL | HOST_VISIBLE;
-        if rebar || importable & (1 << index) == 0 {
+        let shared = if kind.propertyFlags & DEVICE_LOCAL != 0 { shareable.vram } else { shareable.memfd };
+        if shared & (1 << index) == 0 {
             kind.propertyFlags &= !(HOST_VISIBLE | HOST_COHERENT | HOST_CACHED);
         }
     }
 }
 
-/// The probed importable types of a shown physical device.
-fn host_memory(s: &Server, physical: usize) -> u32 {
+/// The probed shareable types of a shown physical device.
+fn host_memory(s: &Server, physical: usize) -> Shareable {
     let index = *s.shown.get(&physical).unwrap_or_else(|| rt::fail("unknown physical device"));
     *s.host_memory.get(index).unwrap_or_else(|| rt::fail("no memory probe for this GPU"))
 }
@@ -564,9 +565,10 @@ unsafe fn external(info: *const VkMemoryAllocateInfo) -> bool {
     false
 }
 
-/// Host-visible memory is a memfd imported as a host allocation, so the
-/// client maps the very pages the GPU reads. Reply: result, then the
-/// shared size in 4 KiB pages (0 when not shared).
+/// Host-visible memory is shared, so the client maps the very pages the
+/// GPU works on: system memory is a memfd imported as a host allocation,
+/// mappable VRAM the driver's own memory exported as a DMA-BUF. Reply:
+/// result, then the shared size in 4 KiB pages (0 when not shared).
 pub unsafe fn h_vkAllocateMemory(s: &mut Server, record: *mut u8) -> *mut u8 {
     unsafe {
         let f = record.add(8).cast::<frame::vkAllocateMemory>();
@@ -585,6 +587,34 @@ pub unsafe fn h_vkAllocateMemory(s: &mut Server, record: *mut u8) -> *mut u8 {
             return rt::next(record);
         }
         let size = ((*info).allocationSize as usize + 4095) & !4095;
+        if flags & DEVICE_LOCAL != 0 {
+            let export = VkExportMemoryAllocateInfo {
+                sType: VK_STRUCTURE_TYPE_EXPORT_MEMORY_ALLOCATE_INFO,
+                pNext: (*info).pNext,
+                handleTypes: VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT as u32,
+            };
+            (*info).pNext = (&raw const export).cast();
+            let result = (s.fns.vkAllocateMemory)(device, info, core::ptr::null(), &raw mut memory);
+            s.set((*f).pMemory, memory);
+            if result != VK_SUCCESS {
+                *reply = [result as u32, 0];
+                return rt::next(record);
+            }
+            let get = VkMemoryGetFdInfoKHR {
+                sType: VK_STRUCTURE_TYPE_MEMORY_GET_FD_INFO_KHR,
+                pNext: core::ptr::null(),
+                memory,
+                handleType: VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT,
+            };
+            let mut fd = -1;
+            let exported = (s.fns.vkGetMemoryFdKHR)(device, &raw const get, &raw mut fd);
+            if exported != VK_SUCCESS {
+                rt::fail(&format!("export mappable VRAM: {exported}"));
+            }
+            *reply = [result as u32, (size >> 12) as u32];
+            s.send_fd(fd);
+            return rt::next(record);
+        }
         let (shm, fd) = Shm::create(size).unwrap_or_else(|error| rt::fail(&format!("create shared memory: {error}")));
         // A host allocation has no dedicated owner; dropping the hint is valid.
         unlink((&raw mut (*info).pNext).cast(), VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO);

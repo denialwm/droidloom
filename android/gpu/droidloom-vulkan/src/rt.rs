@@ -709,8 +709,9 @@ impl<T> IdTable<T> {
 
 // ---------------------------------------------------------------- memory
 
-/// Host-visible memory: the memfd the host imported, mapped here too, so
-/// vkMapMemory is a pointer and writes reach the GPU without a copy.
+/// Host-visible memory: the memfd the host imported or the DMA-BUF it
+/// exported, mapped here too, so vkMapMemory is a pointer and writes reach
+/// the GPU without a copy.
 pub struct Mapping {
     pub base: *mut u8,
     pub size: usize,

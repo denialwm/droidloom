@@ -86,9 +86,21 @@ Client and server share one memory region and one Unix socket.
   to the server at once, so the host replays while the application records.
 - The socket carries only the handshake and file descriptors: DMA-BUFs,
   sync files and syncobjs pass as descriptors, never as copies.
-- Host-visible memory is a memfd the server imports with
-  `VK_EXT_external_memory_host`; the client maps the same pages, so mapping
-  needs no call.
+- Host-visible memory is shared: the client maps the very pages the GPU
+  works on, so mapping needs no call. System memory is a memfd the server
+  imports with `VK_EXT_external_memory_host`. Mappable VRAM, which the
+  driver offers on a card with resizable BAR, stays the driver's own
+  allocation and reaches the client as a DMA-BUF. The GPU works on a VRAM
+  buffer without crossing the PCIe link; the CPU reads system memory far
+  faster. Applications choose between the two as they do on the driver
+  itself.
+
+When the listener starts, a probe exports a page of each mappable VRAM type,
+writes through the DMA-BUF's mapping and reads back through the driver's
+own. Types that pass are offered as mappable; the start-up line in
+`journalctl --user -u droidloom-gpu` lists them beside the system-memory
+types. `droidloom-gpu-triangle --headless --check-memory` checks every
+mappable type both ways through the forwarding.
 
 `graphics/droidloom-gpu-protocol/api.txt` lists every forwarded command and
 structure. `droidloom-gpu-gen` turns it and `vk.xml` into the encoders, the
