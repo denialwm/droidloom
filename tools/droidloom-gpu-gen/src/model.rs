@@ -480,6 +480,25 @@ impl<'r> Api<'r> {
             })
             .collect()
     }
+
+    /// Output structures of a chain that carry an array the caller provides
+    /// and the host fills: (structure, sType, count member, array member,
+    /// element type). The count goes in as the array's capacity and comes
+    /// back as what was written; a null array asks for the count alone.
+    pub fn output_arrays(&self) -> Vec<(&str, String, String, String, String)> {
+        let mut arrays = Vec::new();
+        for (name, value) in self.chained() {
+            if !self.registry.returned.contains(name) {
+                continue;
+            }
+            for member in self.registry.struct_members(name).into_iter().flatten() {
+                if let MemberKind::Scratch(element, Some(count)) = self.member_kind(name, member) {
+                    arrays.push((name, value.clone(), count, member.name.clone(), element));
+                }
+            }
+        }
+        arrays
+    }
 }
 
 /// Translate a vk.xml length expression to a Rust `usize` expression.

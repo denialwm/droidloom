@@ -4,7 +4,8 @@
 //! The loader owns swapchains. It hands the driver gralloc buffers to wrap
 //! as images, a sync file to wait on before rendering into one, and asks
 //! for a sync file that signals when rendering is done. Gralloc buffers are
-//! LINEAR DMA-BUFs in system memory, which the host GPU imports directly.
+//! DMA-BUFs the host GPU imports directly: LINEAR in system memory, or in
+//! VRAM in one of the host GPU's own modifiers.
 
 #![allow(non_snake_case)]
 
@@ -148,10 +149,11 @@ impl DmaBufImage {
         image.external.pNext = (&raw const image.modifier).cast();
         image.info.pNext = (&raw const image.external).cast();
         image.info.tiling = VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT;
-        // Gralloc buffers are linear, and linear images are no input
-        // attachments on NVIDIA. ANGLE asks for one on every image it may
-        // read through framebuffer fetch.
-        image.info.usage &= !VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT;
+        // Linear images are no input attachments on NVIDIA. ANGLE asks for
+        // one on every image it may read through framebuffer fetch.
+        if buffer.modifier == 0 {
+            image.info.usage &= !VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT;
+        }
         &image.info
     }
 }

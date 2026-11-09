@@ -2929,12 +2929,24 @@ pub unsafe fn patch_chain(s: &mut Server, rec: *mut u8, link: *mut *mut rt::Base
     }
 }
 
-/// Link an output skeleton's chain for the driver to fill.
+/// Link an output skeleton's chain, and the arrays its structures carry,
+/// for the driver to fill.
 pub unsafe fn link_chain(rec: *mut u8, mut link: *mut *mut rt::Base) {
     loop {
         *link = rt::at(rec, *link as i64);
         if (*link).is_null() {
             return;
+        }
+        match (**link).sType {
+            VK_STRUCTURE_TYPE_DRM_FORMAT_MODIFIER_PROPERTIES_LIST_2_EXT => {
+                let p = (*link).cast::<VkDrmFormatModifierPropertiesList2EXT>();
+                (*p).pDrmFormatModifierProperties = rt::at(rec, (*p).pDrmFormatModifierProperties as i64);
+            }
+            VK_STRUCTURE_TYPE_DRM_FORMAT_MODIFIER_PROPERTIES_LIST_EXT => {
+                let p = (*link).cast::<VkDrmFormatModifierPropertiesListEXT>();
+                (*p).pDrmFormatModifierProperties = rt::at(rec, (*p).pDrmFormatModifierProperties as i64);
+            }
+            _ => {}
         }
         link = (&raw mut (**link).pNext).cast();
     }

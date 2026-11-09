@@ -7470,5 +7470,11 @@ pub mod frame {
     }
 }
 
+/// Output structures whose array follows them in a reply.
+pub const OUTPUT_ARRAYS: [&str; 2] = [
+    "VkDrmFormatModifierPropertiesList2EXT",
+    "VkDrmFormatModifierPropertiesListEXT",
+];
+
 /// Both ends must be generated from the same inputs.
-pub const PROTOCOL: u64 = 0xd2235bfdf41c5816;
+pub const PROTOCOL: u64 = 0x84861f5de7546d23;

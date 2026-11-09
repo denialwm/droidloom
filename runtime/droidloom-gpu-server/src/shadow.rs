@@ -1,7 +1,9 @@
 //! Gralloc buffers the application draws into: window buffers and
 //! AHardwareBuffers.
 //!
-//! Gralloc buffers are linear, and NVIDIA loses the device when a render
+//! A gralloc buffer in VRAM, laid out in one of the GPU's own DRM modifiers,
+//! is the application's image itself and never comes here. The others are
+//! linear, and NVIDIA loses the device when a render
 //! pass draws into a linear colour image with a depth or stencil attachment.
 //! The application's image is therefore a device-local optimal one, and the
 //! gralloc buffer a second image beside it. A window buffer's frame is copied
@@ -29,6 +31,8 @@ const TRANSFER_SRC: u32 = 0x1;
 const TRANSFER_DST: u32 = 0x2;
 const DEVICE_LOCAL: u32 = 0x1;
 const OPTIMAL: i32 = 0;
+/// `DRM_FORMAT_MOD_LINEAR`.
+const LINEAR: u64 = 0;
 const SIMULTANEOUS_USE: u32 = 0x4;
 const PRIMARY: i32 = 0;
 const SYNC_FD: u32 = 0x10;
@@ -109,9 +113,17 @@ fn planes_of(format: VkFormat) -> Option<&'static [(VkFormat, u32)]> {
     }
 }
 
-/// A window buffer the application renders into.
-pub fn wanted(info: &VkImageCreateInfo) -> bool {
-    info.usage & COLOR_ATTACHMENT != 0
+/// Whether `info` lays its buffer out LINEAR.
+unsafe fn linear(info: &VkImageCreateInfo) -> bool {
+    unsafe {
+        crate::manual::find::<VkImageDrmFormatModifierExplicitCreateInfoEXT>(info.pNext, VK_STRUCTURE_TYPE_IMAGE_DRM_FORMAT_MODIFIER_EXPLICIT_CREATE_INFO_EXT)
+            .is_some_and(|explicit| (*explicit).drmFormatModifier == LINEAR)
+    }
+}
+
+/// A linear window buffer the application renders into.
+pub unsafe fn wanted(info: &VkImageCreateInfo) -> bool {
+    unsafe { info.usage & COLOR_ATTACHMENT != 0 && linear(info) }
 }
 
 /// Create the application's image `id` over the gralloc buffer `fd`: the
@@ -135,13 +147,10 @@ pub unsafe fn create(s: &mut Server, device: usize, info: *mut VkImageCreateInfo
     }
 }
 
-/// An AHardwareBuffer the application renders into: it comes with its
-/// modifier and without memory, which the application imports later.
+/// A linear AHardwareBuffer the application renders into: it comes with
+/// its modifier and without memory, which the application imports later.
 pub unsafe fn wanted_foreign(info: &VkImageCreateInfo) -> bool {
-    unsafe {
-        info.usage & COLOR_ATTACHMENT != 0
-            && crate::manual::find::<rt::Base>(info.pNext, VK_STRUCTURE_TYPE_IMAGE_DRM_FORMAT_MODIFIER_EXPLICIT_CREATE_INFO_EXT).is_some()
-    }
+    unsafe { info.usage & COLOR_ATTACHMENT != 0 && linear(info) }
 }
 
 /// Create an AHardwareBuffer image: the buffer as a linear image the
@@ -245,8 +254,8 @@ pub unsafe fn import_planes(s: &mut Server, device: usize, info: *const VkMemory
     }
 }
 
-/// The answer for an AHardwareBuffer the application renders into, as
-/// `create_foreign` makes it: the buffer imports as a linear copy target,
+/// The answer for a linear AHardwareBuffer the application renders into,
+/// as `create_foreign` makes it: the buffer imports as a linear copy target,
 /// and the optimal image does what the application asked for.
 pub unsafe fn format_properties(
     s: &Server,
@@ -257,7 +266,8 @@ pub unsafe fn format_properties(
     unsafe {
         let query = s.fns.vkGetPhysicalDeviceImageFormatProperties2;
         let modifier = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_IMAGE_DRM_FORMAT_MODIFIER_INFO_EXT;
-        if (*info).usage & COLOR_ATTACHMENT == 0 || crate::manual::find::<rt::Base>((*info).pNext, modifier).is_none() {
+        let layout = crate::manual::find::<VkPhysicalDeviceImageDrmFormatModifierInfoEXT>((*info).pNext, modifier);
+        if (*info).usage & COLOR_ATTACHMENT == 0 || layout.is_none_or(|layout| (*layout).drmFormatModifier != LINEAR) {
             return query(physical, info, properties);
         }
         let usage = (*info).usage;

@@ -684,8 +684,8 @@ pub use crate::compressed::{
 
 /// A gralloc buffer arrives as a DMA-BUF import chained to its image, which
 /// takes the buffer's memory at creation as `VK_ANDROID_native_buffer`
-/// requires. The memory lives as long as the image. Window buffers drawn
-/// into go through a shadow (shadow.rs).
+/// requires. The memory lives as long as the image. Linear window buffers
+/// drawn into go through a shadow (shadow.rs); one in VRAM is the image.
 pub unsafe fn h_vkCreateImage(s: &mut Server, record: *mut u8) -> *mut u8 {
     unsafe {
         let f = record.add(8).cast::<frame::vkCreateImage>();
@@ -719,7 +719,8 @@ pub unsafe fn create_image(s: &Server, device: usize, info: *const VkImageCreate
     unsafe {
         if let Some(explicit) = find::<VkImageDrmFormatModifierExplicitCreateInfoEXT>((*info).pNext, VK_STRUCTURE_TYPE_IMAGE_DRM_FORMAT_MODIFIER_EXPLICIT_CREATE_INFO_EXT) {
             let e = &*explicit;
-            for plane in 0..e.drmFormatModifierPlaneCount as usize {
+            let planes = if e.drmFormatModifier == 0 { e.drmFormatModifierPlaneCount as usize } else { 0 };
+            for plane in 0..planes {
                 let pitch = (*e.pPlaneLayouts.add(plane)).rowPitch;
                 if pitch % LINEAR_PITCH != 0 {
                     rt::fail(&format!("buffer plane {plane} has a row pitch of {pitch} bytes, not a multiple of {LINEAR_PITCH}"));

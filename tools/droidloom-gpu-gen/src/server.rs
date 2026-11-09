@@ -83,7 +83,12 @@ fn emit_chains(api: &Api, out: &mut String) {
         }
     }
     out.push_str("        _ => patch_chain(s, rec, (&raw mut (*p).pNext).cast()),\n    }\n}\n\n");
-    out.push_str("/// Link an output skeleton's chain for the driver to fill.\npub unsafe fn link_chain(rec: *mut u8, mut link: *mut *mut rt::Base) {\n    loop {\n        *link = rt::at(rec, *link as i64);\n        if (*link).is_null() {\n            return;\n        }\n        link = (&raw mut (**link).pNext).cast();\n    }\n}\n\n");
+    out.push_str("/// Link an output skeleton's chain, and the arrays its structures carry,\n/// for the driver to fill.\npub unsafe fn link_chain(rec: *mut u8, mut link: *mut *mut rt::Base) {\n    loop {\n        *link = rt::at(rec, *link as i64);\n        if (*link).is_null() {\n            return;\n        }\n        match (**link).sType {\n");
+    for (name, value, _, array, _) in api.output_arrays() {
+        let array = ident(&array);
+        writeln!(out, "            {value} => {{\n                let p = (*link).cast::<{name}>();\n                (*p).{array} = rt::at(rec, (*p).{array} as i64);\n            }}").ok();
+    }
+    out.push_str("            _ => {}\n        }\n        link = (&raw mut (**link).pNext).cast();\n    }\n}\n\n");
 }
 
 fn emit_command(api: &Api, cmd: &Cmd, out: &mut String) {

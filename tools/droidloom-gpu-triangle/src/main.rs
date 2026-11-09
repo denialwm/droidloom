@@ -9,8 +9,8 @@ mod window;
 
 use std::time::{Duration, Instant};
 
-use gpu::Gpu;
-use window::Window;
+use gpu::{Gpu, Placement};
+use window::Compositor;
 
 const BUFFERS: usize = 3;
 
@@ -21,6 +21,8 @@ struct Options {
     fps: u32,
     draws: u32,
     check_memory: bool,
+    check_target: bool,
+    vram: bool,
     width: u32,
     height: u32,
 }
@@ -33,6 +35,8 @@ fn parse() -> Result<Options, String> {
         fps: 0,
         draws: 1,
         check_memory: false,
+        check_target: false,
+        vram: false,
         width: 960,
         height: 640,
     };
@@ -44,6 +48,8 @@ fn parse() -> Result<Options, String> {
             "--frames" => options.frames = value()?.parse().map_err(|_| "bad --frames")?,
             "--headless" => options.headless = true,
             "--check-memory" => options.check_memory = true,
+            "--check-target" => options.check_target = true,
+            "--vram" => options.vram = true,
             "--fps" => options.fps = value()?.parse().map_err(|_| "bad --fps")?,
             "--draws" => options.draws = value()?.parse().map_err(|_| "bad --draws")?,
             "--size" => {
@@ -54,7 +60,7 @@ fn parse() -> Result<Options, String> {
             }
             "--help" | "-h" => {
                 println!(
-                    "Usage: droidloom-gpu-triangle [--gpu NAME] [--frames N] [--size WxH] [--draws N] [--headless [--fps N]] [--check-memory]"
+                    "Usage: droidloom-gpu-triangle [--gpu NAME] [--frames N] [--size WxH] [--draws N] [--vram] [--headless [--fps N]] [--check-memory] [--check-target]"
                 );
                 std::process::exit(0);
             }
@@ -66,19 +72,30 @@ fn parse() -> Result<Options, String> {
 
 fn run() -> Result<(), String> {
     let options = parse()?;
-    let mut gpu = Gpu::new(&options.gpu, options.width, options.height, BUFFERS, options.headless)?;
+    // Frames are LINEAR system memory unless `--vram` puts them in VRAM in
+    // the GPU's own layout. Without a window they never leave the GPU,
+    // unless one of the two is to be checked.
+    let placement = match (options.vram, options.headless && !options.check_target) {
+        (true, _) => Placement::Vram,
+        (false, true) => Placement::Local,
+        (false, false) => Placement::Linear,
+    };
+    let compositor = if options.headless { None } else { Some(Compositor::connect()?) };
+    let accepted = compositor.as_ref().map(Compositor::modifiers);
+    let mut gpu = Gpu::new(&options.gpu, options.width, options.height, BUFFERS, placement, accepted)?;
     gpu.draws = options.draws.max(1);
     if options.check_memory {
         eprintln!("{}", gpu.check_memory()?);
     }
-    eprintln!(
-        "rendering on {} ({}), stride {}",
-        gpu.name, gpu.render_node, gpu.targets[0].stride
-    );
-    if options.headless {
-        return headless(&gpu, &options);
+    if options.check_target {
+        eprintln!("{}", gpu.check_target()?);
     }
-    let mut window = Window::open(
+    eprintln!(
+        "rendering on {} ({}), modifier {:#x}, stride {}",
+        gpu.name, gpu.render_node, gpu.targets[0].modifier, gpu.targets[0].stride
+    );
+    let Some(compositor) = compositor else { return headless(&gpu, &options) };
+    let mut window = compositor.open(
         &format!("Triangle on {}", gpu.name),
         options.width,
         options.height,

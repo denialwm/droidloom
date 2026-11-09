@@ -117,13 +117,34 @@ fn emit_chains(api: &Api, out: &mut String) {
     for (name, value) in &chained {
         writeln!(out, "            {value} => size_of::<{name}>(),").ok();
     }
-    out.push_str("            other => { rt::skipped(other); 0 }\n        };\n        if size != 0 {\n            let at = w.reply_alloc(size);\n            w.put(at, (*base).sType);\n            let next = skel_chain(w, (*base).pNext);\n            w.put(at + 8, next);\n            return at;\n        }\n        p = (*base).pNext;\n    }\n    0\n}\n\n");
+    out.push_str("            other => { rt::skipped(other); 0 }\n        };\n        if size != 0 {\n            let at = w.reply_alloc(size);\n            w.put(at, (*base).sType);\n            skel_arrays(w, p, at);\n            let next = skel_chain(w, (*base).pNext);\n            w.put(at + 8, next);\n            return at;\n        }\n        p = (*base).pNext;\n    }\n    0\n}\n\n");
+
+    let arrays = api.output_arrays();
+    out.push_str("/// Reserve the array an output structure's caller provides, right after its\n/// skeleton: the count travels as the capacity.\nunsafe fn skel_arrays<W: Sink>(w: &mut W, p: *const c_void, at: i64) {\n    match (*p.cast::<rt::Base>()).sType {\n");
+    for (name, value, count, array, element) in &arrays {
+        let (count, array) = (ident(count), ident(array));
+        writeln!(
+            out,
+            "        {value} => {{\n            let src = p.cast::<{name}>();\n            let capacity = if (*src).{array}.is_null() {{ 0 }} else {{ (*src).{count} }};\n            w.put(at + offset_of!({name}, {count}) as i64, capacity);\n            let data = if capacity == 0 {{ 0 }} else {{ w.reply_alloc(size_of::<{element}>() * capacity as usize) }};\n            w.put(at + offset_of!({name}, {array}) as i64, data);\n        }}"
+        )
+        .ok();
+    }
+    out.push_str("        _ => {}\n    }\n}\n\n");
 
     out.push_str("/// Copy the host's answers from a reply skeleton back into the caller's chain.\n/// Returns the reply position after the chain.\npub unsafe fn copy_back_chain(mut p: *mut c_void, mut reply: *const u8) -> *const u8 {\n    while !p.is_null() {\n        let base = p.cast::<rt::Base>();\n        let size = match (*base).sType {\n");
     for (name, value) in &chained {
         writeln!(out, "            {value} => size_of::<{name}>(),").ok();
     }
-    out.push_str("            _ => 0,\n        };\n        if size != 0 {\n            core::ptr::copy_nonoverlapping(reply.add(16), p.cast::<u8>().add(16), size - 16);\n            reply = reply.add(rt::align(size));\n        }\n        p = (*base).pNext.cast_mut();\n    }\n    reply\n}\n\n");
+    out.push_str("            _ => 0,\n        };\n        if size != 0 {\n            match (*base).sType {\n");
+    for (name, value, count, array, element) in &arrays {
+        let (count, array) = (ident(count), ident(array));
+        writeln!(
+            out,
+            "                {value} => {{\n                    let dst = p.cast::<{name}>();\n                    let data = (*dst).{array};\n                    let capacity = if data.is_null() {{ 0 }} else {{ (*dst).{count} as usize }};\n                    core::ptr::copy_nonoverlapping(reply.add(16), p.cast::<u8>().add(16), size - 16);\n                    (*dst).{array} = data;\n                    reply = reply.add(rt::align(size));\n                    if capacity != 0 {{\n                        core::ptr::copy_nonoverlapping(reply, data.cast::<u8>(), size_of::<{element}>() * ((*dst).{count} as usize).min(capacity));\n                        reply = reply.add(rt::align(size_of::<{element}>() * capacity));\n                    }}\n                }}"
+        )
+        .ok();
+    }
+    out.push_str("                _ => {\n                    core::ptr::copy_nonoverlapping(reply.add(16), p.cast::<u8>().add(16), size - 16);\n                    reply = reply.add(rt::align(size));\n                }\n            }\n        }\n        p = (*base).pNext.cast_mut();\n    }\n    reply\n}\n\n");
 }
 
 fn param_field(cmd: &Cmd, id: &str) -> String {

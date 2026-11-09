@@ -11501,6 +11501,7 @@ pub unsafe fn skel_chain<W: Sink>(w: &mut W, mut p: *const c_void) -> i64 {
         if size != 0 {
             let at = w.reply_alloc(size);
             w.put(at, (*base).sType);
+            skel_arrays(w, p, at);
             let next = skel_chain(w, (*base).pNext);
             w.put(at + 8, next);
             return at;
@@ -11508,6 +11509,28 @@ pub unsafe fn skel_chain<W: Sink>(w: &mut W, mut p: *const c_void) -> i64 {
         p = (*base).pNext;
     }
     0
+}
+
+/// Reserve the array an output structure's caller provides, right after its
+/// skeleton: the count travels as the capacity.
+unsafe fn skel_arrays<W: Sink>(w: &mut W, p: *const c_void, at: i64) {
+    match (*p.cast::<rt::Base>()).sType {
+        VK_STRUCTURE_TYPE_DRM_FORMAT_MODIFIER_PROPERTIES_LIST_2_EXT => {
+            let src = p.cast::<VkDrmFormatModifierPropertiesList2EXT>();
+            let capacity = if (*src).pDrmFormatModifierProperties.is_null() { 0 } else { (*src).drmFormatModifierCount };
+            w.put(at + offset_of!(VkDrmFormatModifierPropertiesList2EXT, drmFormatModifierCount) as i64, capacity);
+            let data = if capacity == 0 { 0 } else { w.reply_alloc(size_of::<VkDrmFormatModifierProperties2EXT>() * capacity as usize) };
+            w.put(at + offset_of!(VkDrmFormatModifierPropertiesList2EXT, pDrmFormatModifierProperties) as i64, data);
+        }
+        VK_STRUCTURE_TYPE_DRM_FORMAT_MODIFIER_PROPERTIES_LIST_EXT => {
+            let src = p.cast::<VkDrmFormatModifierPropertiesListEXT>();
+            let capacity = if (*src).pDrmFormatModifierProperties.is_null() { 0 } else { (*src).drmFormatModifierCount };
+            w.put(at + offset_of!(VkDrmFormatModifierPropertiesListEXT, drmFormatModifierCount) as i64, capacity);
+            let data = if capacity == 0 { 0 } else { w.reply_alloc(size_of::<VkDrmFormatModifierPropertiesEXT>() * capacity as usize) };
+            w.put(at + offset_of!(VkDrmFormatModifierPropertiesListEXT, pDrmFormatModifierProperties) as i64, data);
+        }
+        _ => {}
+    }
 }
 
 /// Copy the host's answers from a reply skeleton back into the caller's chain.
@@ -11980,8 +12003,36 @@ pub unsafe fn copy_back_chain(mut p: *mut c_void, mut reply: *const u8) -> *cons
             _ => 0,
         };
         if size != 0 {
-            core::ptr::copy_nonoverlapping(reply.add(16), p.cast::<u8>().add(16), size - 16);
-            reply = reply.add(rt::align(size));
+            match (*base).sType {
+                VK_STRUCTURE_TYPE_DRM_FORMAT_MODIFIER_PROPERTIES_LIST_2_EXT => {
+                    let dst = p.cast::<VkDrmFormatModifierPropertiesList2EXT>();
+                    let data = (*dst).pDrmFormatModifierProperties;
+                    let capacity = if data.is_null() { 0 } else { (*dst).drmFormatModifierCount as usize };
+                    core::ptr::copy_nonoverlapping(reply.add(16), p.cast::<u8>().add(16), size - 16);
+                    (*dst).pDrmFormatModifierProperties = data;
+                    reply = reply.add(rt::align(size));
+                    if capacity != 0 {
+                        core::ptr::copy_nonoverlapping(reply, data.cast::<u8>(), size_of::<VkDrmFormatModifierProperties2EXT>() * ((*dst).drmFormatModifierCount as usize).min(capacity));
+                        reply = reply.add(rt::align(size_of::<VkDrmFormatModifierProperties2EXT>() * capacity));
+                    }
+                }
+                VK_STRUCTURE_TYPE_DRM_FORMAT_MODIFIER_PROPERTIES_LIST_EXT => {
+                    let dst = p.cast::<VkDrmFormatModifierPropertiesListEXT>();
+                    let data = (*dst).pDrmFormatModifierProperties;
+                    let capacity = if data.is_null() { 0 } else { (*dst).drmFormatModifierCount as usize };
+                    core::ptr::copy_nonoverlapping(reply.add(16), p.cast::<u8>().add(16), size - 16);
+                    (*dst).pDrmFormatModifierProperties = data;
+                    reply = reply.add(rt::align(size));
+                    if capacity != 0 {
+                        core::ptr::copy_nonoverlapping(reply, data.cast::<u8>(), size_of::<VkDrmFormatModifierPropertiesEXT>() * ((*dst).drmFormatModifierCount as usize).min(capacity));
+                        reply = reply.add(rt::align(size_of::<VkDrmFormatModifierPropertiesEXT>() * capacity));
+                    }
+                }
+                _ => {
+                    core::ptr::copy_nonoverlapping(reply.add(16), p.cast::<u8>().add(16), size - 16);
+                    reply = reply.add(rt::align(size));
+                }
+            }
         }
         p = (*base).pNext.cast_mut();
     }

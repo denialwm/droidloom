@@ -112,6 +112,15 @@ pub fn emit(api: &Api) -> String {
     }
     out.push_str("}\n");
 
+    // How a reply is laid out is part of the protocol too.
+    let arrays = api.output_arrays();
+    out.push_str("\n/// Output structures whose array follows them in a reply.\n");
+    writeln!(out, "pub const OUTPUT_ARRAYS: [&str; {}] = [", arrays.len()).ok();
+    for (name, ..) in &arrays {
+        writeln!(out, "    \"{name}\",").ok();
+    }
+    out.push_str("];\n");
+
     let hash = out.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
         (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3)
     });

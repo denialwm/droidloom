@@ -71,6 +71,8 @@ pub struct Registry {
     pub core_types: std::collections::HashSet<String>,
     /// Structure → the structures it may extend (`structextends`).
     pub extends: HashMap<String, Vec<String>>,
+    /// Structures the implementation fills in (`returnedonly`).
+    pub returned: std::collections::HashSet<String>,
     pub device_extensions: Vec<DeviceExtension>,
 }
 
@@ -189,6 +191,7 @@ impl Registry {
             core: Vec::new(),
             core_types: std::collections::HashSet::new(),
             extends: HashMap::new(),
+            returned: std::collections::HashSet::new(),
             device_extensions: Vec::new(),
         };
         let mut wide_enums = std::collections::HashSet::new();
@@ -315,6 +318,9 @@ impl Registry {
         }
         if let Some(parents) = node.attribute("structextends") {
             self.extends.insert(name.clone(), parents.split(',').map(str::to_owned).collect());
+        }
+        if node.attribute("returnedonly") == Some("true") {
+            self.returned.insert(name.clone());
         }
         let def = match category {
             "struct" => TypeDef::Struct { members: members(node) },

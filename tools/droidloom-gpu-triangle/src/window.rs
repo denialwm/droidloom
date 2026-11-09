@@ -19,7 +19,7 @@ use wayland_protocols::wp::linux_drm_syncobj::v1::client::{
 };
 use wayland_protocols::xdg::shell::client::{xdg_surface, xdg_toplevel, xdg_wm_base};
 
-use crate::gpu::{Target, MODIFIER_LINEAR};
+use crate::gpu::Target;
 
 /// `DRM_FORMAT_XRGB8888`, the byte order of `VK_FORMAT_B8G8R8A8_UNORM`.
 const XRGB8888: u32 = u32::from_le_bytes(*b"XR24");
@@ -30,6 +30,8 @@ struct State {
     wm_base: Option<xdg_wm_base::XdgWmBase>,
     dmabuf: Option<zwp_linux_dmabuf_v1::ZwpLinuxDmabufV1>,
     syncobj: Option<wp_linux_drm_syncobj_manager_v1::WpLinuxDrmSyncobjManagerV1>,
+    /// Modifiers the compositor imports XRGB8888 buffers with.
+    modifiers: Vec<u64>,
     configured: bool,
     frame_done: bool,
     closed: bool,
@@ -54,20 +56,41 @@ pub struct Window {
     height: i32,
 }
 
-impl Window {
-    pub fn open(
-        title: &str,
-        width: u32,
-        height: u32,
-        render_node: &str,
-        targets: &[Target],
-    ) -> Result<Self, String> {
+/// The compositor before a window exists: what it imports decides the
+/// targets' layout.
+pub struct Compositor {
+    queue: EventQueue<State>,
+    handle: QueueHandle<State>,
+    state: State,
+}
+
+impl Compositor {
+    pub fn connect() -> Result<Self, String> {
         let connection = Connection::connect_to_env().map_err(|error| error.to_string())?;
         let mut queue = connection.new_event_queue();
         let handle = queue.handle();
         connection.display().get_registry(&handle, ());
         let mut state = State::default();
-        queue.roundtrip(&mut state).map_err(|error| error.to_string())?;
+        // The globals, then the formats the DMA-BUF global announces.
+        for _ in 0..2 {
+            queue.roundtrip(&mut state).map_err(|error| error.to_string())?;
+        }
+        Ok(Self { queue, handle, state })
+    }
+
+    pub fn modifiers(&self) -> &[u64] {
+        &self.state.modifiers
+    }
+
+    pub fn open(
+        self,
+        title: &str,
+        width: u32,
+        height: u32,
+        render_node: &str,
+        targets: &[Target],
+    ) -> Result<Window, String> {
+        let Self { mut queue, handle, mut state } = self;
 
         let compositor = state.compositor.clone().ok_or("compositor lacks wl_compositor")?;
         let wm_base = state.wm_base.clone().ok_or("compositor lacks xdg_wm_base")?;
@@ -103,8 +126,8 @@ impl Window {
                 0,
                 target.offset,
                 target.stride,
-                (MODIFIER_LINEAR >> 32) as u32,
-                MODIFIER_LINEAR as u32,
+                (target.modifier >> 32) as u32,
+                target.modifier as u32,
             );
             let buffer = params.create_immed(
                 width as i32,
@@ -121,7 +144,7 @@ impl Window {
             slots.push(Slot { buffer, timeline, wire_timeline, uses: 0 });
         }
 
-        Ok(Self {
+        Ok(Window {
             queue,
             handle,
             state,
@@ -133,7 +156,9 @@ impl Window {
             height: height as i32,
         })
     }
+}
 
+impl Window {
     pub fn closed(&self) -> bool {
         self.state.closed
     }
@@ -210,13 +235,29 @@ impl Dispatch<wl_registry::WlRegistry, ()> for State {
         match interface.as_str() {
             "wl_compositor" => state.compositor = Some(registry.bind(name, version.min(6), handle, ())),
             "xdg_wm_base" => state.wm_base = Some(registry.bind(name, version.min(5), handle, ())),
+            // Version 3 announces every format and modifier at bind.
             "zwp_linux_dmabuf_v1" if version >= 3 => {
-                state.dmabuf = Some(registry.bind(name, version.min(4), handle, ()));
+                state.dmabuf = Some(registry.bind(name, 3, handle, ()));
             }
             "wp_linux_drm_syncobj_manager_v1" => {
                 state.syncobj = Some(registry.bind(name, 1, handle, ()));
             }
             _ => {}
+        }
+    }
+}
+
+impl Dispatch<zwp_linux_dmabuf_v1::ZwpLinuxDmabufV1, ()> for State {
+    fn event(
+        state: &mut Self,
+        _: &zwp_linux_dmabuf_v1::ZwpLinuxDmabufV1,
+        event: zwp_linux_dmabuf_v1::Event,
+        (): &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        if let zwp_linux_dmabuf_v1::Event::Modifier { format: XRGB8888, modifier_hi, modifier_lo } = event {
+            state.modifiers.push((u64::from(modifier_hi) << 32) | u64::from(modifier_lo));
         }
     }
 }
@@ -285,7 +326,6 @@ impl Dispatch<wl_callback::WlCallback, ()> for State {
 delegate_noop!(State: wl_compositor::WlCompositor);
 delegate_noop!(State: ignore wl_surface::WlSurface);
 delegate_noop!(State: ignore wl_buffer::WlBuffer);
-delegate_noop!(State: ignore zwp_linux_dmabuf_v1::ZwpLinuxDmabufV1);
 delegate_noop!(State: ignore zwp_linux_buffer_params_v1::ZwpLinuxBufferParamsV1);
 delegate_noop!(State: wp_linux_drm_syncobj_manager_v1::WpLinuxDrmSyncobjManagerV1);
 delegate_noop!(State: wp_linux_drm_syncobj_surface_v1::WpLinuxDrmSyncobjSurfaceV1);

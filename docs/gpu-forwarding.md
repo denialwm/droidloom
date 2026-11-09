@@ -102,6 +102,13 @@ own. Types that pass are offered as mappable; the start-up line in
 types. `droidloom-gpu-triangle --headless --check-memory` checks every
 mappable type both ways through the forwarding.
 
+`droidloom-gpu-triangle --headless --check-target` renders into an exported
+buffer, imports its DMA-BUF a second time the way a compositor does, and
+compares the two after each of two frames. With `--vram` the buffer lies in
+VRAM in one of the GPU's own DRM modifiers instead of LINEAR system memory;
+with a window, `--vram` shows such buffers in a compositor that renders on
+the same GPU, which then reads them where they are.
+
 `graphics/droidloom-gpu-protocol/api.txt` lists every forwarded command and
 structure. `droidloom-gpu-gen` turns it and `vk.xml` into the encoders, the
 server's decoders and the command tables. Flags in `api.txt` mark commands with
@@ -121,7 +128,14 @@ expects.
   in VRAM, and the buffer is a second image beside it (`shadow.rs`). A window
   buffer gets the frame at `vkQueueSignalReleaseImageANDROID`. An
   AHardwareBuffer gets it when the application releases the image to the
-  foreign queue, and gives it back on acquire.
+  foreign queue, and gives it back on acquire. A buffer whose handle names
+  one of the GPU's own modifiers lies in VRAM: it is the application's image
+  itself, with no second image and no copy.
+- **The GPU's modifiers.** `VkDrmFormatModifierPropertiesListEXT` answers
+  with the host driver's list, so a client can allocate a buffer in VRAM
+  with plain Vulkan: an image created from that list, device-local memory
+  exported as a DMA-BUF, and the modifier the driver chose read back. The
+  DMA-BUF keeps the memory after the client frees its allocation.
 - **Video buffers.** Decoders fill YUV AHardwareBuffers: NV12, YV12 and
   P010. The driver reports them as external formats, which ANGLE samples
   through a YCbCr conversion; a named format would also have to be
