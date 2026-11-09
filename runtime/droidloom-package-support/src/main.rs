@@ -21,6 +21,7 @@ const RULE: &str = "/etc/polkit-1/rules.d/49-droidloom.rules";
 const HELPER: &str = "/usr/lib/droidloom/droidloom-package-helper";
 const RECIPE: &str = "/usr/share/droidloom/cell-template.json";
 const VERSION: &str = "/usr/share/droidloom/package.json";
+const GAPPS: &str = "/usr/lib/droidloom/addons/gapps";
 
 #[derive(Parser)]
 #[command(
@@ -187,6 +188,14 @@ fn environment(graphics: &Graphics) -> String {
     }
     text
 }
+/// Google apps start with Android's storage and cannot join it later, so the
+/// first setup selects an installed add-on while Android has never booted on
+/// the storage.
+fn selects_gapps(previous: Option<&Value>, addon: &Path, data: &Path) -> bool {
+    previous.is_none()
+        && addon.is_dir()
+        && fs::read_dir(data.join("data")).map_or(true, |mut entries| entries.next().is_none())
+}
 fn configuration(
     mut recipe: Value,
     previous: Option<&Value>,
@@ -338,14 +347,18 @@ fn setup(
         None => chosen_gpu(previous.as_ref())?,
     };
     let graphics = graphics(Path::new("/sys/class/drm"), &choice)?;
-    let spec = configuration(
+    let mut spec = configuration(
         read_json(Path::new(RECIPE))?,
         previous.as_ref(),
         uid,
         &choice,
         &graphics,
     )?;
-    let data = Path::new(spec["data_dir"].as_str().unwrap());
+    let data = PathBuf::from(spec["data_dir"].as_str().unwrap());
+    if selects_gapps(previous.as_ref(), Path::new(GAPPS), &data) {
+        spec["gapps_dir"] = json!(GAPPS);
+    }
+    let data = data.as_path();
     root_directory(data, 0o700)?;
     droidloom_supervisor::host_storage::prepare(data)?;
     let old_state: Option<SetupState> = optional_json(Path::new(STATE))?
@@ -560,6 +573,19 @@ mod tests {
                 .is_empty()
         );
         assert!(configuration(recipe(), Some(&previous), 1000, &GpuChoice::Auto, &drm(128)).is_err());
+    }
+    #[test]
+    fn first_setup_selects_installed_gapps_for_fresh_storage_only() {
+        let root = tempfile::tempdir().unwrap();
+        let (addon, data) = (root.path().join("gapps"), root.path().join("storage"));
+        assert!(!selects_gapps(None, &addon, &data));
+        fs::create_dir(&addon).unwrap();
+        assert!(selects_gapps(None, &addon, &data));
+        fs::create_dir_all(data.join("data")).unwrap();
+        assert!(selects_gapps(None, &addon, &data));
+        assert!(!selects_gapps(Some(&json!({})), &addon, &data));
+        fs::create_dir(data.join("data/system")).unwrap();
+        assert!(!selects_gapps(None, &addon, &data));
     }
     #[test]
     fn gpu_choice_reaches_the_spec_and_the_server() {
