@@ -5,7 +5,8 @@
 //!
 //! Zoom is a crop region, which the camera service also derives from
 //! `CONTROL_ZOOM_RATIO`. Every YUV and private size is scaled from braun's
-//! preview, at most 1024 wide; the JPEG is braun's photo at full size.
+//! preview, at most 1024 wide; a JPEG is braun's photo, at full size or at
+//! any of those sizes.
 
 use droidloom_device_protocol::{Camera, Facing};
 
@@ -208,21 +209,24 @@ pub fn characteristics(camera: &Camera) -> Metadata {
 
     let mut configurations = Vec::new();
     let mut durations = Vec::new();
-    for (width, height) in stream_sizes(camera) {
+    let mut stalls = Vec::new();
+    let sizes = stream_sizes(camera);
+    for &(width, height) in &sizes {
         for kind in [format::IMPLEMENTATION_DEFINED, format::YCBCR_420_888] {
             // Output.
             configurations.extend([kind, int(width), int(height), 0]);
             durations.extend([i64::from(kind), i64::from(width), i64::from(height), FRAME_NS]);
         }
     }
-    configurations.extend([format::BLOB, width, height, 0]);
-    durations.extend([i64::from(format::BLOB), i64::from(width), i64::from(height), FRAME_NS]);
+    let photo_sizes = sizes.into_iter().map(|(width, height)| (int(width), int(height)));
+    for (width, height) in photo_sizes.chain([(width, height)]) {
+        configurations.extend([format::BLOB, width, height, 0]);
+        durations.extend([i64::from(format::BLOB), i64::from(width), i64::from(height), FRAME_NS]);
+        stalls.extend([i64::from(format::BLOB), i64::from(width), i64::from(height), PHOTO_STALL_NS]);
+    }
     out.set_i32(tags::SCALER_AVAILABLE_STREAM_CONFIGURATIONS, &configurations);
     out.set_i64(tags::SCALER_AVAILABLE_MIN_FRAME_DURATIONS, &durations);
-    out.set_i64(
-        tags::SCALER_AVAILABLE_STALL_DURATIONS,
-        &[i64::from(format::BLOB), i64::from(width), i64::from(height), PHOTO_STALL_NS],
-    );
+    out.set_i64(tags::SCALER_AVAILABLE_STALL_DURATIONS, &stalls);
     // Centre only.
     out.set_u8(tags::SCALER_CROPPING_TYPE, &[0]);
     out.set_i32(tags::SENSOR_ORIENTATION, &[0]);
@@ -334,7 +338,8 @@ mod tests {
         let metadata = characteristics(&front);
         assert_eq!(metadata.u8(tags::LENS_FACING), Some(0));
         let configurations = metadata.i32s(tags::SCALER_AVAILABLE_STREAM_CONFIGURATIONS).unwrap();
-        assert_eq!(configurations.len(), (sizes.len() * 2 + 1) * 4);
+        assert_eq!(configurations.len(), (sizes.len() * 3 + 1) * 4);
+        assert!(configurations.chunks(4).any(|entry| entry == [format::BLOB, 1440, 1080, 0]));
         assert_eq!(&configurations[configurations.len() - 4..], &[format::BLOB, 1728, 2304, 0]);
         assert_eq!(default_request(&front, 2).unwrap().u8(tags::CONTROL_AF_MODE), Some(af_mode::OFF));
     }

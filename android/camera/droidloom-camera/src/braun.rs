@@ -17,8 +17,9 @@ pub enum Request {
     Focus(f32, f32),
     /// Crop the middle `1 / zoom` of the frame.
     Zoom(f32),
-    /// Take photo `shot` into the JPEG file beside the message.
-    Shoot(u32),
+    /// Take photo `shot` into the JPEG file beside the message, at full
+    /// size or the middle of the frame scaled to this size.
+    Shoot(u32, Option<(u32, u32)>),
     /// The preview in this slot has been read.
     Release(u32),
 }
@@ -79,9 +80,13 @@ impl Request {
                 out.push(4);
                 out.extend_from_slice(&zoom.to_le_bytes());
             }
-            Request::Shoot(shot) => {
+            Request::Shoot(shot, size) => {
                 out.push(5);
                 out.extend_from_slice(&shot.to_le_bytes());
+                if let Some((width, height)) = size {
+                    out.extend_from_slice(&width.to_le_bytes());
+                    out.extend_from_slice(&height.to_le_bytes());
+                }
             }
             Request::Release(slot) => {
                 out.push(6);
@@ -144,7 +149,11 @@ mod tests {
         assert_eq!(Request::Open("imx890".into()).encode(), b"\x01imx890");
         assert_eq!(Request::Close.encode(), [2]);
         assert_eq!(Request::Zoom(2.0).encode(), [4, 0, 0, 0, 0x40]);
-        assert_eq!(Request::Shoot(7).encode(), [5, 7, 0, 0, 0]);
+        assert_eq!(Request::Shoot(7, None).encode(), [5, 7, 0, 0, 0]);
+        assert_eq!(
+            Request::Shoot(7, Some((1440, 1080))).encode(),
+            [5, 7, 0, 0, 0, 0xa0, 5, 0, 0, 0x38, 4, 0, 0]
+        );
         assert_eq!(Request::Release(2).encode(), [6, 2, 0, 0, 0]);
         let focus = Request::Focus(0.25, 0.75).encode();
         assert_eq!(focus[0], 3);

@@ -287,6 +287,8 @@ impl Output {
 #[derive(Clone, Copy)]
 struct Configured {
     blob: bool,
+    /// The size a JPEG stream asks braun for; `None` for the full photo.
+    photo_size: Option<(u32, u32)>,
     buffer_size: usize,
 }
 
@@ -600,8 +602,10 @@ impl Worker {
             let configured = streams.get(&output.stream).copied();
             if configured.is_some_and(|stream| stream.blob) {
                 let buffer_size = configured.map_or(0, |stream| stream.buffer_size);
+                let photo_size = configured.and_then(|stream| stream.photo_size);
                 let degrees = Control::jpeg_orientation(&settings);
-                if let Err(output) = self.shoot(frame_number, output, buffer_size, exif::orientation(degrees, mirrored)) {
+                let orientation = exif::orientation(degrees, mirrored);
+                if let Err(output) = self.shoot(frame_number, output, buffer_size, photo_size, orientation) {
                     errors.push(output.stream);
                     returned.push(output.returned(false));
                 }
@@ -658,7 +662,14 @@ impl Worker {
     }
 
     /// Asks braun for a photo into `output`'s buffer.
-    fn shoot(&mut self, frame: i32, output: Output, buffer_size: usize, orientation: u16) -> Result<(), Output> {
+    fn shoot(
+        &mut self,
+        frame: i32,
+        output: Output,
+        buffer_size: usize,
+        size: Option<(u32, u32)>,
+        orientation: u16,
+    ) -> Result<(), Output> {
         // SAFETY: the name is a C string; the descriptor is checked below.
         let raw = unsafe { libc::memfd_create(c"droidloom-photo".as_ptr(), libc::MFD_CLOEXEC) };
         if raw < 0 {
@@ -671,7 +682,7 @@ impl Worker {
         let sent = self
             .braun
             .as_ref()
-            .is_some_and(|braun| braun.send(&braun::Request::Shoot(shot), &[file.as_fd()]));
+            .is_some_and(|braun| braun.send(&braun::Request::Shoot(shot, size), &[file.as_fd()]));
         if !sent {
             return Err(output);
         }
@@ -745,13 +756,16 @@ fn check_stream(camera: &Camera, stream: &Stream) -> Option<Configured> {
     let size = (u32::try_from(stream.width).ok()?, u32::try_from(stream.height).ok()?);
     let format = stream.format.0;
     if format == tags::format::BLOB {
-        return (size == (camera.width, camera.height)).then_some(Configured {
+        let full = size == (camera.width, camera.height);
+        return (full || stream_sizes(camera).contains(&size)).then_some(Configured {
             blob: true,
+            photo_size: (!full).then_some(size),
             buffer_size: usize::try_from(stream.bufferSize).unwrap_or(0),
         });
     }
     let known = format == tags::format::IMPLEMENTATION_DEFINED || format == tags::format::YCBCR_420_888;
-    (known && stream_sizes(camera).contains(&size)).then_some(Configured { blob: false, buffer_size: 0 })
+    (known && stream_sizes(camera).contains(&size))
+        .then_some(Configured { blob: false, photo_size: None, buffer_size: 0 })
 }
 
 fn check_configuration(camera: &Camera, configuration: &StreamConfiguration) -> Option<Vec<Configured>> {
