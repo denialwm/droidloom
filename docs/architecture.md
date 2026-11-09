@@ -70,6 +70,8 @@ The image backend preserves minigbm's native-handle ABI, AIDL allocator and
 stable-C mapper. RGB, HDR, YUV and blob layouts share DMA-BUFs directly with
 the GPU; CPU locks retain DMA-BUF cache synchronization. Imports require one
 shared allocation, linear modifiers, valid strides and non-overlapping planes.
+With GPU forwarding, RGB buffers nobody maps may instead lie in VRAM in a
+modifier of the host GPU's own (`docs/gpu-forwarding.md`); mapping one fails.
 Images are bounded to 16384 pixels per dimension and 1 GiB per allocation; R8
 blobs may exceed the image width limit. Protected allocations are rejected.
 The host presenter still allocates final Wayland targets. Linear images add no

@@ -24,7 +24,6 @@ const VK_SEMAPHORE_IMPORT_TEMPORARY_BIT: u32 = 1;
 const VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT: u32 = 0x80;
 
 /// Gralloc 1 usage bits (`hardware/gralloc1.h`).
-const GRALLOC1_PRODUCER_USAGE_CPU_READ: u64 = 1 << 1;
 const GRALLOC1_CONSUMER_USAGE_GPU_TEXTURE: u64 = 1 << 8;
 const GRALLOC1_PRODUCER_USAGE_GPU_RENDER_TARGET: u64 = 1 << 9;
 
@@ -188,9 +187,9 @@ pub unsafe fn native_buffer(chain: *const c_void) -> Option<*const NativeHandle>
     }
 }
 
-/// Render target and texture, as Mesa's drivers ask; CPU read keeps the
-/// allocator to linear system memory, which a GPU other than the
-/// allocator's can import.
+/// Render target and texture, as Mesa's drivers ask. Nobody maps such a
+/// buffer, so the allocator may place it in VRAM (the modifiers the host
+/// lists); otherwise it is linear system memory, which any GPU imports.
 pub unsafe extern "system" fn vkGetSwapchainGrallocUsage2ANDROID(
     _device: VkDevice,
     _format: VkFormat,
@@ -201,7 +200,7 @@ pub unsafe extern "system" fn vkGetSwapchainGrallocUsage2ANDROID(
 ) -> VkResult {
     unsafe {
         *grallocConsumerUsage = GRALLOC1_CONSUMER_USAGE_GPU_TEXTURE;
-        *grallocProducerUsage = GRALLOC1_PRODUCER_USAGE_GPU_RENDER_TARGET | GRALLOC1_PRODUCER_USAGE_CPU_READ;
+        *grallocProducerUsage = GRALLOC1_PRODUCER_USAGE_GPU_RENDER_TARGET;
     }
     VK_SUCCESS
 }

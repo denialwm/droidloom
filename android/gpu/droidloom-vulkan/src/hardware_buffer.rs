@@ -2,7 +2,9 @@
 //! is a gralloc buffer, so the host only ever sees the DMA-BUF inside. Its
 //! layout is known once the buffer is imported, so an image made for one
 //! reaches the host then, just before its memory. Export allocates the
-//! buffer from gralloc and imports it the same way.
+//! buffer from gralloc and imports it the same way. The layout is LINEAR in
+//! system memory, or for an RGB buffer nobody maps one of the host GPU's own
+//! modifiers in VRAM.
 //!
 //! YUV buffers, which video decoders fill, are images of Vulkan's
 //! multi-planar formats, sampled through a YCbCr conversion. Their external
@@ -199,9 +201,6 @@ fn hal_format(format: VkFormat) -> Option<i32> {
 unsafe fn hardware_buffer(buffer: *const c_void) -> Gralloc {
     unsafe {
         let mut buffer = android::gralloc(AHardwareBuffer_getNativeHandle(buffer));
-        if buffer.modifier != 0 {
-            rt::fail(&format!("AHardwareBuffer with DRM modifier {:#x}: only LINEAR is imported", buffer.modifier));
-        }
         let planes = match YUV.iter().find(|yuv| yuv.fourcc == buffer.fourcc) {
             Some(yuv) => {
                 // The image's planes come in Vulkan's order: Y, Cb, Cr.
@@ -253,11 +252,11 @@ pub unsafe extern "system" fn vkGetAndroidHardwareBufferPropertiesANDROID(
         while !next.is_null() {
             match (*next).sType {
                 VK_STRUCTURE_TYPE_ANDROID_HARDWARE_BUFFER_FORMAT_PROPERTIES_ANDROID => {
-                    let features = linear_features(device, format);
+                    let features = layout_features(device, format, buffer.modifier);
                     describe::<u32>(next.cast_mut().cast(), format, features);
                 }
                 VK_STRUCTURE_TYPE_ANDROID_HARDWARE_BUFFER_FORMAT_PROPERTIES_2_ANDROID => {
-                    let features = linear_features(device, format);
+                    let features = layout_features(device, format, buffer.modifier);
                     describe::<u64>(next.cast_mut().cast(), format, u64::from(features));
                 }
                 _ => {}
@@ -292,12 +291,31 @@ unsafe fn describe<F>(out: *mut FormatProperties<F>, format: VkFormat, features:
     }
 }
 
-unsafe fn linear_features(device: VkDevice, format: VkFormat) -> u32 {
+/// What the host does with an image of `format` laid out in `modifier`.
+unsafe fn layout_features(device: VkDevice, format: VkFormat, modifier: u64) -> u32 {
     unsafe {
         let physical = *rt::PHYSICAL.at(rt::id(device as usize));
-        let mut properties = core::mem::zeroed::<VkFormatProperties>();
-        crate::generated::vkGetPhysicalDeviceFormatProperties(physical as _, format, &raw mut properties);
-        properties.linearTilingFeatures
+        if modifier == 0 {
+            let mut properties = core::mem::zeroed::<VkFormatProperties>();
+            crate::generated::vkGetPhysicalDeviceFormatProperties(physical as _, format, &raw mut properties);
+            return properties.linearTilingFeatures;
+        }
+        let mut entries = [core::mem::zeroed::<VkDrmFormatModifierPropertiesEXT>(); 64];
+        let mut list = VkDrmFormatModifierPropertiesListEXT {
+            sType: VK_STRUCTURE_TYPE_DRM_FORMAT_MODIFIER_PROPERTIES_LIST_EXT,
+            pNext: core::ptr::null_mut(),
+            drmFormatModifierCount: entries.len() as u32,
+            pDrmFormatModifierProperties: entries.as_mut_ptr(),
+        };
+        let mut properties = core::mem::zeroed::<VkFormatProperties2>();
+        properties.sType = VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_2;
+        properties.pNext = (&raw mut list).cast();
+        crate::generated::vkGetPhysicalDeviceFormatProperties2(physical as _, format, &raw mut properties);
+        entries[..list.drmFormatModifierCount as usize]
+            .iter()
+            .find(|entry| entry.drmFormatModifier == modifier)
+            .map(|entry| entry.drmFormatModifierTilingFeatures)
+            .unwrap_or_else(|| rt::fail(&format!("AHardwareBuffer with DRM modifier {modifier:#x}, which the host does not list")))
     }
 }
 

@@ -304,6 +304,10 @@ const PATCHES: &[(&str, &str)] = &[
         "android/aosp-patches/0007-minigbm-amdgpu-platform.patch",
     ),
     (
+        "external/minigbm",
+        "android/aosp-patches/0021-minigbm-vram-images.patch",
+    ),
+    (
         "system/vold",
         "android/aosp-patches/0008-vold-preserve-shared-storage-submounts.patch",
     ),

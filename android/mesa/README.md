@@ -36,6 +36,11 @@ Runtime patches under `android/aosp-patches/`:
   twice Turnip's. Planar YVU420/YV12 uses a 256-byte luma pitch alignment so
   both half-width chroma pitches keep it. Android YV12's exact chroma-stride
   rule and unpadded height remain intact.
+- `0021-minigbm-vram-images.patch`: with `vendor.minigbm.vram=vulkan`, RGB
+  buffers that are only drawn, sampled and shown come from the Vulkan driver:
+  an image from its DRM modifier list, device-local memory exported as a
+  DMA-BUF, cleared. Mapping one fails. Formats and sizes the driver lists no
+  modifier for stay linear DMA-heap images.
 - `0011-mesa-zink-kgsl.patch`: when ordinary DRM matching fails on `msm_drm`,
   select a unique Turnip device without DRM identity only if external DMA-BUF
   memory and image modifier extensions are present. Other DRM drivers keep

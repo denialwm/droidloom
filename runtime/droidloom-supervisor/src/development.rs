@@ -925,9 +925,15 @@ pub fn enter_development_cell(spec: &CellSpec) -> Result<(), DevelopmentError> {
     // Do not inherit a host renderer override accidentally. The explicit
     // pairing applies to all Android children, including mapper clients.
     init.env_remove("MESA_LOADER_DRIVER_OVERRIDE")
-        .env_remove("vendor.minigbm.allocator");
+        .env_remove("vendor.minigbm.allocator")
+        .env_remove("vendor.minigbm.vram");
     if spec.graphics_backend != crate::GraphicsBackend::Drm {
         init.env("vendor.minigbm.allocator", "dma_heap_images");
+    }
+    // The forwarded driver lists the host GPU's layouts the compositor
+    // imports; buffers nobody maps then lie in VRAM in one of them.
+    if spec.graphics_backend == crate::GraphicsBackend::Forwarding {
+        init.env("vendor.minigbm.vram", "vulkan");
     }
     if spec.graphics_backend == crate::GraphicsBackend::KgslDmaHeap {
         init.env("MESA_LOADER_DRIVER_OVERRIDE", "zink");

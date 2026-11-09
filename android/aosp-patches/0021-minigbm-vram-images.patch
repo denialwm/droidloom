@@ -1,0 +1,636 @@
+diff --git a/Android.bp b/Android.bp
+index fd428f0..6cd1832 100644
+--- a/Android.bp
++++ b/Android.bp
+@@ -63,6 +63,7 @@ filegroup {
+         "cros_gralloc/cros_gralloc_buffer.cc",
+         "cros_gralloc/cros_gralloc_driver.cc",
+         "cros_gralloc/cros_gralloc_helpers.cc",
++        "vram_images.c",
+     ],
+ }
+ 
+@@ -150,6 +151,7 @@ cc_defaults {
+         "libnativebase_headers",
+         "libsystem_headers",
+         "minigbm_headers",
++        "vulkan_headers",
+     ],
+ 
+     static_libs: ["libarect"],
+diff --git a/cros_gralloc/cros_gralloc_driver.cc b/cros_gralloc/cros_gralloc_driver.cc
+index e4b86f5..36514aa 100644
+--- a/cros_gralloc/cros_gralloc_driver.cc
++++ b/cros_gralloc/cros_gralloc_driver.cc
+@@ -17,6 +17,7 @@
+ #include "../drv_helpers.h"
+ #include "../drv_priv.h"
+ #include "../util.h"
++#include "../vram_images.h"
+ #include "cros_gralloc_buffer_metadata.h"
+ 
+ // Constants taken from pipe_loader_drm.c in Mesa
+@@ -130,6 +131,11 @@ static struct driver *init_try_nodes()
+ 			close(fd);
+ 		else
+ 			ALOGI("Using explicit linear DMA-heap image allocator");
++		// Also selected by the cell: its Vulkan driver hands out VRAM in
++		// layouts the enclosing compositor imports.
++		const char *vram = drv_get_os_option("vendor.minigbm.vram");
++		if (drv && vram && !strcmp(vram, "vulkan"))
++			dma_heap_image_vram = vram_image_create;
+ 		return drv;
+ 	}
+ 	/*
+diff --git a/dma_heap.c b/dma_heap.c
+index 3ea461f..08b01e1 100644
+--- a/dma_heap.c
++++ b/dma_heap.c
+@@ -19,6 +19,7 @@
+ #include "external/dma-buf.h"
+ #include "external/dma-heap.h"
+ #include "util.h"
++#include "vram_images.h"
+ 
+ /* blob format only */
+ static const uint32_t dma_heap_blob_format = DRM_FORMAT_R8;
+@@ -191,6 +192,14 @@ static const uint64_t dma_heap_image_use_flags =
+ #define DMA_HEAP_MAX_IMAGE_DIMENSION 16384u
+ #define DMA_HEAP_MAX_ALLOCATION (1u << 30)
+ 
++/* A GPU draws or samples these, the enclosing compositor shows them, and
++ * nobody maps them: they may lie in VRAM in a layout of the GPU's own.
++ */
++static const uint64_t dma_heap_vram_use_flags =
++    BO_USE_RENDERING | BO_USE_TEXTURE | BO_USE_SCANOUT;
++
++vram_image_allocator dma_heap_image_vram;
++
+ static bool image_is_supported(const struct bo *bo)
+ {
+ 	bool format_found = false;
+@@ -231,11 +240,52 @@ static int dma_heap_image_compute_metadata(struct bo *bo, uint32_t width, uint32
+ 	return 0;
+ }
+ 
++static int dma_heap_image_create_from_metadata(struct bo *bo)
++{
++	struct vram_image image;
++
++	if (dma_heap_image_vram && !(bo->meta.use_flags & ~dma_heap_vram_use_flags) &&
++	    (bo->meta.use_flags & (BO_USE_RENDERING | BO_USE_TEXTURE)) &&
++	    !dma_heap_image_vram(bo->meta.format, bo->meta.width, bo->meta.height,
++				 DMA_HEAP_MAX_ALLOCATION, &image)) {
++		bo->handle.fd = image.fd;
++		bo->meta.format_modifier = image.modifier;
++		bo->meta.strides[0] = image.stride;
++		bo->meta.offsets[0] = image.offset;
++		bo->meta.sizes[0] = image.size - image.offset;
++		bo->meta.total_size = image.size;
++		return 0;
++	}
++	return dma_heap_bo_create_from_metadata(bo);
++}
++
++static void *dma_heap_image_map(struct bo *bo, struct vma *vma, uint32_t map_flags)
++{
++	/* A layout of the GPU's own is no rows of pixels. */
++	if (bo->meta.format_modifier != DRM_FORMAT_MOD_LINEAR) {
++		errno = EINVAL;
++		return MAP_FAILED;
++	}
++	return dma_heap_bo_map(bo, vma, map_flags);
++}
++
+ static int dma_heap_image_import(struct bo *bo, struct drv_import_fd_data *data)
+ {
+-	if (!image_is_supported(bo) || data->format_modifier != DRM_FORMAT_MOD_LINEAR ||
+-	    data->offsets[0] != 0)
++	if (!image_is_supported(bo) || data->offsets[0] != 0)
+ 		return -EINVAL;
++	if (data->format_modifier != DRM_FORMAT_MOD_LINEAR) {
++		/* In VRAM, laid out by the GPU: one plane, its size the GPU's. */
++		off_t size = lseek(data->fds[0], 0, SEEK_END);
++		if (bo->meta.num_planes != 1 || (bo->meta.use_flags & ~dma_heap_vram_use_flags) ||
++		    size <= 0 || size > DMA_HEAP_MAX_ALLOCATION)
++			return -EINVAL;
++		lseek(data->fds[0], 0, SEEK_SET);
++		int vram = fcntl(data->fds[0], F_DUPFD_CLOEXEC, 0);
++		if (vram < 0)
++			return -errno;
++		bo->handle.fd = vram;
++		return 0;
++	}
+ 	struct stat first;
+ 	if (fstat(data->fds[0], &first))
+ 		return -errno;
+@@ -278,11 +328,11 @@ const struct backend backend_dma_heap_images = {
+ 	.name = "dma_heap_images",
+ 	.init = dma_heap_images_init,
+ 	.bo_compute_metadata = dma_heap_image_compute_metadata,
+-	.bo_create_from_metadata = dma_heap_bo_create_from_metadata,
++	.bo_create_from_metadata = dma_heap_image_create_from_metadata,
+ 	.bo_destroy = dma_heap_bo_destroy,
+ 	.bo_import = dma_heap_image_import,
+ 	.bo_export = dma_heap_bo_export,
+-	.bo_map = dma_heap_bo_map,
++	.bo_map = dma_heap_image_map,
+ 	.bo_unmap = drv_bo_munmap,
+ 	.bo_invalidate = dma_heap_bo_invalidate,
+ 	.bo_flush = dma_heap_bo_flush,
+diff --git a/vram_images.c b/vram_images.c
+new file mode 100644
+index 0000000..b03f09f
+--- /dev/null
++++ b/vram_images.c
+@@ -0,0 +1,440 @@
++/*
++ * Use of this source code is governed by a BSD-style license that can be
++ * found in the LICENSE file.
++ */
++
++/*
++ * RGB images in VRAM, in one of the GPU's own DRM modifiers. The Vulkan
++ * driver allocates them: an image made from its modifier list, device-local
++ * memory exported as a DMA-BUF, and the modifier it chose read back. The
++ * DMA-BUF keeps the memory, so the image and its allocation go at once.
++ */
++
++#define VK_NO_PROTOTYPES
++
++#include <dlfcn.h>
++#include <errno.h>
++#include <pthread.h>
++#include <stdbool.h>
++#include <string.h>
++#include <unistd.h>
++
++#include <vulkan/vulkan.h>
++
++#include "drv.h"
++#include "util.h"
++#include "vram_images.h"
++
++#define VRAM_MAX_MODIFIERS 16
++
++/* What every consumer of a gralloc buffer may do with its image. The clear
++ * needs TRANSFER_DST.
++ */
++#define VRAM_IMAGE_USAGE                                                                           \
++	(VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |                        \
++	 VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT)
++#define VRAM_FORMAT_FEATURES                                                                       \
++	(VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT |            \
++	 VK_FORMAT_FEATURE_TRANSFER_SRC_BIT | VK_FORMAT_FEATURE_TRANSFER_DST_BIT)
++
++struct vram_format {
++	uint32_t drm_format;
++	VkFormat format;
++	bool listed;
++	uint32_t count;
++	uint64_t modifiers[VRAM_MAX_MODIFIERS];
++};
++
++/* Both DRM formats of a Vulkan format share its modifiers, found on first
++ * use.
++ */
++static struct vram_format vram_formats[] = {
++	{ .drm_format = DRM_FORMAT_ABGR8888, .format = VK_FORMAT_R8G8B8A8_UNORM },
++	{ .drm_format = DRM_FORMAT_XBGR8888, .format = VK_FORMAT_R8G8B8A8_UNORM },
++	{ .drm_format = DRM_FORMAT_ARGB8888, .format = VK_FORMAT_B8G8R8A8_UNORM },
++	{ .drm_format = DRM_FORMAT_XRGB8888, .format = VK_FORMAT_B8G8R8A8_UNORM },
++	{ .drm_format = DRM_FORMAT_RGB565, .format = VK_FORMAT_R5G6B5_UNORM_PACK16 },
++	{ .drm_format = DRM_FORMAT_ABGR2101010, .format = VK_FORMAT_A2B10G10R10_UNORM_PACK32 },
++	{ .drm_format = DRM_FORMAT_ABGR16161616F, .format = VK_FORMAT_R16G16B16A16_SFLOAT },
++};
++
++static struct {
++	pthread_mutex_t lock;
++	bool tried;
++	VkPhysicalDevice physical;
++	VkDevice device;
++	VkQueue queue;
++	VkCommandBuffer commands;
++	VkPhysicalDeviceMemoryProperties memory;
++	PFN_vkGetPhysicalDeviceFormatProperties2 GetPhysicalDeviceFormatProperties2;
++	PFN_vkGetPhysicalDeviceImageFormatProperties2 GetPhysicalDeviceImageFormatProperties2;
++	PFN_vkCreateImage CreateImage;
++	PFN_vkDestroyImage DestroyImage;
++	PFN_vkGetImageMemoryRequirements GetImageMemoryRequirements;
++	PFN_vkAllocateMemory AllocateMemory;
++	PFN_vkFreeMemory FreeMemory;
++	PFN_vkBindImageMemory BindImageMemory;
++	PFN_vkGetImageSubresourceLayout GetImageSubresourceLayout;
++	PFN_vkGetImageDrmFormatModifierPropertiesEXT GetImageDrmFormatModifierPropertiesEXT;
++	PFN_vkGetMemoryFdKHR GetMemoryFdKHR;
++	PFN_vkBeginCommandBuffer BeginCommandBuffer;
++	PFN_vkCmdPipelineBarrier CmdPipelineBarrier;
++	PFN_vkCmdClearColorImage CmdClearColorImage;
++	PFN_vkEndCommandBuffer EndCommandBuffer;
++	PFN_vkQueueSubmit QueueSubmit;
++	PFN_vkQueueWaitIdle QueueWaitIdle;
++} vk = { .lock = PTHREAD_MUTEX_INITIALIZER };
++
++/* An instance and a device of the first GPU, kept for the process. */
++static bool vram_open(void)
++{
++	static const char *const extensions[] = {
++		VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME,
++		VK_EXT_EXTERNAL_MEMORY_DMA_BUF_EXTENSION_NAME,
++		VK_EXT_IMAGE_DRM_FORMAT_MODIFIER_EXTENSION_NAME,
++	};
++	const VkApplicationInfo application = {
++		.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO,
++		.pApplicationName = "minigbm",
++		.apiVersion = VK_API_VERSION_1_2,
++	};
++	const VkInstanceCreateInfo instance_info = {
++		.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
++		.pApplicationInfo = &application,
++	};
++	const float priority = 1.0f;
++	const VkDeviceQueueCreateInfo queue_info = {
++		.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
++		.queueFamilyIndex = 0,
++		.queueCount = 1,
++		.pQueuePriorities = &priority,
++	};
++	const VkDeviceCreateInfo device_info = {
++		.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
++		.queueCreateInfoCount = 1,
++		.pQueueCreateInfos = &queue_info,
++		.enabledExtensionCount = ARRAY_SIZE(extensions),
++		.ppEnabledExtensionNames = extensions,
++	};
++	const VkCommandPoolCreateInfo pool_info = {
++		.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
++		.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
++		.queueFamilyIndex = 0,
++	};
++	VkCommandBufferAllocateInfo commands_info = {
++		.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
++		.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
++		.commandBufferCount = 1,
++	};
++	VkInstance instance;
++	VkCommandPool pool;
++	uint32_t count = 1;
++	VkResult result;
++
++	void *library = dlopen("libvulkan.so", RTLD_NOW | RTLD_LOCAL);
++	if (!library) {
++		drv_loge("VRAM images: no Vulkan library: %s\n", dlerror());
++		return false;
++	}
++	PFN_vkGetInstanceProcAddr instance_proc =
++	    (PFN_vkGetInstanceProcAddr)dlsym(library, "vkGetInstanceProcAddr");
++	if (!instance_proc)
++		return false;
++#define INSTANCE(name) ((PFN_vk##name)instance_proc(instance, "vk" #name))
++	instance = VK_NULL_HANDLE;
++	result = INSTANCE(CreateInstance)(&instance_info, NULL, &instance);
++	if (result != VK_SUCCESS) {
++		drv_loge("VRAM images: vkCreateInstance: %d\n", result);
++		return false;
++	}
++	result = INSTANCE(EnumeratePhysicalDevices)(instance, &count, &vk.physical);
++	if ((result != VK_SUCCESS && result != VK_INCOMPLETE) || count != 1) {
++		drv_loge("VRAM images: no GPU: %d\n", result);
++		return false;
++	}
++	/* A driver without the three extensions refuses here. */
++	result = INSTANCE(CreateDevice)(vk.physical, &device_info, NULL, &vk.device);
++	if (result != VK_SUCCESS) {
++		drv_loge("VRAM images: vkCreateDevice: %d\n", result);
++		return false;
++	}
++	INSTANCE(GetPhysicalDeviceMemoryProperties)(vk.physical, &vk.memory);
++	vk.GetPhysicalDeviceFormatProperties2 = INSTANCE(GetPhysicalDeviceFormatProperties2);
++	vk.GetPhysicalDeviceImageFormatProperties2 =
++	    INSTANCE(GetPhysicalDeviceImageFormatProperties2);
++	PFN_vkGetDeviceProcAddr device_proc = INSTANCE(GetDeviceProcAddr);
++#undef INSTANCE
++#define DEVICE(name) ((PFN_vk##name)device_proc(vk.device, "vk" #name))
++#define KEEP(name)                                                                                 \
++	if (!(vk.name = DEVICE(name))) {                                                           \
++		drv_loge("VRAM images: the driver has no vk" #name "\n");                          \
++		return false;                                                                      \
++	}
++	KEEP(CreateImage);
++	KEEP(DestroyImage);
++	KEEP(GetImageMemoryRequirements);
++	KEEP(AllocateMemory);
++	KEEP(FreeMemory);
++	KEEP(BindImageMemory);
++	KEEP(GetImageSubresourceLayout);
++	KEEP(GetImageDrmFormatModifierPropertiesEXT);
++	KEEP(GetMemoryFdKHR);
++	KEEP(BeginCommandBuffer);
++	KEEP(CmdPipelineBarrier);
++	KEEP(CmdClearColorImage);
++	KEEP(EndCommandBuffer);
++	KEEP(QueueSubmit);
++	KEEP(QueueWaitIdle);
++#undef KEEP
++	DEVICE(GetDeviceQueue)(vk.device, 0, 0, &vk.queue);
++	result = DEVICE(CreateCommandPool)(vk.device, &pool_info, NULL, &pool);
++	if (result != VK_SUCCESS)
++		return false;
++	commands_info.commandPool = pool;
++	result = DEVICE(AllocateCommandBuffers)(vk.device, &commands_info, &vk.commands);
++#undef DEVICE
++	return result == VK_SUCCESS;
++}
++
++/* Whether an image of `format` laid out in `modifier` exports as a DMA-BUF. */
++static bool vram_exports(VkFormat format, uint64_t modifier)
++{
++	const VkPhysicalDeviceImageDrmFormatModifierInfoEXT layout = {
++		.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_IMAGE_DRM_FORMAT_MODIFIER_INFO_EXT,
++		.drmFormatModifier = modifier,
++		.sharingMode = VK_SHARING_MODE_EXCLUSIVE,
++	};
++	const VkPhysicalDeviceExternalImageFormatInfo external = {
++		.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_IMAGE_FORMAT_INFO,
++		.pNext = &layout,
++		.handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT,
++	};
++	const VkPhysicalDeviceImageFormatInfo2 info = {
++		.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_IMAGE_FORMAT_INFO_2,
++		.pNext = &external,
++		.format = format,
++		.type = VK_IMAGE_TYPE_2D,
++		.tiling = VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT,
++		.usage = VRAM_IMAGE_USAGE,
++	};
++	VkExternalImageFormatProperties exported = {
++		.sType = VK_STRUCTURE_TYPE_EXTERNAL_IMAGE_FORMAT_PROPERTIES,
++	};
++	VkImageFormatProperties2 properties = {
++		.sType = VK_STRUCTURE_TYPE_IMAGE_FORMAT_PROPERTIES_2,
++		.pNext = &exported,
++	};
++
++	return vk.GetPhysicalDeviceImageFormatProperties2(vk.physical, &info, &properties) ==
++		   VK_SUCCESS &&
++	       (exported.externalMemoryProperties.externalMemoryFeatures &
++		VK_EXTERNAL_MEMORY_FEATURE_EXPORTABLE_BIT);
++}
++
++/* The driver's own modifiers for `entry`'s format: one plane, drawn into,
++ * sampled and exported. The driver lists the ones the compositor imports.
++ */
++static void vram_list(struct vram_format *entry)
++{
++	VkDrmFormatModifierPropertiesEXT listed[64];
++	VkDrmFormatModifierPropertiesListEXT list = {
++		.sType = VK_STRUCTURE_TYPE_DRM_FORMAT_MODIFIER_PROPERTIES_LIST_EXT,
++		.drmFormatModifierCount = ARRAY_SIZE(listed),
++		.pDrmFormatModifierProperties = listed,
++	};
++	VkFormatProperties2 properties = {
++		.sType = VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_2,
++		.pNext = &list,
++	};
++
++	vk.GetPhysicalDeviceFormatProperties2(vk.physical, entry->format, &properties);
++	for (uint32_t i = 0; i < list.drmFormatModifierCount; i++) {
++		if (listed[i].drmFormatModifier == DRM_FORMAT_MOD_LINEAR ||
++		    listed[i].drmFormatModifierPlaneCount != 1 ||
++		    (listed[i].drmFormatModifierTilingFeatures & VRAM_FORMAT_FEATURES) !=
++			VRAM_FORMAT_FEATURES ||
++		    entry->count == VRAM_MAX_MODIFIERS ||
++		    !vram_exports(entry->format, listed[i].drmFormatModifier))
++			continue;
++		entry->modifiers[entry->count++] = listed[i].drmFormatModifier;
++	}
++	entry->listed = true;
++}
++
++/* Clears `image`: VRAM comes with whatever it last held. */
++static bool vram_clear(VkImage image)
++{
++	const VkCommandBufferBeginInfo begin = {
++		.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
++		.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
++	};
++	const VkImageSubresourceRange all = {
++		.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
++		.levelCount = 1,
++		.layerCount = 1,
++	};
++	const VkImageMemoryBarrier barrier = {
++		.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
++		.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
++		.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
++		.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
++		.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
++		.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
++		.image = image,
++		.subresourceRange = all,
++	};
++	const VkClearColorValue black = { 0 };
++	const VkSubmitInfo submit = {
++		.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
++		.commandBufferCount = 1,
++		.pCommandBuffers = &vk.commands,
++	};
++
++	if (vk.BeginCommandBuffer(vk.commands, &begin) != VK_SUCCESS)
++		return false;
++	vk.CmdPipelineBarrier(vk.commands, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
++			      VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 0, NULL, 1, &barrier);
++	vk.CmdClearColorImage(vk.commands, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &black, 1,
++			      &all);
++	return vk.EndCommandBuffer(vk.commands) == VK_SUCCESS &&
++	       vk.QueueSubmit(vk.queue, 1, &submit, VK_NULL_HANDLE) == VK_SUCCESS &&
++	       vk.QueueWaitIdle(vk.queue) == VK_SUCCESS;
++}
++
++static int vram_image_create_locked(struct vram_format *entry, uint32_t width, uint32_t height,
++				    uint64_t limit, struct vram_image *out)
++{
++	const VkImageDrmFormatModifierListCreateInfoEXT modifiers = {
++		.sType = VK_STRUCTURE_TYPE_IMAGE_DRM_FORMAT_MODIFIER_LIST_CREATE_INFO_EXT,
++		.drmFormatModifierCount = entry->count,
++		.pDrmFormatModifiers = entry->modifiers,
++	};
++	const VkExternalMemoryImageCreateInfo external = {
++		.sType = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO,
++		.pNext = &modifiers,
++		.handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT,
++	};
++	const VkImageCreateInfo image_info = {
++		.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
++		.pNext = &external,
++		.imageType = VK_IMAGE_TYPE_2D,
++		.format = entry->format,
++		.extent = { width, height, 1 },
++		.mipLevels = 1,
++		.arrayLayers = 1,
++		.samples = VK_SAMPLE_COUNT_1_BIT,
++		.tiling = VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT,
++		.usage = VRAM_IMAGE_USAGE,
++		.sharingMode = VK_SHARING_MODE_EXCLUSIVE,
++		.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
++	};
++	VkMemoryDedicatedAllocateInfo dedicated = {
++		.sType = VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO,
++	};
++	const VkExportMemoryAllocateInfo exported = {
++		.sType = VK_STRUCTURE_TYPE_EXPORT_MEMORY_ALLOCATE_INFO,
++		.pNext = &dedicated,
++		.handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT,
++	};
++	VkMemoryAllocateInfo memory_info = {
++		.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
++		.pNext = &exported,
++		.memoryTypeIndex = UINT32_MAX,
++	};
++	VkMemoryGetFdInfoKHR fd_info = {
++		.sType = VK_STRUCTURE_TYPE_MEMORY_GET_FD_INFO_KHR,
++		.handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT,
++	};
++	const VkImageSubresource plane = {
++		.aspectMask = VK_IMAGE_ASPECT_MEMORY_PLANE_0_BIT_EXT,
++	};
++	VkImageDrmFormatModifierPropertiesEXT chosen = {
++		.sType = VK_STRUCTURE_TYPE_IMAGE_DRM_FORMAT_MODIFIER_PROPERTIES_EXT,
++	};
++	VkMemoryRequirements requirements;
++	VkSubresourceLayout layout;
++	VkDeviceMemory memory = VK_NULL_HANDLE;
++	VkImage image;
++	off_t length;
++	int fd = -1;
++	int ret = -ENOMEM;
++
++	if (vk.CreateImage(vk.device, &image_info, NULL, &image) != VK_SUCCESS)
++		return -EINVAL;
++	vk.GetImageMemoryRequirements(vk.device, image, &requirements);
++	/* VRAM the CPU maps is scarce: take the plain kind where there is one. */
++	for (uint32_t i = 0; i < vk.memory.memoryTypeCount; i++) {
++		VkMemoryPropertyFlags flags = vk.memory.memoryTypes[i].propertyFlags;
++		if (!(requirements.memoryTypeBits & (1u << i)) ||
++		    !(flags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT))
++			continue;
++		if (memory_info.memoryTypeIndex == UINT32_MAX)
++			memory_info.memoryTypeIndex = i;
++		if (!(flags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT)) {
++			memory_info.memoryTypeIndex = i;
++			break;
++		}
++	}
++	if (memory_info.memoryTypeIndex == UINT32_MAX || requirements.size > limit)
++		goto out;
++	memory_info.allocationSize = requirements.size;
++	dedicated.image = image;
++	if (vk.AllocateMemory(vk.device, &memory_info, NULL, &memory) != VK_SUCCESS ||
++	    vk.BindImageMemory(vk.device, image, memory, 0) != VK_SUCCESS || !vram_clear(image) ||
++	    vk.GetImageDrmFormatModifierPropertiesEXT(vk.device, image, &chosen) != VK_SUCCESS)
++		goto out;
++	vk.GetImageSubresourceLayout(vk.device, image, &plane, &layout);
++	fd_info.memory = memory;
++	if (layout.rowPitch > UINT32_MAX || layout.offset >= requirements.size ||
++	    vk.GetMemoryFdKHR(vk.device, &fd_info, &fd) != VK_SUCCESS)
++		goto out;
++	/* The driver rounds the DMA-BUF up; an import names its whole size. */
++	length = lseek(fd, 0, SEEK_END);
++	if (length < (off_t)requirements.size || (uint64_t)length > limit) {
++		close(fd);
++		goto out;
++	}
++	out->fd = fd;
++	out->modifier = chosen.drmFormatModifier;
++	out->stride = layout.rowPitch;
++	out->offset = layout.offset;
++	out->size = length;
++	ret = 0;
++out:
++	vk.DestroyImage(vk.device, image, NULL);
++	if (memory != VK_NULL_HANDLE)
++		vk.FreeMemory(vk.device, memory, NULL);
++	return ret;
++}
++
++int vram_image_create(uint32_t drm_format, uint32_t width, uint32_t height, uint64_t limit,
++		      struct vram_image *out)
++{
++	static bool opened;
++	struct vram_format *entry = NULL;
++	int ret = -ENOTSUP;
++
++	for (size_t i = 0; i < ARRAY_SIZE(vram_formats); i++) {
++		if (vram_formats[i].drm_format == drm_format)
++			entry = &vram_formats[i];
++	}
++	if (!entry)
++		return -ENOTSUP;
++
++	pthread_mutex_lock(&vk.lock);
++	if (!vk.tried) {
++		vk.tried = true;
++		opened = vram_open();
++	}
++	if (opened) {
++		if (!entry->listed) {
++			vram_list(entry);
++			drv_logi("VRAM images: %u layouts for format %.4s\n", entry->count,
++				 (const char *)&entry->drm_format);
++		}
++		if (entry->count)
++			ret = vram_image_create_locked(entry, width, height, limit, out);
++	}
++	pthread_mutex_unlock(&vk.lock);
++	return ret;
++}
+diff --git a/vram_images.h b/vram_images.h
+new file mode 100644
+index 0000000..6d546c7
+--- /dev/null
++++ b/vram_images.h
+@@ -0,0 +1,44 @@
++/*
++ * Use of this source code is governed by a BSD-style license that can be
++ * found in the LICENSE file.
++ */
++
++#ifndef VRAM_IMAGES_H
++#define VRAM_IMAGES_H
++
++#include <stdint.h>
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++/* One plane in a DMA-BUF of `size` bytes, which the caller owns. */
++struct vram_image {
++	int fd;
++	uint64_t modifier;
++	uint32_t stride;
++	uint32_t offset;
++	uint64_t size;
++};
++
++typedef int (*vram_image_allocator)(uint32_t drm_format, uint32_t width, uint32_t height,
++				    uint64_t limit, struct vram_image *out);
++
++/* An image in VRAM of at most `limit` bytes, cleared. Fails where the Vulkan
++ * driver offers no layout of its own for the format: the buffer then belongs
++ * in system memory.
++ */
++int vram_image_create(uint32_t drm_format, uint32_t width, uint32_t height, uint64_t limit,
++		      struct vram_image *out);
++
++/* Where the DMA-heap image allocator gets VRAM; unset, every image is LINEAR
++ * system memory. The gralloc allocator sets it, which keeps Vulkan out of
++ * libgbm.
++ */
++extern vram_image_allocator dma_heap_image_vram;
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif

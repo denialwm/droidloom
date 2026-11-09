@@ -51,7 +51,12 @@ The `forwarding` pairing:
 - sets `ro.hardware.vulkan=droidloom` and `ro.hardware.egl=angle` in the
   product properties, which Android loads after the vendor image's;
 - binds `%t/droidloom/gpu.sock` at `/dev/socket/droidloom/gpu`;
-- allocates buffers from the system DMA heap, so both GPUs can import them.
+- allocates buffers from the system DMA heap, so both GPUs can import them;
+- sets `vendor.minigbm.vram=vulkan` for Android: RGB buffers that are only
+  drawn, sampled and shown come from the Vulkan driver instead, in VRAM, in
+  one of the modifiers the server lists. Window buffers are such buffers.
+  With a compositor on another GPU the server lists none, and every buffer
+  stays in the DMA heap.
 
 `droidloom-gpu.socket` belongs to `droidloom.service`. The first Android
 Vulkan client starts `droidloom-gpu.service`, which forks a server for each
@@ -135,8 +140,9 @@ expects.
   with the host driver's list, so a client can allocate a buffer in VRAM
   with plain Vulkan: an image created from that list, device-local memory
   exported as a DMA-BUF, and the modifier the driver chose read back. The
-  DMA-BUF keeps the memory after the client frees its allocation. Any such
-  buffer may end up in a window, so the list holds only what the compositor
+  DMA-BUF keeps the memory after the client frees its allocation. Android's
+  allocator does exactly this (`0021-minigbm-vram-images.patch`), in its own
+  process, for buffers nobody maps. Any such buffer may end up in a window, so the list holds only what the compositor
   imports (`layouts.rs`): the server asks it once, at start. A compositor
   that renders on the same GPU takes the GPU's modifiers, and window buffers
   lie in VRAM. A compositor on another GPU takes none of them, the list is
