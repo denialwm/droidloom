@@ -44,6 +44,10 @@ const DEVICE_EXTENSIONS: [&CStr; 8] = [
     c"VK_KHR_push_descriptor",
 ];
 
+/// The least instance version the server works with: it finds the GPU it
+/// shows by PCI address, which a Vulkan 1.0 instance does not report.
+const INSTANCE_VERSION: u32 = (1 << 22) | (1 << 12);
+
 const NATIVE_BUFFER: &CStr = c"VK_ANDROID_native_buffer";
 /// AHardwareBuffers, which the client imports as the DMA-BUFs inside them.
 const HARDWARE_BUFFER: &CStr = c"VK_ANDROID_external_memory_android_hardware_buffer";
@@ -109,6 +113,22 @@ pub unsafe fn h_vkCreateInstance(s: &mut Server, record: *mut u8) -> *mut u8 {
         let f = record.add(8).cast::<frame::vkCreateInstance>();
         let info: *mut VkInstanceCreateInfo = rt::at(record, (*f).pCreateInfo);
         patch_VkInstanceCreateInfo(s, record, info);
+        // The host instance is the server's too: an application that asks
+        // for Vulkan 1.0, or names no version, still gets its GPU.
+        let own = VkApplicationInfo {
+            sType: VK_STRUCTURE_TYPE_APPLICATION_INFO,
+            pNext: core::ptr::null(),
+            pApplicationName: core::ptr::null(),
+            applicationVersion: 0,
+            pEngineName: core::ptr::null(),
+            engineVersion: 0,
+            apiVersion: INSTANCE_VERSION,
+        };
+        if (*info).pApplicationInfo.is_null() {
+            (*info).pApplicationInfo = &raw const own;
+        } else if (*(*info).pApplicationInfo).apiVersion < INSTANCE_VERSION {
+            (*(*info).pApplicationInfo.cast_mut()).apiVersion = INSTANCE_VERSION;
+        }
         let mut instance: VkInstance = 0;
         let result = (s.fns.vkCreateInstance)(info, core::ptr::null(), &raw mut instance);
         if result == VK_SUCCESS {
