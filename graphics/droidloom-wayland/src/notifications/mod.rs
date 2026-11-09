@@ -646,8 +646,10 @@ async fn serve(
                             state.save(state_path)?;
                         }
                     }
-                    Err(_) => {
-                        eprintln!("Droidloom notifications: invalid Android frame; disconnected");
+                    Err(error) => {
+                        eprintln!(
+                            "Droidloom notifications: invalid Android frame ({error}); disconnected"
+                        );
                         peer = None;
                     }
                 }

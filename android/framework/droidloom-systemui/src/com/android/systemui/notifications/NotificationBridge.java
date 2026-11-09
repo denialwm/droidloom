@@ -220,7 +220,8 @@ public final class NotificationBridge extends NotificationListenerService implem
                 .put("when",n.when!=0?n.when:sbn.getPostTime())
                 .put("progress",progress)
                 .put("category",n.category==null?"":text(n.category,64))
-                .put("user",sbn.getUserId()).put("component",component)
+                // A notification for every user (-1) shows as the current one's.
+                .put("user",sbn.getNormalizedUserId()).put("component",component)
                 // The host names the app icon through its desktop entry when it has one.
                 .put("icon",component.isEmpty()?icon(sbn.getPackageName()):"")
                 .put("large_icon",largeIcon(n))
