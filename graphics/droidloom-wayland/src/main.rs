@@ -349,6 +349,9 @@ struct App {
     window_policy: WindowPolicyStore,
     /// The density each task gets on the output it is on.
     densities: density::Densities,
+    /// The task last given a density, and the density last sent for new tasks.
+    density_task: Option<TaskObjectId>,
+    new_task_density: Option<u32>,
     endpoint: Option<DenialEndpoint>,
     tasks: BTreeMap<TaskObjectId, TaskWindow>,
     task_work: readiness::Tasks,
@@ -511,7 +514,10 @@ impl App {
         let Some(task) = self.tasks.get(&object) else {
             return Ok(());
         };
-        if task.package == BOOTSTRAP_PACKAGE || task.configure_serial == 0 {
+        if task.headless() {
+            return self.update_new_task_density(object);
+        }
+        if task.configure_serial == 0 {
             return Ok(());
         }
         let name = select_surface_output(
@@ -522,17 +528,66 @@ impl App {
         .and_then(|output| self.output_state.info(output))
         .and_then(|info| info.name);
         let dpi = self.densities.dpi(name.as_deref(), task.applied_scale_120);
-        if task.density_dpi == Some(dpi) {
+        if task.density_dpi != Some(dpi) {
+            self.endpoint
+                .as_ref()
+                .ok_or(PresenterError::Configuration("endpoint disappeared"))?
+                .send_density(object, dpi)?;
+            if let Some(task) = self.tasks.get_mut(&object) {
+                task.density_dpi = Some(dpi);
+            }
+            self.density_task = Some(object);
+        }
+        let bootstrap = self
+            .tasks
+            .iter()
+            .find_map(|(object, task)| task.headless().then_some(*object));
+        bootstrap.map_or(Ok(()), |bootstrap| self.update_new_task_density(bootstrap))
+    }
+
+    /// Tells Android, on the bootstrap display's object, the density to
+    /// create tasks at, so an activity starts laid out for its window instead
+    /// of being relaunched when the window's density arrives. A new window
+    /// most likely opens where the last one got its density; with no window
+    /// open it is the density of the largest output.
+    fn update_new_task_density(&mut self, bootstrap: TaskObjectId) -> Result<(), PresenterError> {
+        let last = self
+            .density_task
+            .and_then(|object| self.tasks.get(&object))
+            .and_then(|task| task.density_dpi);
+        let Some(dpi) = last.or_else(|| self.largest_output_density()) else {
+            return Ok(());
+        };
+        if self.new_task_density == Some(dpi) {
             return Ok(());
         }
         self.endpoint
             .as_ref()
             .ok_or(PresenterError::Configuration("endpoint disappeared"))?
-            .send_density(object, dpi)?;
-        if let Some(task) = self.tasks.get_mut(&object) {
-            task.density_dpi = Some(dpi);
-        }
+            .send_density(bootstrap, dpi)?;
+        self.new_task_density = Some(dpi);
         Ok(())
+    }
+
+    fn largest_output_density(&self) -> Option<u32> {
+        self.output_state
+            .outputs()
+            .filter_map(|output| self.output_state.info(&output))
+            .filter_map(|info| {
+                let mode = info
+                    .modes
+                    .iter()
+                    .find(|mode| mode.current)
+                    .or_else(|| info.modes.iter().find(|mode| mode.preferred))?;
+                let size = oriented_output_size(mode.dimensions, info.transform)?;
+                let logical = info.logical_size.and_then(|(width, height)| {
+                    Some((u32::try_from(width).ok()?, u32::try_from(height).ok()?))
+                });
+                let scale_120 = output_scale_120(size, logical, info.scale_factor);
+                Some((size, self.densities.dpi(info.name.as_deref(), scale_120)))
+            })
+            .max_by_key(|((width, height), _)| u64::from(*width) * u64::from(*height))
+            .map(|(_, dpi)| dpi)
     }
 
     fn update_task_refresh(&mut self, object: TaskObjectId) -> Result<(), PresenterError> {
@@ -690,6 +745,10 @@ impl App {
         package: &str,
     ) -> Result<(), PresenterError> {
         let headless = package == BOOTSTRAP_PACKAGE;
+        if headless {
+            // A new Android: it has not been told a density for new tasks.
+            self.new_task_density = None;
+        }
         if !headless && let Err(error) = self.window_policy.reload_policy() {
             eprintln!("Droidloom kept the last valid window policy: {error}");
         }
@@ -3258,6 +3317,8 @@ fn run() -> Result<(), PresenterError> {
         listener,
         window_policy,
         densities: density::Densities::load(env::var_os("XDG_CONFIG_HOME"), env::var_os("HOME")),
+        density_task: None,
+        new_task_density: None,
         endpoint: None,
         tasks: BTreeMap::new(),
         task_work: readiness::Tasks::default(),
@@ -3651,6 +3712,19 @@ fn scale_dimension(logical: u32, scale_120: u32) -> Result<u32, PresenterError> 
     Ok(scaled)
 }
 
+/// An output's scale in 120ths: its pixels over its logical size along the
+/// longer side, which no window is needed to learn; the whole-number scale
+/// when the compositor gives no logical size.
+fn output_scale_120(size: (u32, u32), logical: Option<(u32, u32)>, scale_factor: i32) -> u32 {
+    let pixels = u64::from(size.0.max(size.1));
+    match logical.map(|(width, height)| u64::from(width.max(height))) {
+        Some(logical) if logical != 0 => {
+            u32::try_from((pixels * 120 + logical / 2) / logical).unwrap_or(u32::MAX)
+        }
+        _ => u32::try_from(scale_factor.max(1)).unwrap_or(1) * FRACTIONAL_SCALE_DENOMINATOR,
+    }
+}
+
 fn oriented_output_size(
     dimensions: (i32, i32),
     transform: wl_output::Transform,
@@ -3817,6 +3891,14 @@ mod output_power_test;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_output_scale_comes_from_its_logical_size() {
+        assert_eq!(output_scale_120((1216, 2688), Some((608, 1344)), 2), 240);
+        assert_eq!(output_scale_120((2688, 1216), Some((1792, 811)), 2), 180);
+        assert_eq!(output_scale_120((3840, 2160), None, 2), 240);
+        assert_eq!(output_scale_120((1920, 1080), Some((0, 0)), 0), 120);
+    }
 
     #[test]
     fn contact_retirement_clears_shared_task_routes_pointer_and_deferred_touches() {

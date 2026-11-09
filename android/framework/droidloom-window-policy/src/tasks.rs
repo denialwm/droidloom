@@ -219,6 +219,18 @@ impl Backend {
             return None;
         }
         command.validate().ok()?;
+        if let TaskAction::NewTaskDensity { dpi } = command.action {
+            // For the tasks to come: nothing registered to check it against.
+            return Some(CommandBinding {
+                serial,
+                task: 0,
+                incarnation: 0,
+                android_display: 0,
+                kind: 7,
+                width: u64::from(dpi),
+                height: 0,
+            });
+        }
         let (task, binding, epoch) = self.registered.get(&command.task)?;
         if binding.object != command.object
             || task.incarnation != command.incarnation
@@ -235,6 +247,7 @@ impl Backend {
             TaskAction::Hide => (4, 0, 0),
             TaskAction::Show => (5, 0, 0),
             TaskAction::Density { dpi } => (6, u64::from(dpi), 0),
+            TaskAction::NewTaskDensity { .. } => unreachable!("resolved above"),
         };
         Some(CommandBinding {
             serial,
@@ -542,6 +555,15 @@ mod tests {
         assert_eq!(backend.resolve_command(1, command).unwrap().incarnation, 2);
         backend.epoch = 1;
         assert!(backend.resolve_command(1, command).is_none());
+        let new_tasks = TaskCommand {
+            object: 5,
+            task: 0,
+            incarnation: 0,
+            android_display: 0,
+            action: TaskAction::NewTaskDensity { dpi: 460 },
+        };
+        let resolved = backend.resolve_command(2, new_tasks).unwrap();
+        assert_eq!((resolved.task, resolved.kind, resolved.width), (0, 7, 460));
     }
 
     #[test]

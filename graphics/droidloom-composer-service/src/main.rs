@@ -381,6 +381,9 @@ fn dispatch_event(
                         object.0
                     );
                 }
+            } else if let Err(error) = coordinator.queue_new_task_density(object, dpi) {
+                // On the bootstrap display: the density tasks are created at.
+                eprintln!("Droidloom deferred the density of new tasks: {error}");
             }
         }
         AppliedDenialEvent::Visibility {

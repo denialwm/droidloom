@@ -40,6 +40,8 @@ final class DroidloomTaskBackend {
     // A new system_server in the same boot must not reuse earlier incarnations.
     private long mNextIncarnation = SystemClock.elapsedRealtimeNanos();
     private Task mHostFocused;
+    // The density the host expects to give the next window; 0 is the display's own.
+    private int mNewTaskDensity;
     // Tasks with a shown FLAG_KEEP_SCREEN_ON window, as of the last surface placement.
     private final IdentityHashMap<Task, Boolean> mKeepScreenOn = new IdentityHashMap<>();
     private final IdentityHashMap<Task, Boolean> mPlacedKeepScreenOn = new IdentityHashMap<>();
@@ -236,7 +238,15 @@ final class DroidloomTaskBackend {
     }
 
     private void applyCommand(long[] command) {
-        if (command.length != 7 || command[1] <= 0 || command[1] > Integer.MAX_VALUE
+        if (command.length != 7) return;
+        if (command[4] == 7) {
+            // For the tasks to come: it names none.
+            if (command[1] != 0 || command[2] != 0 || command[3] != 0
+                    || (command[5] != 0 && (command[5] < 72 || command[5] > 1280))) return;
+            synchronized (mService.mGlobalLock) { mNewTaskDensity = (int) command[5]; }
+            return;
+        }
+        if (command[1] <= 0 || command[1] > Integer.MAX_VALUE
                 || command[2] <= 0 || command[3] != 0) return;
         synchronized (mService.mGlobalLock) {
             final Task task = mService.mRootWindowContainer.anyTaskForId((int) command[1],
@@ -279,6 +289,20 @@ final class DroidloomTaskBackend {
             }
         }
         schedule();
+    }
+
+    /**
+     * Task.Builder made an application task, not yet attached. It starts at the
+     * density the host expects to give its window, so its first activity is
+     * created laid out for it: a density that arrives after the activity started
+     * is a configuration change, and relaunches every activity that does not
+     * handle one. Set directly, as the builder sets the activity type:
+     * onParentChanged resolves it.
+     */
+    void taskCreated(Task task) {
+        if (mNewTaskDensity != 0) {
+            task.getRequestedOverrideConfiguration().densityDpi = mNewTaskDensity;
+        }
     }
 
     /**

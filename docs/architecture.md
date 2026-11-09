@@ -363,7 +363,17 @@ carries it as `Density` (minor 11, capability `TASK_DENSITY`), sent before the
 configure it belongs to; the framework sets it as the task's requested
 `densityDpi` override, or drops the override for 0 or the display's own
 density. The file is watched, so a change reaches open windows at once.
-Without it, every task keeps Android's display density.
+Without it, a task gets 230 per unit of scale.
+
+A window's density is known only once the window exists, after its activity
+started, and a density that arrives then is a configuration change: Android
+relaunches every activity that does not handle one. So the presenter also
+sends, on the bootstrap display's object, the density it expects for the next
+window: that of the task last given one, or of the largest output while no
+window is open. Composer queues it as task command 7, which names no task, and
+keeps it for a restarted framework; the framework creates application tasks
+with it (`Task.Builder` hunk of `0005-droidloom-authoritative-tasks.patch`). A
+window that opens on an output of another density still relaunches once.
 
 ### Vsync
 

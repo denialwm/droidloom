@@ -32,6 +32,13 @@ pub enum TaskAction {
         /// Dots per inch.
         dpi: u32,
     },
+    /// Create tasks at this density: the one the host expects to give the
+    /// next window, so its activities start laid out for it. Not for a task:
+    /// the command carries the bootstrap display's object and no task.
+    NewTaskDensity {
+        /// Dots per inch; 0 creates tasks at the display's density.
+        dpi: u32,
+    },
 }
 
 /// The densities a task may be given, besides 0.
@@ -58,11 +65,12 @@ impl TaskCommand {
     /// # Errors
     /// Rejects invalid IDs, other displays and oversized/empty bounds.
     pub fn validate(self) -> Result<(), CodecError> {
-        if self.incarnation == 0
+        let taskless = matches!(self.action, TaskAction::NewTaskDensity { .. });
+        if (self.incarnation == 0) != taskless
             || i64::try_from(self.incarnation).is_err()
             || self.object == 0
             || self.object > i64::MAX as u64
-            || self.task == 0
+            || (self.task == 0) != taskless
             || self.task > i32::MAX as u64
             || self.android_display != 0
         {
@@ -73,7 +81,7 @@ impl TaskCommand {
                 return Err(CodecError::InvalidValue("task command bounds"));
             }
         }
-        if let TaskAction::Density { dpi } = self.action {
+        if let TaskAction::Density { dpi } | TaskAction::NewTaskDensity { dpi } = self.action {
             if dpi != 0 && !TASK_DENSITY_DPI.contains(&dpi) {
                 return Err(CodecError::InvalidValue("task command density"));
             }
@@ -134,6 +142,9 @@ impl CommandQueue {
             TaskAction::Density { .. } => {
                 !(entry.command.object == command.object
                     && matches!(entry.command.action, TaskAction::Density { .. }))
+            }
+            TaskAction::NewTaskDensity { .. } => {
+                !matches!(entry.command.action, TaskAction::NewTaskDensity { .. })
             }
         });
         if self.pending.len() >= MAX_PENDING {
@@ -233,6 +244,43 @@ mod tests {
             command(7, TaskAction::Density { dpi: 0 })
                 .validate()
                 .is_ok()
+        );
+    }
+
+    #[test]
+    fn a_new_task_density_names_no_task_and_replaces_the_last() {
+        let now = Instant::now();
+        let new_tasks = |dpi| TaskCommand {
+            object: 3,
+            task: 0,
+            incarnation: 0,
+            android_display: 0,
+            action: TaskAction::NewTaskDensity { dpi },
+        };
+        let mut queue = CommandQueue::default();
+        queue.push(new_tasks(460), now).unwrap();
+        queue
+            .push(command(7, TaskAction::Density { dpi: 460 }), now)
+            .unwrap();
+        queue.push(new_tasks(345), now).unwrap();
+        let density = queue.ready(now).unwrap();
+        assert_eq!(density.command.action, TaskAction::Density { dpi: 460 });
+        queue.acknowledge(density.serial);
+        assert_eq!(queue.ready(now).unwrap().command, new_tasks(345));
+        assert!(new_tasks(40).validate().is_err());
+        assert!(
+            command(7, TaskAction::NewTaskDensity { dpi: 460 })
+                .validate()
+                .is_err()
+        );
+        assert!(
+            TaskCommand {
+                task: 0,
+                incarnation: 0,
+                ..command(7, TaskAction::Focus)
+            }
+            .validate()
+            .is_err()
         );
     }
 

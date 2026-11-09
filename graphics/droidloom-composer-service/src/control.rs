@@ -27,6 +27,8 @@ type ControlFailure = (ControlErrorCode, String);
 #[derive(Default)]
 struct Commands {
     queue: CommandQueue,
+    /// The last density given for new tasks, for a restarted framework.
+    new_task_density: Option<TaskCommand>,
     generation: u64,
 }
 
@@ -493,12 +495,45 @@ impl TaskCoordinator {
         Ok(())
     }
 
+    /// The density the framework creates tasks at, carried on the bootstrap
+    /// display's object. A newer one replaces it in the queue.
+    pub fn queue_new_task_density(&self, object: TaskObjectId, dpi: u32) -> Result<(), String> {
+        let bootstrap = self
+            .state
+            .0
+            .lock()
+            .map_err(|_| "task-control state lock is poisoned".to_owned())?
+            .bootstrap;
+        if bootstrap != Some(object) {
+            return Err(format!("object {} is not the bootstrap display", object.0));
+        }
+        let command = TaskCommand {
+            object: object.0,
+            task: 0,
+            incarnation: 0,
+            android_display: 0,
+            action: TaskAction::NewTaskDensity { dpi },
+        };
+        let mut commands = self
+            .commands
+            .0
+            .lock()
+            .map_err(|_| "task command queue lock is poisoned".to_owned())?;
+        commands
+            .queue
+            .push(command, Instant::now())
+            .map_err(|error| error.to_string())?;
+        commands.new_task_density = Some(command);
+        self.commands.1.notify_all();
+        Ok(())
+    }
+
     /// A subscription from a new process is a restarted framework. The tasks
     /// the old one registered died with it, and nothing else retires them:
     /// SurfaceFlinger, which normally reports a destroyed task, may have died
     /// too. The same process subscribing again keeps its tasks.
     fn adopt_framework(&self, pid: u32) -> Result<(), String> {
-        let orphans: Vec<TaskObjectId> = {
+        let (restarted, orphans): (bool, Vec<TaskObjectId>) = {
             let mut state = self
                 .state
                 .0
@@ -506,14 +541,32 @@ impl TaskCoordinator {
                 .map_err(|_| "task-control state lock is poisoned".to_owned())?;
             let bootstrap = state.bootstrap;
             match state.framework.replace(pid) {
-                Some(previous) if previous != pid => state
-                    .registry
-                    .objects()
-                    .filter(|object| Some(*object) != bootstrap)
-                    .collect(),
-                _ => Vec::new(),
+                Some(previous) if previous != pid => (
+                    true,
+                    state
+                        .registry
+                        .objects()
+                        .filter(|object| Some(*object) != bootstrap)
+                        .collect(),
+                ),
+                _ => (false, Vec::new()),
             }
         };
+        if restarted {
+            // The new framework creates tasks at the display's density until told.
+            let mut commands = self
+                .commands
+                .0
+                .lock()
+                .map_err(|_| "task command queue lock is poisoned".to_owned())?;
+            if let Some(command) = commands.new_task_density {
+                commands
+                    .queue
+                    .push(command, Instant::now())
+                    .map_err(|error| error.to_string())?;
+                self.commands.1.notify_all();
+            }
+        }
         if orphans.is_empty() {
             return Ok(());
         }

@@ -86,3 +86,17 @@
          final boolean hold = mTmpHoldScreenWindow != null;
          if (hold && mTmpHoldScreenWindow != mHoldScreenWindow) {
              mHoldScreenWakeLock.setWorkSource(new WorkSource(mTmpHoldScreenWindow.mSession.mUid,
+--- a/services/core/java/com/android/server/wm/Task.java
++++ b/services/core/java/com/android/server/wm/Task.java
+@@ -7298,6 +7298,11 @@
+                 task.getRequestedOverrideConfiguration().windowConfiguration.setActivityType(
+                         mActivityType);
+             }
++            if (mAtmService.mDroidloomTasks != null && !mCreatedByOrganizer
++                    && (mActivityType == ACTIVITY_TYPE_UNDEFINED
++                    || mActivityType == ACTIVITY_TYPE_STANDARD)) {
++                mAtmService.mDroidloomTasks.taskCreated(task);
++            }
+ 
+             if (mParent != null) {
+                 if (mParent instanceof Task) {
