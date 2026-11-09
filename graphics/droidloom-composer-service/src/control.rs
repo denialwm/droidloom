@@ -504,7 +504,9 @@ impl TaskCoordinator {
             .lock()
             .map_err(|_| "task-control state lock is poisoned".to_owned())?
             .bootstrap;
-        if bootstrap != Some(object) {
+        // It first comes while the bootstrap display, the first object, is
+        // still being reserved: before its configure, like a task's.
+        if bootstrap.is_some_and(|bootstrap| bootstrap != object) {
             return Err(format!("object {} is not the bootstrap display", object.0));
         }
         let command = TaskCommand {
