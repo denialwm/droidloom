@@ -34,6 +34,12 @@ Do not select **Clear storage**. See the exact recovery sequence in
 
 - Build pacman packages: `cargo run --locked -j 1 -p droidloom-package -- build`
 - Check packages: `cargo run --locked -j 1 -p droidloom-package -- check --packages dist/arch/<version-release>/<architecture>`
+- Try an Android change on an x86_64 desktop (~6 min): the same build with
+  `DROIDLOOM_PACKAGE_WORK=/mnt/puck/logix/droidloom/cache/arch`, the shipping
+  worker's cache, while `runner status` says stopped. It builds the working
+  tree, also in a worktree; link `dist` to
+  `/mnt/puck/logix/droidloom/dist-gpu-forwarding` first, `/mnt/development`
+  has no room for the pair. The pair carries the published release's version.
 - Cross-build the aarch64 pair: `cargo run --locked -j 1 -p droidloom-package -- build --architecture aarch64 --sysroot PATH`
 - Check Rust code: `cargo check --locked --workspace -j 1`
 - Test packaging: `cargo test --locked -j 1 -p droidloom-update -p droidloom-package -p droidloom-package-support`
