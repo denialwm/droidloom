@@ -14,8 +14,7 @@
          work when the host display is off; the cell has no motion sensor. -->
     <bool name="config_enableAutoPowerModes">true</bool>
     <bool name="config_autoPowerModeUseMotionSensor">false</bool>
-    <!-- The host mixer owns loudness, so Android's streams start at full
-         scale; media, call, alarm and system come from ro.config.*_vol_default. -->
-    <integer name="config_audio_ring_vol_default">7</integer>
-    <integer name="config_audio_notif_vol_default">7</integer>
+    <!-- The host mixer owns loudness: every Android stream stays at full
+         scale, and Android ignores volume keys and apps that set a volume. -->
+    <bool name="config_useFixedVolume">true</bool>
 </resources>
