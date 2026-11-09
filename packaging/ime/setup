@@ -13,6 +13,9 @@ if [ -z "$installed" ] || [ "$previous" != "$digest" ]; then
     case "$result" in *Success*) ;; *) echo "$result" >&2; exit 1;; esac
     printf '%s\n' "$digest" > "$marker"
 fi
+# The host's keyboard is Android's only one: the base image's AOSP keyboard
+# would otherwise stay installed beside it and list its setup as an app.
+cmd package disable-user --user 0 com.android.inputmethod.latin >/dev/null
 cmd input_method ime enable com.android.droidloom.ime/.HostInputMethod
 cmd input_method ime set com.android.droidloom.ime/.HostInputMethod
 cmd settings put secure show_ime_with_hard_keyboard 1
