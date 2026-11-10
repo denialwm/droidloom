@@ -703,6 +703,10 @@ fn cleanup_runtime_directory(spec: &CellSpec) -> Result<(), DevelopmentError> {
             spec.runtime_dir.join("android-product.prop"),
             "remove Android product properties",
         ),
+        (
+            spec.runtime_dir.join("android-servicemanager.rc"),
+            "remove servicemanager service",
+        ),
     ] {
         match fs::remove_file(path) {
             Ok(()) => {}
