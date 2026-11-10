@@ -143,8 +143,10 @@ fn sha256(path: &Path) -> Result<String> {
     }
 }
 
-/// Every entry below `root`'s data and metadata directories, in path order.
-/// Sockets are left out: Android makes them again at start.
+/// The password file, where there is one, and every entry below `root`'s data
+/// and metadata directories, in path order. Without the password Android
+/// cannot unlock the storage. Sockets are left out: Android makes them again
+/// at start.
 fn walk(root: &Path) -> Result<Vec<Entry>> {
     let device = fs::symlink_metadata(root)?.dev();
     let mut entries = Vec::new();
@@ -153,6 +155,9 @@ fn walk(root: &Path) -> Result<Vec<Entry>> {
         .rev()
         .map(PathBuf::from)
         .collect();
+    if fs::symlink_metadata(root.join(host_storage::CREDENTIAL)).is_ok() {
+        pending.push(PathBuf::from(host_storage::CREDENTIAL));
+    }
     while let Some(relative) = pending.pop() {
         let path = root.join(&relative);
         let metadata = fs::symlink_metadata(&path)?;
@@ -493,6 +498,20 @@ mod tests {
             Some("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
         );
         assert_eq!(entries[3].target.as_deref(), Some("file"));
+    }
+
+    #[test]
+    fn walk_lists_the_password_file() {
+        let root = tempfile::tempdir().unwrap();
+        for name in host_storage::DIRECTORIES {
+            fs::create_dir(root.path().join(name)).unwrap();
+        }
+        fs::write(root.path().join(host_storage::CREDENTIAL), b"abc").unwrap();
+        fs::write(root.path().join("other"), b"abc").unwrap();
+        let entries = walk(root.path()).unwrap();
+        let paths: Vec<&str> = entries.iter().map(|e| e.path.as_str()).collect();
+        assert_eq!(paths, ["credential", "data", "metadata"]);
+        assert_eq!(entries[0].kind, Kind::File);
     }
 
     #[test]

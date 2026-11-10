@@ -25,7 +25,7 @@ const LEGACY_DIRECTORIES: [&str; 3] = ["data", "system", "droidloom"];
 const LEGACY_CREDENTIAL: &str = "credential";
 
 fn credential_path(spec: &CellSpec) -> PathBuf {
-    spec.data_dir.join("credential")
+    spec.data_dir.join(crate::host_storage::CREDENTIAL)
 }
 
 fn random<const N: usize>() -> io::Result<[u8; N]> {

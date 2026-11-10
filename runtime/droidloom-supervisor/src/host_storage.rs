@@ -7,6 +7,9 @@ use std::path::Path;
 
 /// Names below `CellSpec::data_dir`, bind mounted at the matching Android paths.
 pub const DIRECTORIES: [&str; 2] = ["data", "metadata"];
+/// The file below `CellSpec::data_dir` with the password that unlocks Android's
+/// user. Root alone reads it, and it is no part of Android's storage.
+pub const CREDENTIAL: &str = "credential";
 
 fn invalid(message: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidInput, message.into())
