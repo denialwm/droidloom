@@ -87,13 +87,6 @@ enum Action {
         /// Package version, for example 4.9.20260513.
         #[arg(long)]
         version: String,
-        /// Exact matching Droidloom runtime/image package version and release.
-        #[arg(
-            long,
-            required_unless_present = "standalone",
-            conflicts_with = "standalone"
-        )]
-        base_package_version: Option<String>,
         /// Package data for a separately maintained ARM developer runtime.
         #[arg(long)]
         standalone: bool,
@@ -185,16 +178,9 @@ fn execute() -> Result<()> {
             addon,
             output,
             version,
-            base_package_version,
             standalone,
         } => {
-            package::build(
-                &addon,
-                &output,
-                &version,
-                base_package_version.as_deref(),
-                standalone,
-            )?;
+            package::build(&addon, &output, &version, standalone)?;
         }
     }
     Ok(())

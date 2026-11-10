@@ -14,16 +14,11 @@ pub fn build(
     addon: &Path,
     output: &Path,
     package_version: &str,
-    base_version: Option<&str>,
     standalone: bool,
 ) -> Result<()> {
-    if !version(package_version)
-        || package_version.contains('-')
-        || base_version.is_some_and(|v| !version(v))
-        || standalone == base_version.is_some()
-    {
+    if !version(package_version) || package_version.contains('-') {
         return Err(
-            "select an exact base package version or standalone developer packaging".into(),
+            "the package version is not a plain version without a release".into(),
         );
     }
     new_output(output)?;
@@ -74,9 +69,13 @@ pub fn build(
             include_str!("../../../packaging/arch/60-droidloom-gapps.hook"),
         )?;
     }
-    let dependencies = base_version
-        .map(|v| format!("depends=('droidloom-runtime={v}' 'droidloom-image={v}')\n"))
-        .unwrap_or_default();
+    // Any release: the add-on is bound to the pinned Android base images, which
+    // the supervisor checks by hash at each start, not to a Droidloom release.
+    let dependencies = if standalone {
+        ""
+    } else {
+        "depends=(droidloom-runtime droidloom-image)\n"
+    };
     // Only validated scalar values enter PKGBUILD. Paths are supplied via the
     // process working directory, never interpolated into shell source.
     let recipe = format!(

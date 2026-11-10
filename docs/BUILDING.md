@@ -785,9 +785,11 @@ cargo run --locked -j 1 -p droidloom-gapps -- package \
   --output dist/droidloom-gapps-4.9.20260513-1-aarch64.pkg.tar.zst
 ```
 
-For pacman-managed deployments, replace `--standalone` with
-`--base-package-version <version-release>` to require the exact matching
-`droidloom-runtime` and `droidloom-image` packages and include the lifecycle hook.
+For pacman-managed deployments, leave out `--standalone`: the package then
+depends on `droidloom-runtime` and `droidloom-image`, of any release, and
+includes the lifecycle hook. It is bound to the pinned Android base images,
+which the supervisor checks by hash at each start, so it needs packing again
+only when that base moves.
 Standalone packages require manually stopping Droidloom before every install,
 upgrade or removal. They contain images and notices, not an updated supervisor.
 

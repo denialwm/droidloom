@@ -71,13 +71,13 @@ Install both with `pacman -U`; the package hooks stop Droidloom and keep its
 data and setup. Copy them with `cat FILE | ssh HOST 'cat > /tmp/NAME'`.
 `pacman -Syu` goes back to the published release.
 
-Google apps name one runtime release exactly. With the local add-on in
-`.work/gapps-arm64` (its version in `package-version`; built once with
-`droidloom-gapps build`, see docs/BUILDING.md), the build checks it against
-the candidate's Android images and packs `droidloom-gapps` for the candidate;
-install it in the same `pacman -U` on a phone that has it. Going back to a
-published release needs the add-on packed for that release:
-`droidloom-gapps package --base-package-version VERSION-R`.
+Google apps are bound to the pinned Android base images, not to a Droidloom
+release: one `droidloom-gapps` package serves every release until the base
+moves, and the supervisor checks the base's hashes at each start. With the
+local add-on in `.work/gapps-arm64` (its version in `package-version`; built
+once with `droidloom-gapps build`, see docs/BUILDING.md), the build checks it
+against the candidate's Android images and packs it; a phone that has the
+package needs it installed once.
 
 The user's manager is reached as root with
 `sudo -u USER XDG_RUNTIME_DIR=/run/user/UID DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/UID/bus systemctl --user`.
