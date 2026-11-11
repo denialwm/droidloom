@@ -604,7 +604,7 @@ impl Worker {
                 let buffer_size = configured.map_or(0, |stream| stream.buffer_size);
                 let photo_size = configured.and_then(|stream| stream.photo_size);
                 let degrees = Control::jpeg_orientation(&settings);
-                let orientation = exif::orientation(degrees, mirrored);
+                let orientation = exif::orientation(degrees);
                 if let Err(output) = self.shoot(frame_number, output, buffer_size, photo_size, orientation) {
                     errors.push(output.stream);
                     returned.push(output.returned(false));

@@ -1,20 +1,16 @@
 //! The orientation of a JPEG, written as an EXIF segment right after its
-//! start-of-image marker. braun's photos are upright and carry none, so a
-//! viewer turns them as this says: the turn Android asked for and, for the
-//! front camera, the mirror braun applied.
+//! start-of-image marker. braun's photos are upright, never mirrored, and
+//! carry none, so a viewer turns them as this says: the turn Android asked
+//! for.
 
 /// The EXIF orientation of a picture to turn `degrees` clockwise when
-/// shown, mirrored left to right first if `mirrored`.
-pub fn orientation(degrees: i32, mirrored: bool) -> u16 {
-    match (degrees.rem_euclid(360) / 90, mirrored) {
-        (0, false) => 1,
-        (1, false) => 6,
-        (2, false) => 3,
-        (3, false) => 8,
-        (0, true) => 2,
-        (1, true) => 7,
-        (2, true) => 4,
-        _ => 5,
+/// shown.
+pub fn orientation(degrees: i32) -> u16 {
+    match degrees.rem_euclid(360) / 90 {
+        0 => 1,
+        1 => 6,
+        2 => 3,
+        _ => 8,
     }
 }
 
@@ -60,11 +56,11 @@ mod tests {
 
     #[test]
     fn orientations() {
-        assert_eq!(orientation(0, false), 1);
-        assert_eq!(orientation(90, false), 6);
-        assert_eq!(orientation(-90, false), 8);
-        assert_eq!(orientation(180, true), 4);
-        assert_eq!(orientation(270, true), 5);
+        assert_eq!(orientation(0), 1);
+        assert_eq!(orientation(90), 6);
+        assert_eq!(orientation(-90), 8);
+        assert_eq!(orientation(180), 3);
+        assert_eq!(orientation(270), 8);
     }
 
     #[test]
