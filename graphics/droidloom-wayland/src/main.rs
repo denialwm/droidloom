@@ -102,6 +102,9 @@ use wayland_protocols_wlr::output_power_management::v1::client::{
 const BOOTSTRAP_PACKAGE: &str = "android.droidloom.bootstrap";
 const TARGET_POOL_LENGTH: usize = 3;
 const RELEASE_POLL_FALLBACK: Duration = Duration::from_millis(4);
+/// The longest a suspended task keeps running while SurfaceFlinger composes
+/// the frame that takes its buffers off the window.
+const HIDE_GRACE: Duration = Duration::from_millis(250);
 const LEFT_BUTTON: u32 = 0x110;
 const FRACTIONAL_SCALE_DENOMINATOR: u32 = 120;
 const MAX_BUFFER_DIMENSION: u32 = 16_384;
@@ -254,6 +257,10 @@ struct TaskWindow {
     focused: bool,
     /// Denial minimized the window (xdg `suspended`): Android stops the task.
     suspended: bool,
+    /// A minimized window may keep the buffers it shows until it is restored.
+    /// Android stops a task only once its own buffers are off the window, or
+    /// at this deadline: a stopping app waits for the buffers it drew.
+    hide_due: Option<Instant>,
     /// Held while a shown Android window has `FLAG_KEEP_SCREEN_ON`. Denial
     /// keeps its displays on only while this window is visible.
     idle_inhibitor: Option<ZwpIdleInhibitorV1>,
@@ -271,7 +278,7 @@ impl TaskWindow {
     }
 
     fn visibility(&self) -> Visibility {
-        if self.suspended {
+        if self.suspended && self.hide_due.is_none() {
             Visibility::Hidden
         } else {
             Visibility::Visible
@@ -818,6 +825,7 @@ impl App {
                     .then(presentation_audit::Audit::default),
                 focused: false,
                 suspended: false,
+                hide_due: None,
                 idle_inhibitor: None,
                 unmap_requested: false,
                 closing: false,
@@ -1372,6 +1380,7 @@ impl App {
         };
         surface.attach(target.wayland.as_ref(), 0, 0);
         task.composed_root = true;
+        let hide = task.suspended && task.hide_due.take().is_some();
         if layers_hidden {
             // Android damage compares app frames, not our constant root backing.
             // Replacing that root with a composed target changes the whole image.
@@ -1415,8 +1424,15 @@ impl App {
                 submitted_nanos,
             });
         }
+        let focused = task.focused;
         self.task_work.frames.insert(object);
         self.task_work.mark(object, readiness::FRAMES);
+        if hide {
+            self.endpoint
+                .as_ref()
+                .ok_or(PresenterError::Configuration("endpoint disappeared"))?
+                .send_visibility(object, Visibility::Hidden, focused)?;
+        }
         Ok(())
     }
 
@@ -2076,6 +2092,31 @@ impl App {
         self.update_text_input();
     }
 
+    fn hide_deadline(&self) -> Option<Instant> {
+        self.tasks.values().filter_map(|task| task.hide_due).min()
+    }
+
+    /// Stop suspended tasks whose composed frame did not arrive in time. Their
+    /// window keeps Android's buffers, as before this hand-over existed.
+    fn hide_overdue(&mut self, now: Instant) -> Result<(), PresenterError> {
+        for (object, task) in &mut self.tasks {
+            if task.hide_due.is_none_or(|due| now < due) {
+                continue;
+            }
+            task.hide_due = None;
+            eprintln!(
+                "Droidloom task {}: no composed frame {} ms after suspend; stopping it with \
+                 Android's buffers on the window",
+                object.0,
+                HIDE_GRACE.as_millis()
+            );
+            if let Some(endpoint) = self.endpoint.as_ref() {
+                endpoint.send_visibility(*object, task.visibility(), task.focused)?;
+            }
+        }
+        Ok(())
+    }
+
     fn set_focus(&mut self, object: Option<TaskObjectId>) -> Result<(), PresenterError> {
         if self.focused == object {
             return Ok(());
@@ -2263,9 +2304,16 @@ impl WindowHandler for App {
         }
         let suspended = configure.state.contains(WindowState::SUSPENDED);
         if task.suspended != suspended {
+            let before = task.visibility();
             task.suspended = suspended;
+            // Suspended windows take no layers: SurfaceFlinger composes the
+            // next frame into our own target, which replaces Android's buffers.
+            task.hide_due = (suspended && task.layers.as_ref().is_some_and(|l| l.shows_android()))
+                .then(|| Instant::now() + HIDE_GRACE);
+            self.task_work.mark(object, readiness::CONFIG);
             let (visibility, focused) = (task.visibility(), task.focused);
-            if let Some(endpoint) = self.endpoint.as_ref()
+            if visibility != before
+                && let Some(endpoint) = self.endpoint.as_ref()
                 && let Err(error) = endpoint.send_visibility(object, visibility, focused)
             {
                 self.fail(&error);
@@ -3433,8 +3481,10 @@ fn poll_sources(
     };
     let now = Instant::now();
     app.report_stalled_scenes(now);
+    app.hide_overdue(now)?;
     let fallback_deadline = app.task_work.deadline(now, RELEASE_POLL_FALLBACK);
     let stall_deadline = app.stalled_scene_deadline();
+    let hide_deadline = app.hide_deadline();
     // Pending Wayland events must be dispatched before sleeping. The previous
     // fixed timeout masked a missed wakeup here when the socket was drained
     // by another reader but our event queue still contained callbacks.
@@ -3534,6 +3584,7 @@ fn poll_sources(
         .into_iter()
         .chain(fallback_deadline)
         .chain(stall_deadline)
+        .chain(hide_deadline)
         .min();
     let timeout = if app.task_work.pending() {
         0 // Flush Wayland first, then service work queued during this turn.

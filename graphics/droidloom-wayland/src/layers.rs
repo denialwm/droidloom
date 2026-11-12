@@ -404,6 +404,10 @@ impl Stream {
     pub fn busy(&self) -> bool {
         !self.reads.is_empty()
     }
+    /// The window's surfaces show Android's buffers.
+    pub fn shows_android(&self) -> bool {
+        self.active
+    }
     pub fn fds(&self) -> impl Iterator<Item = (i32, u8)> + '_ {
         (self.connected && !self.imports.blocked())
             .then_some((self.requests.as_fd().as_raw_fd(), readiness::REQUESTS))
@@ -605,7 +609,8 @@ fn carrier(
 impl App {
     fn layer_config(&self, object: TaskObjectId) -> Option<[u32; 6]> {
         let task = self.tasks.get(&object)?;
-        let enabled = self.layer_globals.alpha.is_some() && task.accepts_present();
+        let enabled =
+            self.layer_globals.alpha.is_some() && task.accepts_present() && !task.suspended;
         // The grid submit_layer_scene checks edges against.
         let (logical_width, logical_height) = task.logical_size.unwrap_or_default();
         Some([
@@ -1059,6 +1064,7 @@ impl App {
         let valid = !stream.staged.failed()
             && self.layer_globals.alpha.is_some()
             && task.accepts_present()
+            && !task.suspended
             && task.configure_serial == serial
             && task.buffer_size == (width, height)
             && exact_geometry;
