@@ -981,7 +981,23 @@
       "path": "prebuilts/clang/host/linux-x86",
       "name": "platform/prebuilts/clang/host/linux-x86",
       "commit": "29182889399818f97baa65ea238c80e8117981eb",
-      "purpose": "Pinned Android target compiler"
+      "purpose": "Pinned Android target compiler",
+      "sparse_paths": [
+        "clang-3289846",
+        "clang-r547379/AndroidVersion.txt",
+        "clang-r563880c/AndroidVersion.txt",
+        "clang-r584948",
+        "clang-r584948b/AndroidVersion.txt",
+        "clang-r584948b",
+        "clang-stable",
+        "docs",
+        "embedded-sysroots",
+        "kleaf",
+        "llvm-binutils-stable",
+        "mlgo-models",
+        "profiles",
+        "soong"
+      ]
     },
     {
       "path": "prebuilts/go/linux-x86",
@@ -1035,7 +1051,11 @@
       "path": "prebuilts/rust-toolchain/linux-x86",
       "name": "platform/prebuilts/rust-toolchain/linux-x86",
       "commit": "fa2b1777b1f5c0471bb54ad4026feb1f6e94ea70",
-      "purpose": "Pinned Android Rust compiler"
+      "purpose": "Pinned Android Rust compiler",
+      "sparse_paths": [
+        "1.93.1",
+        "stable"
+      ]
     },
     {
       "path": "prebuilts/sdk",
