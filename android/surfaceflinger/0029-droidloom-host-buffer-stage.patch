@@ -1,0 +1,19 @@
+diff --git a/services/surfaceflinger/SurfaceFlinger.cpp b/services/surfaceflinger/SurfaceFlinger.cpp
+index 8159f4c..380eb86 100644
+--- a/services/surfaceflinger/SurfaceFlinger.cpp
++++ b/services/surfaceflinger/SurfaceFlinger.cpp
+@@ -9879,7 +9879,13 @@ uint32_t SurfaceFlinger::getMaxAcquiredBufferCountForCurrentRefreshRate(uid_t ui
+ int SurfaceFlinger::getMaxAcquiredBufferCountForRefreshRate(Fps refreshRate) const {
+     const auto vsyncConfig = mScheduler->getVsyncConfigsForRefreshRate(refreshRate).late;
+     const auto presentLatency = vsyncConfig.appWorkDuration + vsyncConfig.sfWorkDuration;
+-    return calculateMaxAcquiredBufferCount(refreshRate, presentLatency);
++    // Droidloom hands layer buffers to the host compositor, one more stage
++    // after this pipeline. A display gives a hidden layer's buffer back at its
++    // next present; the host may keep the buffer it shows for as long as the
++    // window stays hidden, as Wayland allows. Without a slot for it, a hidden
++    // app that draws two more frames waits for a release that never comes.
++    // The queue allocates the extra buffer only when the app needs it.
++    return calculateMaxAcquiredBufferCount(refreshRate, presentLatency) + 1;
+ }
+ 
+ void SurfaceFlinger::sample() {
