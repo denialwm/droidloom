@@ -1,0 +1,89 @@
+mesa: hand out GL names counting up, as vendor drivers do
+
+Mesa reused the lowest free name, so the name of a deleted object came back
+with the next glGen*. Wuthering Waves on the Pad 4 bound a texture with the
+wrong target, uploaded to texture 0 and copied levels its source texture did
+not have, as when a name it still holds reaches a newer object. Under
+KHR_no_error that crashed in st_CompressedTexSubImage and
+st_CopyImageSubData; with error checking its textures stayed empty.
+
+--- a/src/mesa/main/hash.h
++++ b/src/mesa/main/hash.h
+@@ -47,6 +47,8 @@
+ struct _mesa_HashTable {
+    struct util_sparse_array array;
+    struct util_idalloc_sparse id_alloc;
++   /* The last name handed out: new names count up from it. */
++   GLuint LastKey;
+    simple_mtx_t Mutex;
+ };
+ 
+--- a/src/mesa/main/hash.c
++++ b/src/mesa/main/hash.c
+@@ -39,6 +39,7 @@
+ #include "util/glheader.h"
+ #include "hash.h"
+ #include "util/hash_table.h"
++#include "util/macros.h"
+ #include "util/u_memory.h"
+ 
+ /**
+@@ -185,17 +186,55 @@
+  * 
+  * \return Starting key of a free block
+  */
++/* Names count up from the last one handed out, as vendor drivers do, instead
++ * of reusing the lowest free one. An application that keeps a deleted name
++ * and binds it again then gets a new, empty object, never one it created
++ * since under the same name.
++ */
++static bool
++key_in_use(const struct _mesa_HashTable *table, GLuint key)
++{
++   const struct util_idalloc_sparse *buf = &table->id_alloc;
++   const unsigned max_ids = UTIL_IDALLOC_MAX_IDS_PER_SEGMENT(buf);
++   const struct util_idalloc *segment = &buf->segment[key / max_ids];
++   const unsigned id = key % max_ids;
++
++   return key == 0 || (id / 32 < segment->num_elements &&
++                       (segment->data[id / 32] & BITFIELD_BIT(id % 32)));
++}
++
+ GLuint
+ _mesa_HashFindFreeKeyBlock(struct _mesa_HashTable *table, GLuint numKeys)
+ {
+-   return util_idalloc_sparse_alloc_range(&table->id_alloc, numKeys);
++   GLuint first = table->LastKey + 1;
++   GLuint free = 0;
++
++   while (free < numKeys) {
++      if (key_in_use(table, first + free)) {
++         first += free + 1;
++         free = 0;
++      } else {
++         free++;
++      }
++   }
++   for (GLuint i = 0; i < numKeys; i++)
++      util_idalloc_sparse_reserve(&table->id_alloc, first + i);
++   table->LastKey = first + numKeys - 1;
++   return first;
+ }
+ 
+ bool
+ _mesa_HashFindFreeKeys(struct _mesa_HashTable *table, GLuint* keys, GLuint numKeys)
+ {
+-   for (int i = 0; i < numKeys; i++)
+-      keys[i] = util_idalloc_sparse_alloc(&table->id_alloc);
++   for (GLuint i = 0; i < numKeys; i++) {
++      GLuint key = table->LastKey + 1;
++
++      while (key_in_use(table, key))
++         key++;
++      util_idalloc_sparse_reserve(&table->id_alloc, key);
++      table->LastKey = key;
++      keys[i] = key;
++   }
+ 
+    return true;
+ }

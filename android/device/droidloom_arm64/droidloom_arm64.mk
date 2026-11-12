@@ -94,7 +94,13 @@ PRODUCT_COPY_FILES += \
 # Android's stream volumes start at full scale; the host mixer owns loudness.
 # Codec2 clients use the AIDL software store: the cell has no hwservicemanager,
 # so the default HIDL selection leaves apps with the in-process audio codecs.
+# Mesa keeps compiled shaders in Android's EGL blob cache. The single-file
+# cache holds 2 MB, so a game compiled every shader again at each start; the
+# multi-file cache keeps up to 1 GiB per app.
 PRODUCT_VENDOR_PROPERTIES += \
+    ro.egl.blobcache.multifile=true \
+    ro.egl.blobcache.multifile_limit=1073741824 \
+    ro.egl.blobcache.multifile_entry_limit=65536 \
     debug.hwui.use_hint_manager=true \
     media.c2.hal.selection=aidl \
     debug.sf.use_phase_offsets_as_durations=1 \
