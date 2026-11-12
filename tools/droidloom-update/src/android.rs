@@ -24,6 +24,7 @@ pub const TARGETS: &[&str] = &[
     "libmeminfo",
     "libinputflinger",
     "libaudiobase",
+    "libEGL",
     "surfaceflinger",
     "libdroidloom_surface_bridge",
     "libdroidloom_task_control",
@@ -294,6 +295,10 @@ const PATCHES: &[(&str, &str)] = &[
     (
         "frameworks/native",
         "android/inputflinger/0005-droidloom-vulkan-probe.patch",
+    ),
+    (
+        "frameworks/native",
+        "android/aosp-patches/0023-egl-multifile-cache-value-size.patch",
     ),
     (
         "",

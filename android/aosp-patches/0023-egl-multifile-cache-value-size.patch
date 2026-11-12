@@ -1,0 +1,22 @@
+From: Droidloom development build
+Subject: [PATCH] EGL: a multi-file cache entry fits any buffer large enough for it
+
+get() checked that the caller's buffer holds the entry, then required the
+buffer to be exactly the entry's size. Mesa asks with a 64 KiB buffer, so
+every shader it had stored read as a mismatch and was compiled again.
+---
+--- a/opengl/libs/EGL/MultifileBlobCache.cpp
++++ b/opengl/libs/EGL/MultifileBlobCache.cpp
+@@ -513,9 +513,10 @@
+         cacheEntry = mHotCache[entryHash].entryBuffer;
+     }
+ 
+-    // Ensure the header matches
++    // Ensure the header matches. valueSize is the caller's buffer, which may
++    // be larger than the entry; the entry's own size is cachedValueSize.
+     MultifileHeader* header = reinterpret_cast<MultifileHeader*>(cacheEntry);
+-    if (header->keySize != keySize || header->valueSize != valueSize) {
++    if (header->keySize != keySize || header->valueSize != cachedValueSize) {
+         ALOGW("Mismatch on keySize(%ld vs. cached %ld) or valueSize(%ld vs. cached %ld) compared "
+               "to cache header values for fullPath: %s",
+               keySize, header->keySize, valueSize, header->valueSize, fullPath.c_str());

@@ -419,6 +419,7 @@ pub fn assemble_artifacts(
         "libmeminfo.so",
         "libinputflinger.so",
         "libaudiobase.so",
+        "libEGL.so",
     ] {
         copy(
             &product.join("system/lib64").join(name),

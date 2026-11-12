@@ -18,6 +18,10 @@
       "target": "/system/lib64/libaudiobase.so"
     },
     {
+      "source": "/usr/lib/droidloom/current/lib64/libEGL.so",
+      "target": "/system/lib64/libEGL.so"
+    },
+    {
       "source": "/usr/lib/droidloom/current/systemui/SystemUI.apk",
       "target": "/system_ext/priv-app/SystemUI/SystemUI.apk"
     },
