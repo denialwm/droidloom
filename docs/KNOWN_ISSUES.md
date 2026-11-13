@@ -541,6 +541,20 @@ The subsequent source fixes and full-suite results are recorded above.
   notification replies and custom Android notification layouts are unsupported.
 - **Shared host kernel.** This is an Android container runtime, not a virtual
   machine. See [security requirements](threat-model-v2.md) for isolation boundaries.
+- **The built-in display's channel closes without a goodbye.** When the host
+  resizes the output, as a phone does on every rotation, SurfaceFlinger
+  reconnects display 0 and opens a new presentation channel at the new size.
+  The old window is destroyed, but `~DroidloomNativeWindow`
+  (`android/surfaceflinger/0001-droidloom-direct-denial-render-surface.patch`)
+  sends `Retire` only for task windows, so task 0 just closes its socket and
+  Composer logs `SurfaceFlinger bridge disconnected: receive SurfaceFlinger
+  request: peer closed the protocol connection`
+  (`graphics/droidloom-composer-service/src/surface_bridge.rs`). Nothing
+  breaks: the new channel serves the display. Seen on the RedMagic 11 Pro, one
+  line per rotation, and on the Pad 4 without rotations, so something else
+  also reconnects display 0 there. Fix: give the bootstrap channel its own
+  goodbye that Composer acknowledges and ends quietly, so a close without one
+  still reports a real failure. Needs an Android rebuild.
 
 ## Performance review targets
 
