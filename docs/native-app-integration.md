@@ -88,7 +88,9 @@ capability `TASK_PARENTS`), and the presenter makes the parent window the
 child's `xdg_toplevel` parent. A host that keeps a window's parent going while
 its child is in front keeps the app behind the dialog running, so a dialog
 can hand its answer back, as Play Protect's confirmation does when it asks
-for the device credential.
+for the device credential. A task with a parent draws its layers over a clear
+root instead of the dark backing, so a host that draws the parent beneath it
+shows the app through the dialog's dim.
 
 Task destruction has two phases: request host window destruction once, retaining
 the binding to route the displayed frame's final buffer release; then remove the

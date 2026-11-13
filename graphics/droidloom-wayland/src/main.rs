@@ -254,6 +254,9 @@ struct TaskWindow {
     content_opaque: bool,
     applied_opaque: Option<bool>,
     composed_root: bool,
+    /// The task shows the one it opened over through its gaps, as a dialog
+    /// does: its layers go over a clear root instead of the backing.
+    see_through: bool,
     focused: bool,
     /// Denial minimized the window (xdg `suspended`): Android stops the task.
     suspended: bool,
@@ -821,6 +824,7 @@ impl App {
                 content_opaque: false,
                 applied_opaque: None,
                 composed_root: false,
+                see_through: false,
                 presentation_audit: droidloom_timing::traced(droidloom_timing::Diagnostic::Audit)
                     .then(presentation_audit::Audit::default),
                 focused: false,
@@ -1738,6 +1742,7 @@ impl App {
                 // The task leaves `parent` running, as a dialog does: as its
                 // xdg parent, the host keeps that window going while this one
                 // is in front. A closing parent's toplevel is gone already.
+                let see_through = parent.is_some();
                 let parent = parent
                     .and_then(|parent| self.tasks.get(&parent))
                     .filter(|parent| !parent.closing)
@@ -1745,8 +1750,9 @@ impl App {
                     .map(|window| window.xdg_toplevel().clone());
                 let task = self
                     .tasks
-                    .get(&object)
+                    .get_mut(&object)
                     .ok_or(PresenterError::UnknownTask(object))?;
+                task.see_through = see_through;
                 if let Some(window) = task.window.as_ref().filter(|_| !task.closing) {
                     window.xdg_toplevel().set_parent(parent.as_ref());
                 }

@@ -275,7 +275,8 @@ pub(super) struct Stream {
     spare_views: Vec<View>,
     reads: Vec<Read>,
     imports: imports::Imports<zwp_linux_buffer_params_v1::ZwpLinuxBufferParamsV1>,
-    root: Option<((u32, u32), wl_buffer::WlBuffer)>,
+    /// The carrier's size and whether it is clear.
+    root: Option<((u32, u32), bool, wl_buffer::WlBuffer)>,
     /// Transparent pixel hidden views show.
     clear: Option<wl_buffer::WlBuffer>,
     root_logical_size: Option<(u32, u32)>,
@@ -519,7 +520,7 @@ impl Drop for Stream {
                 b.destroy();
             }
         }
-        if let Some((_, b)) = self.root.take() {
+        if let Some((_, _, b)) = self.root.take() {
             b.destroy();
         }
         if let Some(b) = self.clear.take() {
@@ -580,10 +581,13 @@ fn covered_by_opaque_layer<'a>(
 /// the same colour, so a gap reads as the window's background.
 const BACKING: u32 = 0x000d_1117;
 
+/// The root buffer beneath the layers: the backing, or clear for a task that
+/// shows what it opened over.
 fn carrier(
     globals: &Globals,
     qh: &QueueHandle<App>,
     (width, height): (u32, u32),
+    clear: bool,
 ) -> Result<wl_buffer::WlBuffer, PresenterError> {
     let stride = width.checked_mul(4);
     let bytes = stride
@@ -591,14 +595,19 @@ fn carrier(
         .and_then(|bytes| i32::try_from(bytes).ok())
         .ok_or(PresenterError::Configuration("layer root buffer too large"))?;
     let mut file = tempfile::tempfile()?;
-    file.write_all(&BACKING.to_ne_bytes().repeat(bytes as usize / 4))?;
+    let (color, format) = if clear {
+        (0, wl_shm::Format::Argb8888)
+    } else {
+        (BACKING, wl_shm::Format::Xrgb8888)
+    };
+    file.write_all(&color.to_ne_bytes().repeat(bytes as usize / 4))?;
     let pool = globals.shm.create_pool(file.as_fd(), bytes, qh, ());
     let buffer = pool.create_buffer(
         0,
         width as i32,
         height as i32,
         stride.unwrap() as i32,
-        wl_shm::Format::Xrgb8888,
+        format,
         qh,
         (),
     );
@@ -1191,10 +1200,14 @@ impl App {
             None
         } else {
             let size = carrier_size(lw, lh)?;
-            let changed = stream.root.as_ref().is_none_or(|(old, _)| *old != size);
+            let clear = task.see_through;
+            let changed = stream
+                .root
+                .as_ref()
+                .is_none_or(|(old, was_clear, _)| (*old, *was_clear) != (size, clear));
             if changed {
-                let buffer = carrier(&self.layer_globals, qh, size)?;
-                if let Some((_, old)) = stream.root.replace((size, buffer)) {
+                let buffer = carrier(&self.layer_globals, qh, size, clear)?;
+                if let Some((_, _, old)) = stream.root.replace((size, clear, buffer)) {
                     old.destroy();
                 }
             }
@@ -1433,9 +1446,13 @@ impl App {
             || backing.is_some_and(|(_, attach)| attach)
             || stream.root_logical_size != Some((lw, lh))
         {
-            let region = Region::new(&self.compositor)?;
-            region.add(0, 0, lw as i32, lh as i32);
-            root.set_opaque_region(Some(region.wl_region()));
+            if task.see_through {
+                root.set_opaque_region(None);
+            } else {
+                let region = Region::new(&self.compositor)?;
+                region.add(0, 0, lw as i32, lh as i32);
+                root.set_opaque_region(Some(region.wl_region()));
+            }
             root.set_buffer_transform(wl_output::Transform::Normal);
             task.viewport
                 .as_ref()
@@ -1453,7 +1470,7 @@ impl App {
                 f64::from(size.0),
                 f64::from(size.1),
             );
-            root.attach(stream.root.as_ref().map(|(_, buffer)| buffer), 0, 0);
+            root.attach(stream.root.as_ref().map(|(_, _, buffer)| buffer), 0, 0);
             root.damage_buffer(0, 0, size.0 as i32, size.1 as i32);
             if let (Some(timeline), Some(grant)) = (&task.timeline.surface, target_grant) {
                 timeline.target(grant);
