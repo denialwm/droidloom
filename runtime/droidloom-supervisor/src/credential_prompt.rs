@@ -162,6 +162,15 @@ async fn read(stream: &mut Async<UnixStream>) -> io::Result<Vec<u8>> {
     Ok(record)
 }
 
+/// Tells `system_server` the user turned from the fingerprint to the sheet.
+fn chosen(init: u32, id: u64) -> Result<(), String> {
+    host_lock::request(
+        init,
+        framework_wire::CREDENTIAL_CHOSEN,
+        &serde_json::json!({"user": 0, "id": id}),
+    )
+}
+
 /// Tells `system_server` how a prompt ended.
 fn answer(init: u32, id: u64, confirmed: bool) -> Result<(), String> {
     host_lock::request(
@@ -202,7 +211,12 @@ impl Ask {
             .spawn({
                 let (broker, ended) = (Arc::clone(&broker), Arc::clone(&ended));
                 move || {
-                    let confirmed = check(&broker, &account, pin.as_ref());
+                    let opened = || {
+                        if let Err(error) = chosen(init, id) {
+                            eprintln!("credential prompt {id}: fingerprint not stopped: {error}");
+                        }
+                    };
+                    let confirmed = check(&broker, &account, pin.as_ref(), &opened);
                     if ended.load(Ordering::Acquire) {
                         return;
                     }
@@ -246,8 +260,14 @@ fn broker(uid: u32) -> Result<SeqPacket, String> {
 }
 
 /// Checks each credential the user types until one proves them (true) or the
-/// sheet closes (false). A wrong one asks again.
-fn check(broker: &SeqPacket, account: &Account, pin: Option<&pin::Native>) -> bool {
+/// sheet closes (false). A wrong one asks again. `opened` runs when the user
+/// turns from the fingerprint to the sheet.
+fn check(
+    broker: &SeqPacket,
+    account: &Account,
+    pin: Option<&pin::Native>,
+    opened: &dyn Fn(),
+) -> bool {
     let mut bytes = vec![0; MAX_RECORD];
     let confirmed = loop {
         let record = match broker.receive_record_into(&mut bytes) {
@@ -260,6 +280,10 @@ fn check(broker: &SeqPacket, account: &Account, pin: Option<&pin::Native>) -> bo
         let (is_pin, mut secret) = match message {
             Ok(Message::CredentialSecret { pin, secret }) => (pin, secret),
             Ok(Message::CredentialCancelled) => break false,
+            Ok(Message::CredentialOpened) => {
+                opened();
+                continue;
+            }
             _ => {
                 eprintln!("credential prompt: the device broker sent another record");
                 break false;

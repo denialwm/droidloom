@@ -11,7 +11,8 @@
 //! on their own socket: [`Message::CredentialAsk`] shows the host's sheet, the
 //! broker sends what the user typed as [`Message::CredentialSecret`] until the
 //! supervisor closes it, or [`Message::CredentialCancelled`] when the user
-//! closed it.
+//! closed it. [`Message::CredentialOpened`] says the user turned from the
+//! fingerprint to the sheet.
 
 use std::fmt;
 
@@ -51,6 +52,7 @@ const CREDENTIAL_SECRET: u32 = 49;
 const CREDENTIAL_WRONG: u32 = 50;
 const CREDENTIAL_CANCELLED: u32 = 51;
 const CREDENTIAL_CLOSE: u32 = 52;
+const CREDENTIAL_OPENED: u32 = 53;
 
 /// One step of a haptic pattern: `intensity` from 0 to 1 for `ms`; 0 is a pause.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -195,6 +197,9 @@ pub enum Message {
     },
     /// The user closed the sheet.
     CredentialCancelled,
+    /// The user turned from the fingerprint to the sheet: the fingerprint
+    /// stops, as for Android's own button to the screen lock.
+    CredentialOpened,
     /// Close the sheet: `accepted` when the credential proved the user.
     CredentialClose {
         /// The user proved themself.
@@ -419,6 +424,7 @@ impl Message {
                 writer
             }
             Message::CredentialCancelled => Writer::new(CREDENTIAL_CANCELLED),
+            Message::CredentialOpened => Writer::new(CREDENTIAL_OPENED),
             Message::CredentialClose { accepted } => {
                 let mut writer = Writer::new(CREDENTIAL_CLOSE);
                 writer.u8(u8::from(*accepted));
@@ -516,6 +522,7 @@ impl Message {
                 retry_ms: reader.u32()?,
             },
             CREDENTIAL_CANCELLED => Message::CredentialCancelled,
+            CREDENTIAL_OPENED => Message::CredentialOpened,
             CREDENTIAL_CLOSE => Message::CredentialClose {
                 accepted: reader.u8()? != 0,
             },
@@ -582,6 +589,7 @@ mod tests {
             },
             Message::CredentialWrong { retry_ms: 30_000 },
             Message::CredentialCancelled,
+            Message::CredentialOpened,
             Message::CredentialClose { accepted: true },
         ]
         .into_iter()

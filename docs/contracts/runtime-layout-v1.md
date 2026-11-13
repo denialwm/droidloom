@@ -239,7 +239,10 @@ peers only): each open prompt when the supervisor connects, then each new one
 and each end, as a big-endian `u32` length and JSON (`{"ask":ID, "app",
 "title", "description", "fingerprint"}` or `{"end":ID}`). `fingerprint` says
 the prompt also takes the host's fingerprint: the sheet waits folded behind
-it, and a matching finger ends the prompt.
+it, and a matching finger ends the prompt. When the user turns from the
+fingerprint to the sheet, the broker says so and the supervisor sends
+framework operation 12; `system_server` presses Android's own button to the
+device credential, and BiometricService stops the fingerprint.
 
 For each prompt the supervisor connects, as root, to the broker's fourth
 socket, `%t/droidloom/credential.sock` in the same unit, after checking that

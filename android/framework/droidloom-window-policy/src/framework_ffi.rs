@@ -96,7 +96,7 @@ impl Receiver {
             let Ok((opcode, request)) = wire::read(&mut stream, wire::MAX_REQUEST) else {
                 continue;
             };
-            if !(wire::LAUNCH..=wire::CREDENTIAL_ANSWER).contains(&opcode) {
+            if !(wire::LAUNCH..=wire::CREDENTIAL_CHOSEN).contains(&opcode) {
                 continue;
             }
             self.pending = Some((stream, opcode));

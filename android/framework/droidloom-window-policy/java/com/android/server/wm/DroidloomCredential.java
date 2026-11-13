@@ -217,6 +217,24 @@ final class DroidloomCredential {
         return "answered";
     }
 
+    /**
+     * The user turned from the fingerprint to the host's screen lock, as with Android's own
+     * button: BiometricService stops the sensors and waits for the credential.
+     */
+    static String chosen(long id) {
+        Prompt prompt;
+        synchronized (LOCK) { prompt = PROMPTS.get(id); }
+        if (prompt == null) throw new IllegalStateException("No such credential prompt");
+        WORKER.execute(() -> {
+            try {
+                prompt.receiver.onDeviceCredentialPressed();
+            } catch (RemoteException error) {
+                Slog.w(TAG, "Credential choice not delivered", error);
+            }
+        });
+        return "chosen";
+    }
+
     private static byte[] attest(Context context, long operation) {
         String stored = password();
         if (stored == null) return null;

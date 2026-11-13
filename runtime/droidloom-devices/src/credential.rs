@@ -45,6 +45,8 @@ use protocol::denial_user_verifier_v1::{Credential, DenialUserVerifierV1};
 struct State {
     /// Credentials typed and not yet handed on: the PIN or not, and its bytes.
     typed: VecDeque<(bool, Vec<u8>)>,
+    /// The user turned from the fingerprint, not yet told.
+    opened: bool,
     cancelled: bool,
 }
 
@@ -76,6 +78,7 @@ impl Dispatch<DenialUserVerificationV1, ()> for State {
                 let pin = matches!(kind, WEnum::Value(Credential::Pin));
                 state.typed.push_back((pin, secret.into_bytes()));
             }
+            verification::Event::Opened => state.opened = true,
             verification::Event::Cancelled => state.cancelled = true,
         }
     }
@@ -175,6 +178,9 @@ fn run(
             if !sent {
                 return Ok(());
             }
+        }
+        if std::mem::take(&mut state.opened) && !send(socket, &Message::CredentialOpened) {
+            return Ok(());
         }
         if state.cancelled {
             send(socket, &Message::CredentialCancelled);

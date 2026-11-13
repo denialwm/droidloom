@@ -190,6 +190,7 @@ public final class DroidloomFrameworkControl {
             case 10: return DroidloomCredential.received(service.mContext, request.getString("password"));
             case 11: return DroidloomCredential.answer(service.mContext, request.getLong("id"),
                     request.getBoolean("confirmed"));
+            case 12: return DroidloomCredential.chosen(request.getLong("id"));
             default: throw new IllegalArgumentException("Unknown framework operation");
         }
     }
