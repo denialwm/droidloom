@@ -282,6 +282,10 @@ const PATCHES: &[(&str, &str)] = &[
     ),
     (
         "frameworks/native",
+        "android/surfaceflinger/0030-droidloom-see-through-tasks.patch",
+    ),
+    (
+        "frameworks/native",
         "android/inputflinger/0001-application-token-targeted-injection.patch",
     ),
     (

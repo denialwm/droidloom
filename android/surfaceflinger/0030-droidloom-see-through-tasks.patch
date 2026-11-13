@@ -1,0 +1,82 @@
+Subject: [PATCH] Droidloom: tasks without an opaque layer stay see-through
+
+The gray fill went beneath every task, so a dialog in its own task showed
+its dim over near black instead of over the app it opened over, and its
+frames were marked opaque. As on Android, only a task with an opaque layer
+gets the fill now; any other keeps a transparent target and its frames are
+not marked opaque. The fill appearing or going damages the whole target.
+
+diff --git a/services/surfaceflinger/ScreenCaptureOutput.cpp b/services/surfaceflinger/ScreenCaptureOutput.cpp
+index 303c8e2..b7b7420 100644
+--- a/services/surfaceflinger/ScreenCaptureOutput.cpp
++++ b/services/surfaceflinger/ScreenCaptureOutput.cpp
+@@ -96,6 +96,7 @@ ftl::Future<std::monostate> ScreenCaptureOutput::present(
+         const auto& state = getState();
+         Region damage = getDirtyRegion();
+         bool samplesBehind = false;
++        bool filled = false;
+         for (const auto* outputLayer : getOutputLayersOrderedByZ()) {
+             const auto* layer = outputLayer->getLayerFE().getCompositionState();
+             // Normal physical displays receive buffer invalidation through
+@@ -129,8 +130,12 @@ ftl::Future<std::monostate> ScreenCaptureOutput::present(
+             samplesBehind |= snapshot.drawShadows() || snapshot.hasBlur() ||
+                     snapshot.hasBorderSettings() || snapshot.hasBoxShadowSettings() ||
+                     snapshot.postProcessShader != nullptr || layer->isTextureSamplingBehind;
++            filled |= snapshot.contentOpaque;
+         }
+-        mDroidloomDamage = samplesBehind && !damage.isEmpty()
++        // The fill appearing or going changes every pixel it covers.
++        const bool fillChanged = filled != mDroidloomFilled;
++        mDroidloomFilled = filled;
++        mDroidloomDamage = fillChanged || (samplesBehind && !damage.isEmpty())
+                 ? Region(state.displaySpace.getBoundsAsRect())
+                 : state.transform.transform(damage).intersect(state.displaySpace.getBoundsAsRect());
+     }
+@@ -274,6 +279,10 @@ ScreenCaptureOutput::generateClientCompositionRequests(
+         }
+     }
+ 
++    // As on Android, a task with no opaque layer, such as a dialog in its own
++    // task, shows what lies beneath it: its target stays transparent there.
++    if (mDroidloomTarget && !mDroidloomFilled) return clientCompositionLayers;
++
+     compositionengine::LayerFE::LayerSettings fillLayer;
+     fillLayer.name = "ScreenCaptureFillLayer";
+     fillLayer.source.buffer.buffer = nullptr;
+diff --git a/services/surfaceflinger/ScreenCaptureOutput.h b/services/surfaceflinger/ScreenCaptureOutput.h
+index a335a97..ac9849d 100644
+--- a/services/surfaceflinger/ScreenCaptureOutput.h
++++ b/services/surfaceflinger/ScreenCaptureOutput.h
+@@ -60,6 +60,8 @@ public:
+ 
+     void setDroidloomTarget(std::shared_ptr<renderengine::ExternalTexture> buffer);
+     const Region& getDroidloomDamage() const { return mDroidloomDamage; }
++    // Whether the target has the opaque fill beneath the task's layers.
++    bool isDroidloomFilled() const { return mDroidloomFilled; }
+     ftl::Future<std::monostate> present(
+             const compositionengine::CompositionRefreshArgs&) override;
+ 
+@@ -79,6 +81,7 @@ protected:
+ private:
+     std::unordered_map<int32_t, aidl::android::hardware::graphics::composer3::Luts> generateLuts();
+     bool mDroidloomTarget = false;
++    bool mDroidloomFilled = true;
+     Region mDroidloomDamage;
+     const Rect mSourceCrop;
+     const ftl::Optional<DisplayIdVariant> mDisplayIdVariant;
+diff --git a/services/surfaceflinger/SurfaceFlinger.cpp b/services/surfaceflinger/SurfaceFlinger.cpp
+index 380eb86..12cfa73 100644
+--- a/services/surfaceflinger/SurfaceFlinger.cpp
++++ b/services/surfaceflinger/SurfaceFlinger.cpp
+@@ -3886,9 +3886,9 @@ CompositeResultsPerDisplay SurfaceFlinger::composite(
+             taskOutput.window->setContentDamage(fullDamage
+                             ? Rect(targetSize.width, targetSize.height)
+                             : output->getDroidloomDamage().getBounds());
+-            // The task output includes an opaque gray fill beneath app layers.
++            // A filled task output has an opaque gray fill beneath app layers.
+             // Intra-app transparency still blends with those layers and the fill.
+-            taskOutput.window->setContentOpaque(true);
++            taskOutput.window->setContentOpaque(output->isDroidloomFilled());
+             const sp<Fence>& renderFence =
+                     output->getRenderSurface()->getClientTargetAcquireFence();
+             if (renderFence->isValid()) {
