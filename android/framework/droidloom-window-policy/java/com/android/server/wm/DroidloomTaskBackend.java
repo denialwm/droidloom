@@ -64,7 +64,7 @@ final class DroidloomTaskBackend {
         final Rect bounds;
         final IBinder inputToken;
         Snapshot(Task task, long incarnation, boolean hostFocused, boolean keepScreenOn,
-                Task createdOver) {
+                Task createdOver, int lastParent) {
             token = task; id = task.mTaskId; user = task.mUserId;
             display = task.getDisplayId(); this.incarnation = incarnation;
             owner = task.realActivity == null ? null : task.realActivity.getPackageName();
@@ -80,8 +80,11 @@ final class DroidloomTaskBackend {
             // such as a dialog, leaves that task running: the host gets it as
             // the window's parent. Only when that task's app started it, so a
             // launch from the host is never a dialog of the app it replaces.
+            // A finished dialog keeps its parent until its window goes, so
+            // the host hands the front back to that task.
             ActivityRecord root = task.getRootActivity();
-            parent = top == null || top.occludesParent() || root == null || createdOver == null
+            parent = top == null ? lastParent
+                    : top.occludesParent() || root == null || createdOver == null
                     || !createdOver.isAttached() || root.launchedFromUid != createdOver.effectiveUid
                     ? 0 : createdOver.mTaskId;
         }
@@ -153,8 +156,9 @@ final class DroidloomTaskBackend {
             incarnation = ++mNextIncarnation;
             mIncarnations.put(task, incarnation);
         }
+        Snapshot published = mPublished.get(task);
         return new Snapshot(task, incarnation, task == mHostFocused, mKeepScreenOn.containsKey(task),
-                mCreatedOver.get(task));
+                mCreatedOver.get(task), published == null ? 0 : published.parent);
     }
 
     private ArrayList<Snapshot> snapshot() {
