@@ -36,6 +36,8 @@ final class DroidloomTaskBackend {
     private final Handler mWorker;
     // Accessed only under mService.mGlobalLock.
     private final IdentityHashMap<Task, Long> mIncarnations = new IdentityHashMap<>();
+    // The task in front when each task was created, under mService.mGlobalLock.
+    private final IdentityHashMap<Task, Task> mCreatedOver = new IdentityHashMap<>();
     private final IdentityHashMap<WaitResult, ActivityRecord> mLaunches = new IdentityHashMap<>();
     // A new system_server in the same boot must not reuse earlier incarnations.
     private long mNextIncarnation = SystemClock.elapsedRealtimeNanos();
@@ -55,13 +57,14 @@ final class DroidloomTaskBackend {
 
     private static final class Snapshot {
         final Task token;
-        final int id, user, display;
+        final int id, user, display, parent;
         final long incarnation;
         final String owner;
         final boolean ready, focused, hostFocused, keepScreenOn;
         final Rect bounds;
         final IBinder inputToken;
-        Snapshot(Task task, long incarnation, boolean hostFocused, boolean keepScreenOn) {
+        Snapshot(Task task, long incarnation, boolean hostFocused, boolean keepScreenOn,
+                Task createdOver) {
             token = task; id = task.mTaskId; user = task.mUserId;
             display = task.getDisplayId(); this.incarnation = incarnation;
             owner = task.realActivity == null ? null : task.realActivity.getPackageName();
@@ -73,10 +76,18 @@ final class DroidloomTaskBackend {
             focused = task.isFocused();
             this.hostFocused = hostFocused;
             this.keepScreenOn = keepScreenOn;
+            // As on Android, a task that does not cover the one it opened over,
+            // such as a dialog, leaves that task running: the host gets it as
+            // the window's parent. Only when that task's app started it, so a
+            // launch from the host is never a dialog of the app it replaces.
+            ActivityRecord root = task.getRootActivity();
+            parent = top == null || top.occludesParent() || root == null || createdOver == null
+                    || !createdOver.isAttached() || root.launchedFromUid != createdOver.effectiveUid
+                    ? 0 : createdOver.mTaskId;
         }
         long[] publish(boolean activate) {
             return DroidloomTaskNative.registerTask(id, incarnation, user, display, owner, activate,
-                    keepScreenOn);
+                    keepScreenOn, parent);
         }
         boolean sameInput(Snapshot other) {
             return other != null && incarnation == other.incarnation && display == other.display
@@ -142,7 +153,8 @@ final class DroidloomTaskBackend {
             incarnation = ++mNextIncarnation;
             mIncarnations.put(task, incarnation);
         }
-        return new Snapshot(task, incarnation, task == mHostFocused, mKeepScreenOn.containsKey(task));
+        return new Snapshot(task, incarnation, task == mHostFocused, mKeepScreenOn.containsKey(task),
+                mCreatedOver.get(task));
     }
 
     private ArrayList<Snapshot> snapshot() {
@@ -158,6 +170,7 @@ final class DroidloomTaskBackend {
                 }
             }, true);
             mIncarnations.keySet().retainAll(live.keySet());
+            mCreatedOver.keySet().retainAll(live.keySet());
         }
         return tasks;
     }
@@ -303,6 +316,10 @@ final class DroidloomTaskBackend {
         if (mNewTaskDensity != 0) {
             task.getRequestedOverrideConfiguration().densityDpi = mNewTaskDensity;
         }
+        // Under the global lock, before the new task moves to the front.
+        final Task focused = mService.mRootWindowContainer.getTopDisplayFocusedRootTask();
+        final Task front = focused == null ? null : focused.getTopLeafTask();
+        if (front != null && front != task) mCreatedOver.put(task, front);
     }
 
     /**

@@ -114,6 +114,7 @@ pub struct DenialPresentationSink {
     activation_requests: bool,
     lazy_render_targets: bool,
     keep_screen_on: bool,
+    task_parents: bool,
 }
 
 impl DenialPresentationSink {
@@ -127,6 +128,7 @@ impl DenialPresentationSink {
             activation_requests: false,
             lazy_render_targets: false,
             keep_screen_on: false,
+            task_parents: false,
         }
     }
 
@@ -149,6 +151,43 @@ impl DenialPresentationSink {
     pub fn with_keep_screen_on(mut self, enabled: bool) -> Self {
         self.keep_screen_on = enabled;
         self
+    }
+
+    /// Record whether this host keeps a dialog's parent task running.
+    #[must_use]
+    pub fn with_task_parents(mut self, enabled: bool) -> Self {
+        self.task_parents = enabled;
+        self
+    }
+
+    /// Tell the host which task this one opened over and leaves running.
+    /// Only changes are sent.
+    ///
+    /// # Errors
+    /// Returns unknown-display or transport errors; older hosts remain usable.
+    pub fn set_parent(
+        &self,
+        display: DisplayId,
+        parent: Option<TaskObjectId>,
+    ) -> Result<(), DenialSinkError> {
+        if !self.task_parents {
+            return Ok(());
+        }
+        let mut tasks = self.lock_tasks()?;
+        let channel = tasks
+            .get_mut(&display)
+            .ok_or(DenialSinkError::UnknownDisplay(display))?;
+        if channel.parent != parent {
+            self.socket.send_android(
+                &AndroidMessage::SetParent {
+                    object: channel.binding.object(),
+                    parent,
+                },
+                &[],
+            )?;
+            channel.parent = parent;
+        }
+        Ok(())
     }
 
     /// Tell the host whether a shown window of the task has Android's
@@ -250,6 +289,7 @@ impl DenialPresentationSink {
                 trace_fences: BTreeMap::new(),
                 content_opaque: None,
                 keep_screen_on: false,
+                parent: None,
                 surfaceflinger_present_fence: None,
                 headless_completion: None,
                 android_display_extent: None,
@@ -1044,6 +1084,8 @@ struct TaskChannel {
     content_opaque: Option<bool>,
     /// Last keep-screen-on state sent to the host for this task.
     keep_screen_on: bool,
+    /// Last parent task sent to the host for this task.
+    parent: Option<TaskObjectId>,
     /// SurfaceFlinger's GPU completion fence awaiting Composer3 present reply.
     surfaceflinger_present_fence: Option<std::os::fd::OwnedFd>,
     /// Dedicated completion timeline and last point for frames without GPU work.

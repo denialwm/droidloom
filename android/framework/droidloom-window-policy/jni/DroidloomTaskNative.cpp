@@ -7,7 +7,7 @@
 struct TaskBinding { uint64_t object, display, android_display, task; };
 struct TaskCommand { uint64_t serial, task, incarnation, android_display, kind, width, height; };
 extern "C" bool droidloom_task_register(int32_t, int64_t, int32_t, int32_t,
-        const uint8_t*, size_t, TaskBinding*, bool, bool);
+        const uint8_t*, size_t, TaskBinding*, bool, bool, int32_t);
 extern "C" bool droidloom_task_retire(int32_t, int64_t);
 extern "C" int64_t droidloom_task_epoch();
 extern "C" int32_t droidloom_task_version();
@@ -27,7 +27,7 @@ Java_com_android_server_wm_DroidloomTaskNative_epoch(JNIEnv*, jclass) {
 extern "C" JNIEXPORT jlongArray JNICALL
 Java_com_android_server_wm_DroidloomTaskNative_registerTask(JNIEnv* env, jclass,
         jint id, jlong incarnation, jint user, jint display, jstring package, jboolean activate,
-        jboolean keepScreenOn) {
+        jboolean keepScreenOn, jint parent) {
     if (package == nullptr) return nullptr;
     const jsize length = env->GetStringUTFLength(package);
     if (length < 1 || length > 255) return nullptr;
@@ -36,7 +36,7 @@ Java_com_android_server_wm_DroidloomTaskNative_registerTask(JNIEnv* env, jclass,
     TaskBinding binding{};
     const bool okay = droidloom_task_register(id, incarnation, user, display,
             reinterpret_cast<const uint8_t*>(chars), static_cast<size_t>(length), &binding, activate != JNI_FALSE,
-            keepScreenOn != JNI_FALSE);
+            keepScreenOn != JNI_FALSE, parent);
     env->ReleaseStringUTFChars(package, chars);
     if (!okay) return nullptr;
     const jlong values[] = {static_cast<jlong>(binding.object), static_cast<jlong>(binding.display),

@@ -7,7 +7,7 @@ static BACKEND: OnceLock<Mutex<Backend>> = OnceLock::new();
 static COMMANDS: OnceLock<Mutex<CommandStream>> = OnceLock::new();
 
 #[unsafe(no_mangle)]
-pub static DROIDLOOM_TASK_BACKEND_ABI: [u8; 29] = *b"DROIDLOOM_TASK_BACKEND_ABI=3;";
+pub static DROIDLOOM_TASK_BACKEND_ABI: [u8; 29] = *b"DROIDLOOM_TASK_BACKEND_ABI=4;";
 
 fn with_backend<T>(f: impl FnOnce(&mut Backend) -> T) -> T {
     let mut backend = BACKEND
@@ -19,7 +19,7 @@ fn with_backend<T>(f: impl FnOnce(&mut Backend) -> T) -> T {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn droidloom_task_version() -> i32 {
-    3
+    4
 }
 
 fn with_commands<T>(f: impl FnOnce(&mut CommandStream) -> T) -> T {
@@ -89,8 +89,11 @@ pub unsafe extern "C" fn droidloom_task_register(
     out: *mut Binding,
     activate: bool,
     keep_screen_on: bool,
+    parent: i32,
 ) -> bool {
     if id <= 0
+        || parent < 0
+        || parent == id
         || incarnation <= 0
         || user < 0
         || display < 0
@@ -107,11 +110,12 @@ pub unsafe extern "C" fn droidloom_task_register(
     let Ok(package) = std::str::from_utf8(bytes) else {
         return false;
     };
-    let (Ok(id), Ok(incarnation), Ok(user), Ok(display)) = (
+    let (Ok(id), Ok(incarnation), Ok(user), Ok(display), Ok(parent)) = (
         u64::try_from(id),
         u64::try_from(incarnation),
         u32::try_from(user),
         u32::try_from(display),
+        u64::try_from(parent),
     ) else {
         return false;
     };
@@ -122,6 +126,7 @@ pub unsafe extern "C" fn droidloom_task_register(
         display,
         package: package.to_owned(),
         keep_screen_on,
+        parent,
     };
     with_backend(|b| {
         match if activate {

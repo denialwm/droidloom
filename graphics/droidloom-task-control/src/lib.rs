@@ -18,7 +18,7 @@ pub const MAGIC: [u8; 4] = *b"DLTC";
 /// Supported protocol major.
 pub const PROTOCOL_MAJOR: u16 = 3;
 /// Supported protocol minor.
-pub const PROTOCOL_MINOR: u16 = 4;
+pub const PROTOCOL_MINOR: u16 = 5;
 /// Fixed bytes before the opcode-specific payload.
 pub const HEADER_BYTES: usize = 24;
 /// Maximum complete task-control record.
@@ -64,6 +64,9 @@ pub enum ControlRequest {
         activate: bool,
         /// A shown window of the task has `FLAG_KEEP_SCREEN_ON` (protocol 3.4).
         keep_screen_on: bool,
+        /// The task this one opened over and leaves running, such as the app
+        /// behind a dialog; 0 for none (protocol 3.5).
+        parent: u64,
     },
     /// Become the framework's host-window command receiver (protocol 3.2).
     Subscribe {
@@ -275,6 +278,7 @@ pub fn encode_request(request: &ControlRequest) -> Result<Vec<u8>, CodecError> {
             incarnation,
             activate,
             keep_screen_on,
+            parent,
         } => {
             nonzero("request identity", *request_id)?;
             nonzero("task identity", *task)?;
@@ -282,11 +286,15 @@ pub fn encode_request(request: &ControlRequest) -> Result<Vec<u8>, CodecError> {
             if i64::try_from(*incarnation).is_err() || !valid_package(package) {
                 return Err(CodecError::InvalidValue("framework task identity"));
             }
+            if *parent == *task || *parent > i32::MAX as u64 {
+                return Err(CodecError::InvalidValue("parent task"));
+            }
             payload.string(package, MAX_PACKAGE_BYTES)?;
             payload.u64(*task);
             payload.u32(*android_display);
             payload.u64(*incarnation);
             payload.u32(u32::from(*activate) | u32::from(*keep_screen_on) << 1);
+            payload.u64(*parent);
             (OP_PUBLISH_FRAMEWORK, *request_id)
         }
         ControlRequest::Subscribe { request_id } => {
@@ -466,6 +474,10 @@ pub fn decode_request(record: &[u8]) -> Result<ControlRequest, CodecError> {
             }
             let activate = flags & 1 != 0;
             if let Some(incarnation) = incarnation {
+                let parent = payload.u64()?;
+                if parent == task || parent > i32::MAX as u64 {
+                    return Err(CodecError::InvalidValue("parent task"));
+                }
                 ControlRequest::PublishFramework {
                     request_id,
                     package,
@@ -474,6 +486,7 @@ pub fn decode_request(record: &[u8]) -> Result<ControlRequest, CodecError> {
                     incarnation,
                     activate,
                     keep_screen_on: flags & 0b10 != 0,
+                    parent,
                 }
             } else {
                 ControlRequest::PublishDirect {
@@ -1007,13 +1020,37 @@ mod tests {
                 incarnation: 9,
                 activate,
                 keep_screen_on,
+                parent: 0,
             };
             let mut bytes = super::encode_request(&request).unwrap();
             assert_eq!(super::decode_request(&bytes).unwrap(), request);
-            let last = bytes.len() - 4;
-            bytes[last..].copy_from_slice(&4_u32.to_le_bytes());
+            let flags = bytes.len() - 12;
+            bytes[flags..flags + 4].copy_from_slice(&4_u32.to_le_bytes());
             assert!(super::decode_request(&bytes).is_err());
         }
+    }
+
+    #[test]
+    fn framework_publication_carries_its_parent() {
+        let request = |parent| super::ControlRequest::PublishFramework {
+            request_id: 7,
+            package: "org.example.app".into(),
+            task: 42,
+            android_display: 0,
+            incarnation: 9,
+            activate: true,
+            keep_screen_on: false,
+            parent,
+        };
+        for parent in [0, 7] {
+            let bytes = super::encode_request(&request(parent)).unwrap();
+            assert_eq!(super::decode_request(&bytes).unwrap(), request(parent));
+        }
+        assert!(super::encode_request(&request(42)).is_err());
+        let mut bytes = super::encode_request(&request(7)).unwrap();
+        let last = bytes.len() - 8;
+        bytes[last..].copy_from_slice(&42_u64.to_le_bytes());
+        assert!(super::decode_request(&bytes).is_err());
     }
 
     #[test]
@@ -1047,6 +1084,7 @@ mod tests {
                 incarnation: 100_000,
                 activate: false,
                 keep_screen_on: true,
+                parent: 7,
             },
             ControlRequest::Hello {
                 min_major: 1,

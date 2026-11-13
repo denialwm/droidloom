@@ -1734,6 +1734,23 @@ impl App {
                         Some(manager.create_inhibitor(window.wl_surface(), qh, ()));
                 }
             }
+            EndpointAction::SetParent { object, parent } => {
+                // The task leaves `parent` running, as a dialog does: as its
+                // xdg parent, the host keeps that window going while this one
+                // is in front. A closing parent's toplevel is gone already.
+                let parent = parent
+                    .and_then(|parent| self.tasks.get(&parent))
+                    .filter(|parent| !parent.closing)
+                    .and_then(|parent| parent.window.as_ref())
+                    .map(|window| window.xdg_toplevel().clone());
+                let task = self
+                    .tasks
+                    .get(&object)
+                    .ok_or(PresenterError::UnknownTask(object))?;
+                if let Some(window) = task.window.as_ref().filter(|_| !task.closing) {
+                    window.xdg_toplevel().set_parent(parent.as_ref());
+                }
+            }
             EndpointAction::RequestActivation { object } => {
                 if self.focused != Some(object)
                     && let Some(task) = self
@@ -1821,7 +1838,8 @@ impl App {
                     .with_direct_input()
                     .with_lazy_render_targets()
                     .with_scene_presentation()
-                    .with_task_density();
+                    .with_task_density()
+                    .with_task_parents();
                 let endpoint = if self.idle_inhibit_manager.is_some() {
                     endpoint.with_keep_screen_on()
                 } else {

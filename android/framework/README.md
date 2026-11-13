@@ -254,7 +254,7 @@ When testing over an older installation, also build and activate the matching
 required capabilities, including display power; a stale presenter can reject
 the rebuilt Composer before Android boots. Restart Droidloom after selecting
 the matching components.
-Bundle checks require `DROIDLOOM_TASK_BACKEND_ABI=3;` in services, InputFlinger,
+Bundle checks require `DROIDLOOM_TASK_BACKEND_ABI=4;` in services, InputFlinger,
 the launch client and Composer. Runtime acceptance must cover cold/reused
 launches, aliases/trampolines, permission/authentication handoffs, Play Store
 Open, deep links, shares, task removal/reuse and Composer reconnects. Unit and

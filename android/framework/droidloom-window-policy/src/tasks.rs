@@ -23,6 +23,9 @@ pub struct Task {
     pub package: String,
     /// A shown window of the task has `FLAG_KEEP_SCREEN_ON`.
     pub keep_screen_on: bool,
+    /// The task this one opened over and leaves running, such as the app
+    /// behind a dialog; 0 for none.
+    pub parent: u64,
 }
 
 impl Task {
@@ -347,6 +350,7 @@ impl Backend {
             incarnation: task.incarnation,
             activate,
             keep_screen_on: task.keep_screen_on,
+            parent: task.parent,
         })? {
             ControlResponse::Bound {
                 request_id: actual,
@@ -445,13 +449,14 @@ mod tests {
         socket
     }
     fn register(socket: &SeqPacket, object: u64, expected_activation: bool) {
-        register_state(socket, object, expected_activation, false);
+        register_state(socket, object, expected_activation, false, 0);
     }
     fn register_state(
         socket: &SeqPacket,
         object: u64,
         expected_activation: bool,
         expected_keep_screen_on: bool,
+        expected_parent: u64,
     ) {
         let ControlRequest::PublishFramework {
             request_id,
@@ -461,6 +466,7 @@ mod tests {
             activate,
             incarnation,
             keep_screen_on,
+            parent,
         } = receive(socket)
         else {
             panic!("expected registration")
@@ -468,6 +474,7 @@ mod tests {
         assert_eq!(package, "org.example.app");
         assert_eq!(activate, expected_activation);
         assert_eq!(keep_screen_on, expected_keep_screen_on);
+        assert_eq!(parent, expected_parent);
         assert!(incarnation > 0);
         send(
             socket,
@@ -495,6 +502,7 @@ mod tests {
             display: 0,
             package: "org.example.app".into(),
             keep_screen_on: false,
+            parent: 0,
         }
     }
 
@@ -505,9 +513,9 @@ mod tests {
         let listener = SeqPacketListener::bind(&path).unwrap();
         let server = thread::spawn(move || {
             let socket = hello(&listener);
-            register_state(&socket, 100, false, false);
-            register_state(&socket, 100, false, true); // No removal before it.
-            register_state(&socket, 100, false, false);
+            register_state(&socket, 100, false, false, 0);
+            register_state(&socket, 100, false, true, 0); // No removal before it.
+            register_state(&socket, 100, false, false, 0);
         });
         let mut backend = Backend::new(path);
         let first = backend.register(task(1)).unwrap();
@@ -515,6 +523,27 @@ mod tests {
         held.keep_screen_on = true;
         assert_eq!(backend.register(held.clone()).unwrap(), first);
         assert_eq!(backend.register(held).unwrap(), first); // Unchanged: no I/O.
+        assert_eq!(backend.register(task(1)).unwrap(), first);
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn parent_republishes_the_same_window() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("control");
+        let listener = SeqPacketListener::bind(&path).unwrap();
+        let server = thread::spawn(move || {
+            let socket = hello(&listener);
+            register_state(&socket, 100, false, false, 0);
+            register_state(&socket, 100, false, false, 7); // No removal before it.
+            register_state(&socket, 100, false, false, 0);
+        });
+        let mut backend = Backend::new(path);
+        let first = backend.register(task(1)).unwrap();
+        let mut dialog = task(1);
+        dialog.parent = 7;
+        assert_eq!(backend.register(dialog.clone()).unwrap(), first);
+        assert_eq!(backend.register(dialog).unwrap(), first); // Unchanged: no I/O.
         assert_eq!(backend.register(task(1)).unwrap(), first);
         server.join().unwrap();
     }

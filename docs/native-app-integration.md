@@ -68,7 +68,7 @@ coalesces obsolete sizes/focus transitions and retains commands until acknowledg
 Close supersedes its window's pending work; reconnects retry unacknowledged
 commands against their original object identity. Idle subscriptions sleep until
 an event. Host-originated focus changes do not echo activation requests back to
-the compositor. Paired task-backend ABI 3 metadata rejects old/new mixtures.
+the compositor. Paired task-backend ABI 4 metadata rejects old/new mixtures.
 
 Keep screen on follows Android: a shown window with `FLAG_KEEP_SCREEN_ON` keeps
 the screen on, here per task. Surface placement of the default display reports
@@ -77,6 +77,18 @@ those tasks to the backend, which republishes a task when its state changes
 `KEEP_SCREEN_ON`) and the presenter holds a `zwp_idle_inhibitor_v1` on the
 task's surface. The host decides visibility: a minimized or hidden window keeps
 nothing on. Android's own obscuring order is ignored.
+
+A task that does not cover the one it opened over, such as a dialog in its
+own task, leaves that task running on Android. The backend records the task
+in front when each task is created and publishes it as the parent while the
+new task's top activity does not occlude its parent and that task's app
+started it (task-control 3.5).
+Composer sends `SetParent` with the parent's window object (protocol 1.12,
+capability `TASK_PARENTS`), and the presenter makes the parent window the
+child's `xdg_toplevel` parent. A host that keeps a window's parent going while
+its child is in front keeps the app behind the dialog running, so a dialog
+can hand its answer back, as Play Protect's confirmation does when it asks
+for the device credential.
 
 Task destruction has two phases: request host window destruction once, retaining
 the binding to route the displayed frame's final buffer release; then remove the

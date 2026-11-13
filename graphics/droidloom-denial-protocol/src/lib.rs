@@ -20,7 +20,7 @@ pub const MAGIC: [u8; 4] = *b"DLOM";
 /// Protocol major implemented by this crate.
 pub const PROTOCOL_MAJOR: u16 = 1;
 /// Protocol minor implemented by this crate.
-pub const PROTOCOL_MINOR: u16 = 11;
+pub const PROTOCOL_MINOR: u16 = 12;
 /// Wire version retained by existing records, including initial negotiation.
 pub const BASE_PROTOCOL_MINOR: u16 = 3;
 /// Wire version introducing task activation.
@@ -78,6 +78,8 @@ pub mod capability {
     pub const KEEP_SCREEN_ON: u64 = 1 << 14;
     /// The host gives each task the density of the output it is on.
     pub const TASK_DENSITY: u64 = 1 << 15;
+    /// Android names the task a dialog-like task opened over.
+    pub const TASK_PARENTS: u64 = 1 << 16;
 
     /// Capabilities required for every protocol-v1 session.
     pub const REQUIRED_V1: u64 = TASK_WINDOWS
@@ -267,6 +269,15 @@ pub enum AndroidMessage {
         object: TaskObjectId,
         /// Whether the host keeps its displays on while the task is visible.
         keep: bool,
+    },
+    /// The task opened over `parent` and leaves it running, as a dialog does:
+    /// the host keeps the parent going while the task is in front.
+    /// Requires negotiated `TASK_PARENTS`.
+    SetParent {
+        /// Child task.
+        object: TaskObjectId,
+        /// Parent task, or `None` when the task has none.
+        parent: Option<TaskObjectId>,
     },
     /// Answer a host liveness probe.
     Pong {
@@ -1230,6 +1241,7 @@ const OP_BIND_INPUT_CHANNEL: u16 = 0x000f;
 const OP_BIND_INPUT_ROUTE: u16 = 0x0010;
 const OP_REQUEST_RENDER_TARGETS: u16 = 0x0011;
 const OP_SET_KEEP_SCREEN_ON: u16 = 0x0012;
+const OP_SET_PARENT: u16 = 0x0013;
 
 const OP_SERVER_HELLO: u16 = 0x8001;
 const OP_FORMAT_FEEDBACK: u16 = 0x8002;
@@ -1431,6 +1443,20 @@ pub fn encode_android(message: &AndroidMessage) -> Result<EncodedPacket, WireErr
         AndroidMessage::SetKeepScreenOn { object, keep } => {
             payload.u32(u32::from(*keep));
             (OP_SET_KEEP_SCREEN_ON, valid_object(*object)?, Vec::new())
+        }
+        AndroidMessage::SetParent { object, parent } => {
+            let parent = match parent {
+                Some(parent) if parent == object => {
+                    return Err(WireError::InvalidEnum {
+                        field: "parent task",
+                        value: parent.0,
+                    });
+                }
+                Some(parent) => valid_object(*parent)?,
+                None => 0,
+            };
+            payload.u64(parent);
+            (OP_SET_PARENT, valid_object(*object)?, Vec::new())
         }
         AndroidMessage::Pong { cookie } => {
             payload.u64(*cookie);
@@ -1666,6 +1692,24 @@ pub fn decode_android(
                 }
             };
             (AndroidMessage::SetKeepScreenOn { object, keep }, Vec::new())
+        }
+        OP_SET_PARENT => {
+            valid_object(object)?;
+            let parent = match payload.u64()? {
+                0 => None,
+                value if value == object.0 => {
+                    return Err(WireError::InvalidEnum {
+                        field: "parent task",
+                        value,
+                    });
+                }
+                value => {
+                    let parent = TaskObjectId(value);
+                    valid_object(parent)?;
+                    Some(parent)
+                }
+            };
+            (AndroidMessage::SetParent { object, parent }, Vec::new())
         }
         OP_PONG => {
             require_connection(header.object)?;
@@ -2341,6 +2385,7 @@ fn finish_packet(
         OP_FRAME_GRANT => 9,
         OP_SET_KEEP_SCREEN_ON => 10,
         OP_DENSITY => 11,
+        OP_SET_PARENT => 12,
         _ => BASE_PROTOCOL_MINOR,
     };
     bytes.extend_from_slice(&minor.to_le_bytes());
@@ -2899,6 +2944,14 @@ mod tests {
             AndroidMessage::SetKeepScreenOn {
                 object: OBJECT,
                 keep: true,
+            },
+            AndroidMessage::SetParent {
+                object: OBJECT,
+                parent: Some(TaskObjectId(OBJECT.0 + 1)),
+            },
+            AndroidMessage::SetParent {
+                object: OBJECT,
+                parent: None,
             },
             AndroidMessage::Pong { cookie: 99 },
         ] {
