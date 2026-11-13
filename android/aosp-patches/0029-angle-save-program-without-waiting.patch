@@ -1,0 +1,108 @@
+ANGLE: save a program without waiting for its pipeline warm up
+
+glGetProgramiv(GL_PROGRAM_BINARY_LENGTH) and glGetProgramBinary serialize
+the program, and the Vulkan backend waited there for the post-link warm up
+compile so it could embed the program's VkPipelineCache. That wait runs
+under the share group's lock, so a game whose loader thread links programs
+and saves their binaries stopped its render thread for every warm up
+compile: about 40 ms each on turnip, back to back while things load.
+
+The driver now keeps compiled shaders in its own disk cache, so the binary
+no longer embeds them and saving returns at once. The warm up keeps running
+on ANGLE's workers. An empty cache keeps the binary layout load() reads.
+
+diff --git a/src/libANGLE/renderer/vulkan/ProgramExecutableVk.cpp b/src/libANGLE/renderer/vulkan/ProgramExecutableVk.cpp
+index b827191..1c13ba4 100644
+--- a/src/libANGLE/renderer/vulkan/ProgramExecutableVk.cpp
++++ b/src/libANGLE/renderer/vulkan/ProgramExecutableVk.cpp
+@@ -180,59 +180,6 @@ void SetupDefaultPipelineState(const vk::ErrorContext *context,
+     }
+ }
+ 
+-void GetPipelineCacheData(ContextVk *contextVk,
+-                          const vk::PipelineCache &pipelineCache,
+-                          angle::MemoryBuffer *cacheDataOut)
+-{
+-    ASSERT(pipelineCache.valid() || contextVk->getState().isGLES1() ||
+-           !contextVk->getFeatures().warmUpPipelineCacheAtLink.enabled ||
+-           contextVk->getFeatures().skipPipelineCacheSerialization.enabled);
+-    if (!pipelineCache.valid() || contextVk->getFeatures().skipPipelineCacheSerialization.enabled)
+-    {
+-        return;
+-    }
+-
+-    // Extract the pipeline data.  If failed, or empty, it's simply not stored on disk.
+-    size_t pipelineCacheSize = 0;
+-    VkResult result =
+-        pipelineCache.getCacheData(contextVk->getDevice(), &pipelineCacheSize, nullptr);
+-    if (result != VK_SUCCESS || pipelineCacheSize == 0)
+-    {
+-        return;
+-    }
+-
+-    if (contextVk->getFeatures().enablePipelineCacheDataCompression.enabled)
+-    {
+-        std::vector<uint8_t> pipelineCacheData(pipelineCacheSize);
+-        result = pipelineCache.getCacheData(contextVk->getDevice(), &pipelineCacheSize,
+-                                            pipelineCacheData.data());
+-        if (result != VK_SUCCESS && result != VK_INCOMPLETE)
+-        {
+-            return;
+-        }
+-
+-        // Compress it.
+-        if (!angle::CompressBlob(pipelineCacheData.size(), pipelineCacheData.data(), cacheDataOut))
+-        {
+-            cacheDataOut->clear();
+-        }
+-    }
+-    else
+-    {
+-        if (!cacheDataOut->resize(pipelineCacheSize))
+-        {
+-            ERR() << "Failed to allocate memory for pipeline cache data.";
+-            return;
+-        }
+-        result = pipelineCache.getCacheData(contextVk->getDevice(), &pipelineCacheSize,
+-                                            cacheDataOut->data());
+-        if (result != VK_SUCCESS && result != VK_INCOMPLETE)
+-        {
+-            cacheDataOut->clear();
+-        }
+-    }
+-}
+-
+ vk::SpecializationConstants MakeSpecConsts(ProgramTransformOptions transformOptions,
+                                            const vk::GraphicsPipelineDesc &desc)
+ {
+@@ -862,24 +809,14 @@ void ProgramExecutableVk::save(ContextVk *contextVk,
+     }
+     stream->writePackedEnumMap(uniformDataSize);
+ 
+-    // Need to wait for warm up tasks to complete.
+-    waitForPostLinkTasksImpl(contextVk);
+-
+-    // Compress and save mPipelineCache.  Separable programs don't warm up the cache, while program
+-    // pipelines do.  However, currently ANGLE doesn't sync program pipelines to cache.  ANGLE could
+-    // potentially use VK_EXT_graphics_pipeline_library to create separate pipelines for
+-    // pre-rasterization and fragment subsets, but currently those subsets are bundled together.
++    // Droidloom: do not wait for the warm up tasks and do not save mPipelineCache.  Saving runs
++    // under the share group's lock, so waiting for the warm up compile here stalled every other
++    // context, such as a game's render thread while its loader thread saved programs.  The
++    // Vulkan driver keeps compiled shaders in its own disk cache, so the binary does not need
++    // them.  An empty cache keeps the binary layout that load() reads.
+     if (!isSeparable && !contextVk->getFeatures().preferGlobalPipelineCache.enabled)
+     {
+-        angle::MemoryBuffer cacheData;
+-
+-        GetPipelineCacheData(contextVk, mPipelineCache, &cacheData);
+-        stream->writeInt(cacheData.size());
+-        if (cacheData.size() > 0)
+-        {
+-            stream->writeBool(contextVk->getFeatures().enablePipelineCacheDataCompression.enabled);
+-            stream->writeBytes(cacheData);
+-        }
++        stream->writeInt(static_cast<size_t>(0));
+     }
+ }
+ 

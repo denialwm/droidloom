@@ -116,6 +116,10 @@ const PATCHES: &[(&str, &str)] = &[
         "android/aosp-patches/0015-libdrm-empty-version-strings.patch",
     ),
     (
+        "external/angle",
+        "android/aosp-patches/0029-angle-save-program-without-waiting.patch",
+    ),
+    (
         "frameworks/native",
         "android/surfaceflinger/0009-droidloom-cpu-placement.patch",
     ),
