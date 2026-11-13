@@ -1,0 +1,43 @@
+turnip: keep LRZ writes when attachment locations stay the default
+
+vkCmdSetRenderingAttachmentLocationsKHR disabled LRZ writes for the rest of
+the render pass, whatever the map. ANGLE calls it at the start of its render
+passes, so about six passes per frame of Wuthering Waves ran without LRZ.
+A map that keeps every color attachment at its own location is the pass's
+default and leaves the draw-time LRZ rules in charge. Other maps still
+disable LRZ writes, and TU_DEBUG=perf now prints them.
+
+diff --git a/src/freedreno/vulkan/tu_cmd_buffer.cc b/src/freedreno/vulkan/tu_cmd_buffer.cc
+index e024072..fc07980 100644
+--- a/src/freedreno/vulkan/tu_cmd_buffer.cc
++++ b/src/freedreno/vulkan/tu_cmd_buffer.cc
+@@ -7173,8 +7173,28 @@ tu_CmdSetRenderingAttachmentLocationsKHR(
+ 
+    /* Same case as a drawcall not writing to some color attachments, but not
+     * trying to make LRZ work in cases where we can prove that LRZ can work.
++    * The one exception is a map that keeps every color attachment of the pass
++    * at its own location: that is the pass's default, which the draw-time LRZ
++    * rules already cover.
+     */
+-   if (cmd->state.lrz.valid && !cmd->state.lrz.disable_write_for_rp) {
++   const uint8_t *color_map = cmd->vk.dynamic_graphics_state.cal.color_map;
++   const uint32_t color_count = cmd->state.subpass->color_count;
++   bool identity = true;
++   for (uint32_t i = 0; i < color_count; i++)
++      identity &= color_map[i] == i;
++
++   if (!identity && cmd->state.lrz.valid &&
++       !cmd->state.lrz.disable_write_for_rp) {
++      if (TU_DEBUG(PERF)) {
++         char map[4 * MESA_VK_MAX_COLOR_ATTACHMENTS + 1] = "";
++         for (uint32_t i = 0; i < color_count; i++) {
++            size_t used = strlen(map);
++            snprintf(map + used, sizeof(map) - used, " %d",
++                     color_map[i] == MESA_VK_ATTACHMENT_UNUSED ? -1
++                                                                : color_map[i]);
++         }
++         perf_debug(cmd->device, "Color attachment locations:%s", map);
++      }
+       tu_lrz_disable_write_for_rp(cmd, "CmdSetRenderingAttachmentLocations");
+       cmd->state.dirty |= TU_CMD_DIRTY_LRZ;
+    }
