@@ -1,0 +1,73 @@
+ANGLE: log every validation error when asked
+
+Release ANGLE keeps validation errors at info level, which logcat never
+shows, and stops after 16 per context. With debug.angle.log_validation_errors=1
+every one is logged as a warning. The first GL_QCOM_motion_estimation call
+in a process is logged too, to see whether an app gets that far.
+
+diff --git a/src/libANGLE/Context.cpp b/src/libANGLE/Context.cpp
+index 5c33179..a44fc09 100644
+--- a/src/libANGLE/Context.cpp
++++ b/src/libANGLE/Context.cpp
+@@ -10155,6 +10155,9 @@ ErrorSet::ErrorSet(Debug *debug,
+       // by 2.
+       mMaxErrorMessages(
+           GetDebug(frontendFeatures, attribs) ? std::numeric_limits<uint32_t>::max() / 2 : 16),
++      mLogValidationErrors(angle::GetEnvironmentVarOrAndroidProperty(
++                               "ANGLE_LOG_VALIDATION_ERRORS", "debug.angle.log_validation_errors") ==
++                           "1"),
+       mSkipValidation(GetNoError(attribs)),
+       mContextLost(0),
+ #if defined(ANGLE_ENABLE_ASSERTS)
+@@ -10203,8 +10206,8 @@ void ErrorSet::validationError(angle::EntryPoint entryPoint, GLenum errorCode, c
+     //
+     // The error messages are always reported for Chromium which uses the debug callback to detect
+     // errors instead of glGetError().
+-    reportMessage =
+-        MessageCounterBelowMaxRepeat(&mErrorMessageCount, mMaxErrorMessages, &isLastMessage);
++    reportMessage = mLogValidationErrors || MessageCounterBelowMaxRepeat(
++                                                &mErrorMessageCount, mMaxErrorMessages, &isLastMessage);
+ #endif
+ 
+     if (reportMessage)
+@@ -10216,7 +10219,8 @@ void ErrorSet::validationError(angle::EntryPoint entryPoint, GLenum errorCode, c
+         }
+ 
+         mDebug->insertMessage(GL_DEBUG_SOURCE_API, GL_DEBUG_TYPE_ERROR, errorCode,
+-                              GL_DEBUG_SEVERITY_HIGH, completeMessage, gl::LOG_INFO);
++                              GL_DEBUG_SEVERITY_HIGH, completeMessage,
++                              mLogValidationErrors ? gl::LOG_WARN : gl::LOG_INFO);
+     }
+ 
+     pushError(errorCode);
+diff --git a/src/libANGLE/Context.h b/src/libANGLE/Context.h
+index 9bd6b60..221a793 100644
+--- a/src/libANGLE/Context.h
++++ b/src/libANGLE/Context.h
+@@ -153,6 +153,8 @@ class ErrorSet : angle::NonCopyable
+ 
+     std::atomic<uint32_t> mErrorMessageCount;
+     uint32_t mMaxErrorMessages;
++    // Droidloom: debug.angle.log_validation_errors=1 logs every validation error as a warning.
++    const bool mLogValidationErrors;
+ 
+     // The following are atomic and lockless as they are very frequently accessed.
+     std::atomic_int mSkipValidation;
+diff --git a/src/libANGLE/renderer/vulkan/ContextVk.cpp b/src/libANGLE/renderer/vulkan/ContextVk.cpp
+index e0cc61a..bbcc02d 100644
+--- a/src/libANGLE/renderer/vulkan/ContextVk.cpp
++++ b/src/libANGLE/renderer/vulkan/ContextVk.cpp
+@@ -6040,6 +6040,13 @@ angle::Result ContextVk::texEstimateMotion(const gl::Context *context,
+         params.maskLevel = baseLevel(mask);
+     }
+ 
++    static std::atomic_bool sLogged = false;
++    if (!sLogged.exchange(true))
++    {
++        WARN() << "GL_QCOM_motion_estimation: first estimate, " << params.width << "x"
++               << params.height << (mask != nullptr ? " with a mask" : "");
++    }
++
+     return mUtils.estimateMotion(this, params);
+ }
+ 

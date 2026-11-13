@@ -128,6 +128,10 @@ const PATCHES: &[(&str, &str)] = &[
         "android/aosp-patches/0031-angle-version-after-blank-lines.patch",
     ),
     (
+        "external/angle",
+        "android/aosp-patches/0032-angle-log-validation-errors.patch",
+    ),
+    (
         "frameworks/native",
         "android/surfaceflinger/0009-droidloom-cpu-placement.patch",
     ),
