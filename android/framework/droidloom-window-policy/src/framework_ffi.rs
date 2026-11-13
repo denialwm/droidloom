@@ -1,6 +1,8 @@
-//! Owned, root-authenticated framework RPC and coalesced catalog event transport.
+//! Owned, root-authenticated framework RPC, coalesced catalog events and the
+//! credential prompts the host shows for the framework.
 use droidloom_task_control::framework as wire;
 use std::{
+    collections::VecDeque,
     fs,
     io::{self, Write},
     os::{
@@ -94,7 +96,7 @@ impl Receiver {
             let Ok((opcode, request)) = wire::read(&mut stream, wire::MAX_REQUEST) else {
                 continue;
             };
-            if !(wire::LAUNCH..=wire::CREDENTIAL).contains(&opcode) {
+            if !(wire::LAUNCH..=wire::CREDENTIAL_ANSWER).contains(&opcode) {
                 continue;
             }
             self.pending = Some((stream, opcode));
@@ -119,24 +121,56 @@ struct Events {
     generation: AtomicU64,
     stopped: AtomicBool,
 }
+/// Credential prompts for root's supervisor on `credential-events`: every open
+/// prompt when it connects, then each new one and each end, as a big-endian
+/// `u32` length and JSON.
+struct Prompts {
+    wake: OwnedFd,
+    queue: Mutex<PromptQueue>,
+    stopped: AtomicBool,
+}
+#[derive(Default)]
+struct PromptQueue {
+    open: Vec<(u64, Vec<u8>)>,
+    outbox: VecDeque<Vec<u8>>,
+}
+const MAX_PROMPT: usize = 16 * 1024;
+/// BiometricService shows one prompt at a time; a few cover a racing end.
+const MAX_OPEN_PROMPTS: usize = 4;
 struct State {
     receiver: Mutex<Receiver>,
     events: Arc<Events>,
-    worker: Option<std::thread::JoinHandle<()>>,
+    prompts: Arc<Prompts>,
+    workers: Vec<std::thread::JoinHandle<()>>,
 }
 impl Drop for State {
     fn drop(&mut self) {
         self.events.stopped.store(true, Ordering::Release);
-        signal(&self.events);
-        if let Some(worker) = self.worker.take() {
+        signal(&self.events.wake);
+        self.prompts.stopped.store(true, Ordering::Release);
+        signal(&self.prompts.wake);
+        for worker in self.workers.drain(..) {
             let _ = worker.join();
         }
     }
 }
-fn signal(events: &Events) {
+fn eventfd() -> io::Result<OwnedFd> {
+    let fd = unsafe { libc::eventfd(0, libc::EFD_CLOEXEC | libc::EFD_NONBLOCK) };
+    if fd < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(unsafe { OwnedFd::from_raw_fd(fd) })
+}
+fn signal(wake: &OwnedFd) {
     let value = 1_u64;
     unsafe {
-        libc::write(events.wake.as_raw_fd(), (&raw const value).cast(), 8);
+        libc::write(wake.as_raw_fd(), (&raw const value).cast(), 8);
+    }
+}
+fn drain(wake: &OwnedFd) {
+    let mut count = 0_u64;
+    unsafe {
+        libc::read(wake.as_raw_fd(), (&raw mut count).cast(), 8);
     }
 }
 static STATE: OnceLock<State> = OnceLock::new();
@@ -145,27 +179,38 @@ fn start(root: &Path, uid: u32) -> io::Result<State> {
     let listener = bind(&root.join("control"))?;
     let watched = bind(&root.join("catalog-events"))?;
     watched.socket.set_nonblocking(true)?;
-    let fd = unsafe { libc::eventfd(0, libc::EFD_CLOEXEC | libc::EFD_NONBLOCK) };
-    if fd < 0 {
-        return Err(io::Error::last_os_error());
-    }
+    let asked = bind(&root.join("credential-events"))?;
+    asked.socket.set_nonblocking(true)?;
     let events = Arc::new(Events {
-        wake: unsafe { OwnedFd::from_raw_fd(fd) },
+        wake: eventfd()?,
         generation: AtomicU64::new(1),
         stopped: AtomicBool::new(false),
     });
-    let worker = Arc::clone(&events);
-    let worker = std::thread::Builder::new()
-        .name("DroidloomCatalog".into())
-        .spawn(move || watch(watched, worker, uid))?;
-    Ok(State {
+    let prompts = Arc::new(Prompts {
+        wake: eventfd()?,
+        queue: Mutex::default(),
+        stopped: AtomicBool::new(false),
+    });
+    let mut state = State {
         receiver: Mutex::new(Receiver {
             listener,
             pending: None,
         }),
-        events,
-        worker: Some(worker),
-    })
+        events: Arc::clone(&events),
+        prompts: Arc::clone(&prompts),
+        workers: Vec::new(),
+    };
+    state.workers.push(
+        std::thread::Builder::new()
+            .name("DroidloomCatalog".into())
+            .spawn(move || watch(watched, events, uid))?,
+    );
+    state.workers.push(
+        std::thread::Builder::new()
+            .name("DroidloomPrompts".into())
+            .spawn(move || serve_prompts(asked, prompts, uid))?,
+    );
+    Ok(state)
 }
 fn watch(listener: Listener, events: Arc<Events>, uid: u32) {
     let mut peer: Option<UnixStream> = None;
@@ -202,10 +247,7 @@ fn watch(listener: Listener, events: Arc<Events>, uid: u32) {
         } // EOF or unexpected client data
         let mut changed = false;
         if descriptors[1].revents & libc::POLLIN != 0 {
-            let mut count = 0_u64;
-            unsafe {
-                libc::read(events.wake.as_raw_fd(), (&raw mut count).cast(), 8);
-            }
+            drain(&events.wake);
             changed = true;
         }
         if descriptors[0].revents & libc::POLLIN != 0 {
@@ -229,6 +271,114 @@ fn watch(listener: Listener, events: Arc<Events>, uid: u32) {
         }
     }
 }
+fn send_prompt(stream: &mut UnixStream, record: &[u8]) -> bool {
+    stream
+        .write_all(&(record.len() as u32).to_be_bytes())
+        .and_then(|()| stream.write_all(record))
+        .is_ok()
+}
+fn serve_prompts(listener: Listener, prompts: Arc<Prompts>, uid: u32) {
+    let mut peer: Option<UnixStream> = None;
+    loop {
+        let mut descriptors = [
+            libc::pollfd {
+                fd: listener.socket.as_raw_fd(),
+                events: libc::POLLIN,
+                revents: 0,
+            },
+            libc::pollfd {
+                fd: prompts.wake.as_raw_fd(),
+                events: libc::POLLIN,
+                revents: 0,
+            },
+            libc::pollfd {
+                fd: peer.as_ref().map_or(-1, AsRawFd::as_raw_fd),
+                events: libc::POLLIN | libc::POLLRDHUP,
+                revents: 0,
+            },
+        ];
+        let result = unsafe { libc::poll(descriptors.as_mut_ptr(), 3, -1) };
+        if result < 0 {
+            if io::Error::last_os_error().kind() == io::ErrorKind::Interrupted {
+                continue;
+            }
+            return;
+        }
+        if prompts.stopped.load(Ordering::Acquire) {
+            return;
+        }
+        if descriptors[2].revents != 0 {
+            peer = None;
+        } // EOF or unexpected client data
+        if descriptors[1].revents & libc::POLLIN != 0 {
+            drain(&prompts.wake);
+        }
+        let mut queue = prompts
+            .queue
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let outbox = std::mem::take(&mut queue.outbox);
+        if let Some(stream) = &mut peer {
+            if !outbox.iter().all(|record| send_prompt(stream, record)) {
+                peer = None;
+            }
+        }
+        if descriptors[0].revents & libc::POLLIN != 0 {
+            while let Ok((mut stream, _)) = listener.socket.accept() {
+                if allowed(&stream, uid)
+                    && stream
+                        .set_write_timeout(Some(Duration::from_secs(2)))
+                        .is_ok()
+                    && queue
+                        .open
+                        .iter()
+                        .all(|(_, record)| send_prompt(&mut stream, record))
+                {
+                    peer = Some(stream);
+                }
+            }
+        }
+    }
+}
+impl Prompts {
+    fn change(&self, change: impl FnOnce(&mut PromptQueue) -> bool) -> bool {
+        let changed = change(
+            &mut self
+                .queue
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        );
+        if changed {
+            signal(&self.wake);
+        }
+        changed
+    }
+    fn ask(&self, id: u64, record: Vec<u8>) -> bool {
+        self.change(|queue| {
+            if queue.open.len() >= MAX_OPEN_PROMPTS
+                || queue.open.iter().any(|(open, _)| *open == id)
+            {
+                return false;
+            }
+            queue.outbox.push_back(record.clone());
+            queue.open.push((id, record));
+            true
+        })
+    }
+    fn end(&self, id: u64) {
+        self.change(|queue| {
+            let before = queue.open.len();
+            queue.open.retain(|(open, _)| *open != id);
+            if queue.open.len() == before {
+                return false;
+            }
+            queue
+                .outbox
+                .push_back(format!("{{\"end\":{id}}}").into_bytes());
+            true
+        });
+    }
+}
 #[unsafe(no_mangle)]
 pub extern "C" fn droidloom_framework_start() -> bool {
     if STATE.get().is_some() {
@@ -246,7 +396,29 @@ pub extern "C" fn droidloom_framework_start() -> bool {
 pub extern "C" fn droidloom_framework_catalog_changed() {
     if let Some(state) = STATE.get() {
         state.events.generation.fetch_add(1, Ordering::AcqRel);
-        signal(&state.events);
+        signal(&state.events.wake);
+    }
+}
+#[unsafe(no_mangle)]
+/// # Safety
+/// `buffer` must reference `length` initialized bytes, kept alive for this call.
+pub unsafe extern "C" fn droidloom_framework_credential_ask(
+    id: u64,
+    buffer: *const u8,
+    length: usize,
+) -> bool {
+    if buffer.is_null() || length == 0 || length > MAX_PROMPT {
+        return false;
+    }
+    let record = unsafe { std::slice::from_raw_parts(buffer, length) }.to_vec();
+    STATE
+        .get()
+        .is_some_and(|state| state.prompts.ask(id, record))
+}
+#[unsafe(no_mangle)]
+pub extern "C" fn droidloom_framework_credential_end(id: u64) {
+    if let Some(state) = STATE.get() {
+        state.prompts.end(id);
     }
 }
 #[unsafe(no_mangle)]
@@ -401,5 +573,52 @@ mod tests {
         assert_eq!(u64::from_be_bytes(generation), 7);
         assert!(allowed(&second, unsafe { libc::geteuid() }));
         assert!(!allowed(&second, u32::MAX));
+    }
+    fn prompt(stream: &mut UnixStream) -> Vec<u8> {
+        let mut length = [0; 4];
+        stream.read_exact(&mut length).unwrap();
+        let mut record = vec![0; u32::from_be_bytes(length) as usize];
+        stream.read_exact(&mut record).unwrap();
+        record
+    }
+    #[test]
+    fn credential_prompts_reach_root_once_and_replay_while_open() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = start(dir.path(), unsafe { libc::geteuid() }).unwrap();
+        assert!(state.prompts.ask(7, b"{\"ask\":7}".to_vec()));
+        assert!(
+            !state.prompts.ask(7, b"{\"ask\":7}".to_vec()),
+            "one record per prompt"
+        );
+        let path = dir.path().join("credential-events");
+        let mut first = UnixStream::connect(&path).unwrap();
+        first
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        assert_eq!(prompt(&mut first), b"{\"ask\":7}");
+        assert!(state.prompts.ask(8, b"{\"ask\":8}".to_vec()));
+        assert_eq!(prompt(&mut first), b"{\"ask\":8}");
+        state.prompts.end(7);
+        state.prompts.end(7);
+        assert_eq!(prompt(&mut first), b"{\"end\":7}");
+        drop(first);
+        let mut second = UnixStream::connect(&path).unwrap();
+        second
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        assert_eq!(
+            prompt(&mut second),
+            b"{\"ask\":8}",
+            "a new supervisor sees what is open"
+        );
+        drop(second);
+        drop(state);
+        let other = tempfile::tempdir().unwrap();
+        let _state = start(other.path(), u32::MAX).unwrap();
+        let mut stranger = UnixStream::connect(other.path().join("credential-events")).unwrap();
+        stranger
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        assert_eq!(stranger.read(&mut [0; 4]).unwrap(), 0);
     }
 }

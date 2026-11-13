@@ -788,6 +788,8 @@ dependencies = [
  "clap",
  "droidloom-contracts",
  "droidloom-cpu-placement",
+ "droidloom-denial-ipc",
+ "droidloom-device-protocol",
  "droidloom-task-control",
  "droidloom-window-policy",
  "futures-lite",

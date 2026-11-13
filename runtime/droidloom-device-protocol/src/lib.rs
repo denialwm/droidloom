@@ -6,6 +6,12 @@
 //! A camera session is braun's own socket, passed beside [`Message::CameraSession`].
 //! A fingerprint query gets one reply; a verification sends events until one
 //! that ends it ([`Scan::ends`]), also after a cancel.
+//!
+//! Credential prompts go the other way, from root's supervisor to the broker
+//! on their own socket: [`Message::CredentialAsk`] shows the host's sheet, the
+//! broker sends what the user typed as [`Message::CredentialSecret`] until the
+//! supervisor closes it, or [`Message::CredentialCancelled`] when the user
+//! closed it.
 
 use std::fmt;
 
@@ -21,6 +27,8 @@ pub const MAX_CAMERAS: usize = 16;
 pub const MAX_TEXT: usize = 256;
 /// Most enrolled fingers one reader reports.
 pub const MAX_FINGERS: usize = 16;
+/// Longest PIN or password.
+pub const MAX_SECRET: usize = 1024;
 /// Largest record either side sends.
 pub const MAX_RECORD: usize = 8192;
 
@@ -38,6 +46,11 @@ const FINGERPRINT_READER: u32 = 33;
 const FINGERPRINT_VERIFY: u32 = 34;
 const FINGERPRINT_CANCEL: u32 = 35;
 const FINGERPRINT_SCAN: u32 = 36;
+const CREDENTIAL_ASK: u32 = 48;
+const CREDENTIAL_SECRET: u32 = 49;
+const CREDENTIAL_WRONG: u32 = 50;
+const CREDENTIAL_CANCELLED: u32 = 51;
+const CREDENTIAL_CLOSE: u32 = 52;
 
 /// One step of a haptic pattern: `intensity` from 0 to 1 for `ms`; 0 is a pause.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -155,6 +168,36 @@ pub enum Message {
     FingerprintCancel,
     /// An event of the verification running.
     FingerprintScan(Scan),
+    /// Ask the user for their screen lock on behalf of an app.
+    CredentialAsk {
+        /// The app's name.
+        app: String,
+        /// What the app asked with; may be empty.
+        title: String,
+        /// May be empty.
+        description: String,
+        /// The PIN can prove the user.
+        pin: bool,
+    },
+    /// What the user typed: the PIN, or else the account password.
+    CredentialSecret {
+        /// It is the PIN.
+        pin: bool,
+        /// The bytes typed; wiped by whoever drops them.
+        secret: Vec<u8>,
+    },
+    /// It did not prove the user; ask again after `retry_ms`.
+    CredentialWrong {
+        /// Milliseconds to wait first, or 0.
+        retry_ms: u32,
+    },
+    /// The user closed the sheet.
+    CredentialCancelled,
+    /// Close the sheet: `accepted` when the credential proved the user.
+    CredentialClose {
+        /// The user proved themself.
+        accepted: bool,
+    },
 }
 
 /// A record that does not decode.
@@ -197,6 +240,14 @@ impl Writer {
         self.0.extend_from_slice(&(end as u16).to_le_bytes());
         self.0.extend_from_slice(&value.as_bytes()[..end]);
     }
+    fn secret(&mut self, value: &[u8]) {
+        let value = &value[..value.len().min(MAX_SECRET)];
+        // MAX_SECRET fits a u16.
+        #[allow(clippy::cast_possible_truncation)]
+        self.0
+            .extend_from_slice(&(value.len() as u16).to_le_bytes());
+        self.0.extend_from_slice(value);
+    }
 }
 
 struct Reader<'a>(&'a [u8]);
@@ -228,6 +279,15 @@ impl Reader<'_> {
         let (head, rest) = self.0.split_at_checked(length).ok_or(Invalid("short"))?;
         self.0 = rest;
         String::from_utf8(head.to_vec()).map_err(|_| Invalid("text not UTF-8"))
+    }
+    fn secret(&mut self) -> Result<Vec<u8>, Invalid> {
+        let length = usize::from(u16::from_le_bytes(self.take()?));
+        if length > MAX_SECRET {
+            return Err(Invalid("secret too long"));
+        }
+        let (head, rest) = self.0.split_at_checked(length).ok_or(Invalid("short"))?;
+        self.0 = rest;
+        Ok(head.to_vec())
     }
     fn count(&mut self, most: usize) -> Result<usize, Invalid> {
         usize::try_from(self.u32()?)
@@ -330,6 +390,36 @@ impl Message {
                 writer.u8(SCANS.iter().position(|known| known == scan).unwrap_or(0) as u8);
                 writer
             }
+            Message::CredentialAsk {
+                app,
+                title,
+                description,
+                pin,
+            } => {
+                let mut writer = Writer::new(CREDENTIAL_ASK);
+                writer.text(app);
+                writer.text(title);
+                writer.text(description);
+                writer.u8(u8::from(*pin));
+                writer
+            }
+            Message::CredentialSecret { pin, secret } => {
+                let mut writer = Writer::new(CREDENTIAL_SECRET);
+                writer.u8(u8::from(*pin));
+                writer.secret(secret);
+                writer
+            }
+            Message::CredentialWrong { retry_ms } => {
+                let mut writer = Writer::new(CREDENTIAL_WRONG);
+                writer.u32(*retry_ms);
+                writer
+            }
+            Message::CredentialCancelled => Writer::new(CREDENTIAL_CANCELLED),
+            Message::CredentialClose { accepted } => {
+                let mut writer = Writer::new(CREDENTIAL_CLOSE);
+                writer.u8(u8::from(*accepted));
+                writer
+            }
         };
         writer.0
     }
@@ -407,6 +497,23 @@ impl Message {
                     .get(usize::from(reader.u8()?))
                     .ok_or(Invalid("unknown scan"))?,
             ),
+            CREDENTIAL_ASK => Message::CredentialAsk {
+                app: reader.text()?,
+                title: reader.text()?,
+                description: reader.text()?,
+                pin: reader.u8()? != 0,
+            },
+            CREDENTIAL_SECRET => Message::CredentialSecret {
+                pin: reader.u8()? != 0,
+                secret: reader.secret()?,
+            },
+            CREDENTIAL_WRONG => Message::CredentialWrong {
+                retry_ms: reader.u32()?,
+            },
+            CREDENTIAL_CANCELLED => Message::CredentialCancelled,
+            CREDENTIAL_CLOSE => Message::CredentialClose {
+                accepted: reader.u8()? != 0,
+            },
             _ => return Err(Invalid("unknown kind")),
         };
         reader.end()?;
@@ -457,6 +564,19 @@ mod tests {
             },
             Message::FingerprintVerify,
             Message::FingerprintCancel,
+            Message::CredentialAsk {
+                app: "Play Store".into(),
+                title: "Confirm it's you".into(),
+                description: String::new(),
+                pin: true,
+            },
+            Message::CredentialSecret {
+                pin: false,
+                secret: b"correct horse".to_vec(),
+            },
+            Message::CredentialWrong { retry_ms: 30_000 },
+            Message::CredentialCancelled,
+            Message::CredentialClose { accepted: true },
         ]
         .into_iter()
         .chain(SCANS.map(Message::FingerprintScan))

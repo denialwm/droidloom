@@ -188,6 +188,8 @@ public final class DroidloomFrameworkControl {
             case 8: return DroidloomMediaScan.queue(service.mContext, request.getJSONArray("paths"));
             case 9: return DroidloomCredential.hostLocked(service.mContext, request.getBoolean("locked"));
             case 10: return DroidloomCredential.received(service.mContext, request.getString("password"));
+            case 11: return DroidloomCredential.answer(service.mContext, request.getLong("id"),
+                    request.getBoolean("confirmed"));
             default: throw new IllegalArgumentException("Unknown framework operation");
         }
     }

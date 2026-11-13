@@ -352,7 +352,7 @@ fn exchange(stream: &mut UnixStream, op: u16, request: &serde_json::Value) -> Re
     }
 }
 
-fn request(init: u32, op: u16, request: &serde_json::Value) -> Result<(), String> {
+pub(super) fn request(init: u32, op: u16, request: &serde_json::Value) -> Result<(), String> {
     exchange(&mut connect(init)?, op, request)
 }
 
@@ -378,7 +378,7 @@ fn give_credential(spec: &CellSpec) -> Result<(u32, u64), String> {
 /// user forked by the cell's zygote, which runs as root. Android's system user
 /// is the host user and could listen on the framework's socket itself, but
 /// zygote's children are closed to it.
-fn system_server(stream: &UnixStream) -> Result<(), String> {
+pub(super) fn system_server(stream: &UnixStream) -> Result<(), String> {
     let peer = peer_credentials(stream).map_err(|error| error.to_string())?;
     let pid = peer.pid;
     let field = |pid: i32, name: &str| -> Option<String> {

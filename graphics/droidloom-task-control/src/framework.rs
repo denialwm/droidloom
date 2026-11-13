@@ -26,6 +26,8 @@ pub const MEDIA_SCAN: u16 = 8;
 pub const HOST_LOCK: u16 = 9;
 /// Give the framework Android's hidden credential, which only root keeps.
 pub const CREDENTIAL: u16 = 10;
+/// Answer a credential prompt the framework announced on `credential-events`.
+pub const CREDENTIAL_ANSWER: u16 = 11;
 /// Error bit in a response opcode.
 pub const ERROR: u16 = 0x8000;
 

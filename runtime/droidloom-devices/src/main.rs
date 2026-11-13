@@ -8,8 +8,11 @@
 //! session's socket goes to Android as it is. Android's fingerprint service
 //! verifies through fprintd on a third ([`fingerprint`]). Neither D-Bus nor a
 //! device node enters Android. Without hapticd, braun or fprintd, Android
-//! hears there is no vibrator, camera or fingerprint reader.
+//! hears there is no vibrator, camera or fingerprint reader. Root's
+//! supervisor asks on a fourth for the host's screen lock when an Android app
+//! wants the device credential ([`credential`]).
 
+mod credential;
 mod fingerprint;
 
 use std::collections::HashMap;
@@ -50,6 +53,9 @@ struct Arguments {
     /// Fingerprint socket, when not started by its socket unit.
     #[arg(long)]
     fingerprint_socket: Option<PathBuf>,
+    /// Credential prompt socket, when not started by its socket unit.
+    #[arg(long)]
+    credential_socket: Option<PathBuf>,
     /// Host-mapped UID of Android's vibrator service (system).
     #[arg(long, default_value_t = 1000)]
     haptics_uid: u32,
@@ -59,6 +65,9 @@ struct Arguments {
     /// Host-mapped UID of Droidloom's authentication service (root).
     #[arg(long, default_value_t = 0)]
     fingerprint_uid: u32,
+    /// UID of Droidloom's supervisor (root).
+    #[arg(long, default_value_t = 0)]
+    credential_uid: u32,
 }
 
 #[derive(Clone, Copy)]
@@ -66,6 +75,7 @@ enum Endpoint {
     Haptics,
     Camera,
     Fingerprint,
+    Credential,
 }
 
 /// The system bus, connected when first needed and again after a failure.
@@ -328,6 +338,7 @@ fn endpoint_of(path: &Path) -> Option<Endpoint> {
         "haptics.sock" => Some(Endpoint::Haptics),
         "camera.sock" => Some(Endpoint::Camera),
         "fingerprint.sock" => Some(Endpoint::Fingerprint),
+        "credential.sock" => Some(Endpoint::Credential),
         _ => None,
     }
 }
@@ -372,13 +383,16 @@ fn listeners(arguments: &Arguments) -> io::Result<Vec<(Endpoint, SeqPacketListen
         if let Some(path) = &arguments.fingerprint_socket {
             listeners.push((Endpoint::Fingerprint, bind(path)?));
         }
+        if let Some(path) = &arguments.credential_socket {
+            listeners.push((Endpoint::Credential, bind(path)?));
+        }
         return Ok(listeners);
     }
     let count: i32 = std::env::var("LISTEN_FDS")
         .ok()
         .and_then(|value| value.parse().ok())
-        .filter(|count| (1..=3).contains(count))
-        .ok_or_else(|| io::Error::other("devices needs one to three activation sockets"))?;
+        .filter(|count| (1..=4).contains(count))
+        .ok_or_else(|| io::Error::other("devices needs one to four activation sockets"))?;
     let mut listeners = Vec::new();
     for raw in 3..3 + count {
         // SAFETY: fcntl validates the inherited descriptor before we own it.
@@ -429,6 +443,7 @@ fn run(arguments: &Arguments) -> io::Result<()> {
     check_peer_uid_mapping(&mapping, arguments.haptics_uid)?;
     check_peer_uid_mapping(&mapping, arguments.camera_uid)?;
     check_peer_uid_mapping(&mapping, arguments.fingerprint_uid)?;
+    check_peer_uid_mapping(&mapping, arguments.credential_uid)?;
     let listeners = listeners(arguments)?;
     if listeners.is_empty() {
         return Err(io::Error::other("no device socket to serve"));
@@ -447,6 +462,7 @@ fn run(arguments: &Arguments) -> io::Result<()> {
             Endpoint::Haptics => arguments.haptics_uid,
             Endpoint::Camera => arguments.camera_uid,
             Endpoint::Fingerprint => arguments.fingerprint_uid,
+            Endpoint::Credential => arguments.credential_uid,
         };
         accepting.push(std::thread::spawn(move || -> io::Result<()> {
             loop {
@@ -480,6 +496,7 @@ fn run(arguments: &Arguments) -> io::Result<()> {
                 std::thread::spawn(move || {
                     let served = match endpoint {
                         Endpoint::Fingerprint => fingerprint::serve(&Arc::new(socket)),
+                        Endpoint::Credential => credential::serve(&socket),
                         _ => serve(&socket, endpoint, &haptics, &bus),
                     };
                     if let Err(error) = served {
@@ -560,6 +577,10 @@ mod tests {
         assert!(matches!(
             endpoint_of(Path::new("/run/user/1000/droidloom/fingerprint.sock")),
             Some(Endpoint::Fingerprint)
+        ));
+        assert!(matches!(
+            endpoint_of(Path::new("/run/user/1000/droidloom/credential.sock")),
+            Some(Endpoint::Credential)
         ));
         assert!(endpoint_of(Path::new("/run/user/1000/droidloom/audio.sock")).is_none());
     }

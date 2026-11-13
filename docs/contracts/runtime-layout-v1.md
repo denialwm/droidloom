@@ -229,6 +229,30 @@ The broker only runs the reader: the authentication service counts a match
 once the supervisor, as root, has seen fprintd announce it on the system bus,
 and passes it through `/dev/socket/droidloom-authentication` (root, 0600).
 
+## Credential prompts
+
+An Android app that asks to confirm the device credential gets the host
+user's screen lock. SystemUI hands the prompt to `system_server`'s
+`droidloom.credential` service, which accepts SystemUI alone and announces it
+on `/dev/socket/droidloom-framework/credential-events` (system, 0600; root
+peers only): each open prompt when the supervisor connects, then each new one
+and each end, as a big-endian `u32` length and JSON (`{"ask":ID, "app",
+"title", "description"}` or `{"end":ID}`).
+
+For each prompt the supervisor connects, as root, to the broker's fourth
+socket, `%t/droidloom/credential.sock` in the same unit, after checking that
+the socket and its peer are the cell owner's. The broker shows the
+compositor's sheet (`denial_user_verifier_v1`) and passes what the user types
+back; other compositors lack the global and the prompt ends as cancelled. The
+supervisor checks the PIN with the gatekeeper provider that holds the lock
+PIN (`/run/gatekeeper/worker.sock`, else `software.sock`), using the handle
+in the user's Denial PIN record, and the password with PAM's `login` stack.
+It answers with framework operation 11; `system_server` then attests a
+confirmed prompt with Gatekeeper and Android's hidden credential for the
+prompt's operation, as Android's credential screen would, and BiometricService
+adds the token to Keystore. Neither the broker nor the compositor can confirm
+a prompt.
+
 ## Authentication secrets
 
 Android's system user is the host user in a cell, so what makes an Android

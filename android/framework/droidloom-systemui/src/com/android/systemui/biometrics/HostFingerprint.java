@@ -21,15 +21,18 @@ public final class HostFingerprint {
         final long id;
         final IBiometricSysuiReceiver receiver;
         final boolean confirm;
-        Request(long id, IBiometricSysuiReceiver receiver, boolean confirm) {
+        /** The host also asks for the screen lock, which stays a way through. */
+        final boolean credential;
+        Request(long id, IBiometricSysuiReceiver receiver, boolean confirm, boolean credential) {
             this.id = id; this.receiver = receiver; this.confirm = confirm;
+            this.credential = credential;
         }
     }
 
     /** The dialog is "in" at once: the sensor starts listening. */
     public static void show(IBiometricSysuiReceiver receiver, boolean requireConfirmation,
-            long requestId) {
-        Request request = new Request(requestId, receiver, requireConfirmation);
+            long requestId, boolean credential) {
+        Request request = new Request(requestId, receiver, requireConfirmation, credential);
         synchronized (LOCK) { current = request; }
         try {
             receiver.onDialogAnimatedIn(true);
@@ -49,8 +52,9 @@ public final class HostFingerprint {
     }
 
     /**
-     * A rejected finger or a timeout keeps listening. Any other error ends the request, and
-     * BiometricService hands it to the app once the dialog is dismissed.
+     * A rejected finger or a timeout keeps listening. Any other error ends the fingerprint; the
+     * request ends with it, and BiometricService hands the error to the app once the dialog is
+     * dismissed, unless the host's screen lock is still asked for.
      */
     public static void error(int error) {
         if (error == BiometricConstants.BIOMETRIC_PAUSED_REJECTED
@@ -58,7 +62,9 @@ public final class HostFingerprint {
             return;
         }
         Request request = take();
-        if (request != null) dismiss(request, BiometricPrompt.DISMISSED_REASON_ERROR);
+        if (request != null && !request.credential) {
+            dismiss(request, BiometricPrompt.DISMISSED_REASON_ERROR);
+        }
     }
 
     /** BiometricService ended the request itself. */

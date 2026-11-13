@@ -54,6 +54,9 @@ mod host_lock;
 #[path = "fprintd_relay.rs"]
 mod fprintd_relay;
 
+#[path = "credential_prompt.rs"]
+mod credential_prompt;
+
 #[path = "ui_mode.rs"]
 mod ui_mode;
 
@@ -410,6 +413,8 @@ struct ActiveCell {
     /// Tells Android's keyguard whether the host session is locked.
     _host_lock: Option<host_lock::Watch>,
     _fprintd_relay: Option<host_lock::Watch>,
+    /// Answers Android's credential prompts with the host's screen lock.
+    _credential_prompts: Option<host_lock::Watch>,
 }
 impl ActiveCell {
     fn ready_init(&self, progress: &Reporter) -> Result<u32, ControlError> {
@@ -559,6 +564,7 @@ impl Daemon {
             _media: media_scan::start(&spec, spec_path, &self.config.supervisor),
             _host_lock: host_lock::start(&spec),
             _fprintd_relay: fprintd_relay::start(&spec),
+            _credential_prompts: credential_prompt::start(&spec),
         });
         self.last_exit = None;
         Ok(ControlResponse {

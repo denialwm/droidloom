@@ -16,6 +16,8 @@ clap.workspace = true
 droidloom-contracts = { path = "../droidloom-contracts" }
 droidloom-window-policy = { path = "../droidloom-window-policy" }
 droidloom-task-control = { path = "../../graphics/droidloom-task-control" }
+droidloom-denial-ipc = { path = "../../graphics/droidloom-denial-ipc" }
+droidloom-device-protocol = { path = "../droidloom-device-protocol" }
 libc.workspace = true
 serde.workspace = true
 serde_json.workspace = true
