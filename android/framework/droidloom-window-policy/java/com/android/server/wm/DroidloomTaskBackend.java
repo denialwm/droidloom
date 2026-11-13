@@ -296,6 +296,15 @@ final class DroidloomTaskBackend {
                 case 4:
                 case 5:
                     setHostHidden(task, command[4] == 4);
+                    if (command[4] == 4) {
+                        // Hiding a task moves Android's focus to the one below
+                        // it, such as the app behind a dialog. That is the
+                        // host's doing, not that app asking for the front.
+                        final Task below =
+                                mService.mRootWindowContainer.getTopDisplayFocusedRootTask();
+                        final Task leaf = below == null ? null : below.getTopLeafTask();
+                        if (leaf != null && leaf != task) mHostFocused = leaf;
+                    }
                     break;
                 case 6:
                     if (command[5] != 0 && (command[5] < 72 || command[5] > 1280)) return;
