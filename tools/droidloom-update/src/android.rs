@@ -120,6 +120,10 @@ const PATCHES: &[(&str, &str)] = &[
         "android/aosp-patches/0029-angle-save-program-without-waiting.patch",
     ),
     (
+        "external/angle",
+        "android/aosp-patches/0030-angle-qcom-motion-estimation.patch",
+    ),
+    (
         "frameworks/native",
         "android/surfaceflinger/0009-droidloom-cpu-placement.patch",
     ),
