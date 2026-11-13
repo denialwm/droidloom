@@ -128,8 +128,9 @@ final class DroidloomCredential {
             long operation = data.readLong();
             String owner = data.readString(), title = data.readString(),
                     description = data.readString();
-            boolean shown = receiver != null && user == 0
-                    && ask(context, id, new Prompt(receiver, operation), owner, title, description);
+            boolean fingerprint = data.readBoolean();
+            boolean shown = receiver != null && user == 0 && ask(context, id,
+                    new Prompt(receiver, operation), owner, title, description, fingerprint);
             if (reply != null) {
                 reply.writeNoException();
                 reply.writeBoolean(shown);
@@ -159,7 +160,7 @@ final class DroidloomCredential {
 
     /** Announces a prompt to the supervisor; false when the host cannot show it. */
     private static boolean ask(Context context, long id, Prompt prompt, String owner, String title,
-            String description) {
+            String description, boolean fingerprint) {
         if (password() == null) return false;
         byte[] record;
         try {
@@ -168,6 +169,7 @@ final class DroidloomCredential {
                     .put("app", bounded(label(context, owner)))
                     .put("title", bounded(title))
                     .put("description", bounded(description))
+                    .put("fingerprint", fingerprint)
                     .toString().getBytes(StandardCharsets.UTF_8);
         } catch (JSONException error) {
             return false;

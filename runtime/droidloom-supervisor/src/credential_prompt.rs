@@ -125,6 +125,7 @@ async fn follow(spec: &CellSpec, stop: &Async<OwnedFd>) -> Result<(), String> {
             app: text("app"),
             title: text("title"),
             description: text("description"),
+            fingerprint: record["fingerprint"].as_bool().unwrap_or(false),
         };
         match ask.show(spec, init, id) {
             Ok(prompt) => {
@@ -174,6 +175,8 @@ struct Ask {
     app: String,
     title: String,
     description: String,
+    /// The fingerprint is also asked for; the sheet waits behind it.
+    fingerprint: bool,
 }
 
 impl Ask {
@@ -188,6 +191,7 @@ impl Ask {
             title: self.title,
             description: self.description,
             pin: pin.is_some(),
+            fingerprint: self.fingerprint,
         };
         broker
             .send_record(&message.encode(), &[])

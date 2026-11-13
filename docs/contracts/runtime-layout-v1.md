@@ -237,7 +237,9 @@ user's screen lock. SystemUI hands the prompt to `system_server`'s
 on `/dev/socket/droidloom-framework/credential-events` (system, 0600; root
 peers only): each open prompt when the supervisor connects, then each new one
 and each end, as a big-endian `u32` length and JSON (`{"ask":ID, "app",
-"title", "description"}` or `{"end":ID}`).
+"title", "description", "fingerprint"}` or `{"end":ID}`). `fingerprint` says
+the prompt also takes the host's fingerprint: the sheet waits folded behind
+it, and a matching finger ends the prompt.
 
 For each prompt the supervisor connects, as root, to the broker's fourth
 socket, `%t/droidloom/credential.sock` in the same unit, after checking that

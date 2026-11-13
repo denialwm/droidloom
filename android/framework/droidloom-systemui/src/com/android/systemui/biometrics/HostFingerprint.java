@@ -42,13 +42,16 @@ public final class HostFingerprint {
         }
     }
 
-    /** Nobody can press a confirm button, so a required confirmation comes with the match. */
-    public static void authenticated() {
+    /**
+     * Nobody can press a confirm button, so a required confirmation comes with the match. Returns
+     * the request ended, whose screen lock the host closes too, or 0.
+     */
+    public static long authenticated() {
         Request request = take();
-        if (request != null) {
-            dismiss(request, request.confirm ? BiometricPrompt.DISMISSED_REASON_BIOMETRIC_CONFIRMED
-                    : BiometricPrompt.DISMISSED_REASON_BIOMETRIC_CONFIRM_NOT_REQUIRED);
-        }
+        if (request == null) return 0;
+        dismiss(request, request.confirm ? BiometricPrompt.DISMISSED_REASON_BIOMETRIC_CONFIRMED
+                : BiometricPrompt.DISMISSED_REASON_BIOMETRIC_CONFIRM_NOT_REQUIRED);
+        return request.credential ? request.id : 0;
     }
 
     /**

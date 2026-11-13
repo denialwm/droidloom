@@ -22,9 +22,12 @@ public final class HostCredential {
     private static final String DESCRIPTOR = "droidloom.credential.prompts";
     private static final int ASK = IBinder.FIRST_CALL_TRANSACTION, END = ASK + 1;
 
-    /** False when the host cannot ask: the prompt then has no way through the credential. */
+    /**
+     * False when the host cannot ask: the prompt then has no way through the credential. With
+     * fingerprint, the host's sensor is asked for the same prompt.
+     */
     public static boolean show(PromptInfo info, IBiometricSysuiReceiver receiver, int userId,
-            long operationId, String packageName, long requestId) {
+            long operationId, String packageName, long requestId, boolean fingerprint) {
         IBinder service = ServiceManager.getService(SERVICE);
         if (service == null) return false;
         Parcel data = Parcel.obtain(), reply = Parcel.obtain();
@@ -40,6 +43,7 @@ public final class HostCredential {
             data.writeString(text(info == null ? null : info.getDeviceCredentialDescription(),
                     info == null ? null : info.getDescription(),
                     info == null ? null : info.getSubtitle()));
+            data.writeBoolean(fingerprint);
             service.transact(ASK, data, reply, 0);
             reply.readException();
             return reply.readBoolean();

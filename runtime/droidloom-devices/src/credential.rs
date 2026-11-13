@@ -108,6 +108,7 @@ pub fn serve(socket: &SeqPacket) -> io::Result<()> {
         title,
         description,
         pin,
+        fingerprint,
     } = ask
     else {
         return Err(io::Error::other("record for another endpoint"));
@@ -128,6 +129,9 @@ pub fn serve(socket: &SeqPacket) -> io::Result<()> {
     let mut credentials = Credential::Password as u32;
     if pin {
         credentials |= Credential::Pin as u32;
+    }
+    if fingerprint {
+        credentials |= Credential::Fingerprint as u32;
     }
     let sheet = verifier.verify(app, title, description, credentials, &handle, ());
     verifier.destroy();

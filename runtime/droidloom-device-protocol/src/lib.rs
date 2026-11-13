@@ -178,6 +178,8 @@ pub enum Message {
         description: String,
         /// The PIN can prove the user.
         pin: bool,
+        /// The app also takes a fingerprint for this prompt.
+        fingerprint: bool,
     },
     /// What the user typed: the PIN, or else the account password.
     CredentialSecret {
@@ -395,12 +397,14 @@ impl Message {
                 title,
                 description,
                 pin,
+                fingerprint,
             } => {
                 let mut writer = Writer::new(CREDENTIAL_ASK);
                 writer.text(app);
                 writer.text(title);
                 writer.text(description);
                 writer.u8(u8::from(*pin));
+                writer.u8(u8::from(*fingerprint));
                 writer
             }
             Message::CredentialSecret { pin, secret } => {
@@ -502,6 +506,7 @@ impl Message {
                 title: reader.text()?,
                 description: reader.text()?,
                 pin: reader.u8()? != 0,
+                fingerprint: reader.u8()? != 0,
             },
             CREDENTIAL_SECRET => Message::CredentialSecret {
                 pin: reader.u8()? != 0,
@@ -569,6 +574,7 @@ mod tests {
                 title: "Confirm it's you".into(),
                 description: String::new(),
                 pin: true,
+                fingerprint: true,
             },
             Message::CredentialSecret {
                 pin: false,
