@@ -82,7 +82,10 @@ PRODUCT_COPY_FILES += \
 # Mesa keeps compiled shaders in Android's EGL blob cache. The single-file
 # cache holds 2 MB, so a game compiled every shader again at each start; the
 # multi-file cache keeps up to 1 GiB per app.
+# Games are not held to Android's 60 fps default: SurfaceFlinger rounds it
+# down to a divisor of the host's refresh, 48 fps on a 144 Hz screen.
 PRODUCT_VENDOR_PROPERTIES += \
+    debug.graphics.game_default_frame_rate.disabled=true \
     ro.egl.blobcache.multifile=true \
     ro.egl.blobcache.multifile_limit=1073741824 \
     ro.egl.blobcache.multifile_entry_limit=65536 \
