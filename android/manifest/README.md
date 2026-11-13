@@ -42,7 +42,10 @@ frozen Composer V5 bindings, the complete generic Composer Binder library
 `android.hardware.graphics.composer3-service.droidloom` executable, and
 upstream minigbm's Allocator V3/Mapper V5 artifacts succeeds and assembles a
 real sparse ext4 `vendor.img`. The image also contains pinned Mesa 26.1.7
-Freedreno EGL/GLES and Turnip Vulkan drivers. A private Android SELinux policy
+Freedreno EGL/GLES and Turnip Vulkan drivers. ANGLE is rebuilt from
+`external/angle` at the superproject's commit, the one the base image ships,
+and the runtime mounts it over the base's `/system/lib64/lib*_angle.so`.
+A private Android SELinux policy
 cannot be loaded by a shared-kernel cell, so the package-owned VINTF device
 matrix records kernel policy version zero. A development-only compatibility
 interposer supplies the context operations Android init requires without

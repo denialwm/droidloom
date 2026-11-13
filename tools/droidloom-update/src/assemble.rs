@@ -420,6 +420,9 @@ pub fn assemble_artifacts(
         "libinputflinger.so",
         "libaudiobase.so",
         "libEGL.so",
+        "libEGL_angle.so",
+        "libGLESv1_CM_angle.so",
+        "libGLESv2_angle.so",
     ] {
         copy(
             &product.join("system/lib64").join(name),

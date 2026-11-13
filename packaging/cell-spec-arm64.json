@@ -32,6 +32,18 @@
       "target": "/system/lib64/libEGL.so"
     },
     {
+      "source": "/usr/lib/droidloom/current/lib64/libEGL_angle.so",
+      "target": "/system/lib64/libEGL_angle.so"
+    },
+    {
+      "source": "/usr/lib/droidloom/current/lib64/libGLESv1_CM_angle.so",
+      "target": "/system/lib64/libGLESv1_CM_angle.so"
+    },
+    {
+      "source": "/usr/lib/droidloom/current/lib64/libGLESv2_angle.so",
+      "target": "/system/lib64/libGLESv2_angle.so"
+    },
+    {
       "source": "/usr/lib/droidloom/current/systemui/SystemUI.apk",
       "target": "/system_ext/priv-app/SystemUI/SystemUI.apk"
     },

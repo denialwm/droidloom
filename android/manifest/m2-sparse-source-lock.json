@@ -2019,6 +2019,18 @@
       "name": "platform/external/libfuse",
       "commit": "47f83ca03e9ce8f8dc014605d059e3377ad2eafe",
       "purpose": "FUSE headers required by fuseMedia BPF dependency of the Droidloom vendor image"
+    },
+    {
+      "path": "external/angle",
+      "name": "platform/external/angle",
+      "commit": "1f4500d3906c24de59eec5b9cda17a2ad2a8ba2d",
+      "purpose": "ANGLE GLES-on-Vulkan libraries, rebuilt from the base image's commit so games on ANGLE can carry Droidloom fixes"
+    },
+    {
+      "path": "prebuilts/ndk",
+      "name": "platform/prebuilts/ndk",
+      "commit": "07e4c9cedacc5d60276ab061f52684f57d7dc87e",
+      "purpose": "NDK cpufeatures sources linked into ANGLE's compression utilities"
     }
   ]
 }
