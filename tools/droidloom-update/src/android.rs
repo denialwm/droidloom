@@ -738,6 +738,7 @@ const MESA_PATCHES: &[&str] = &[
     "0019-mesa-turnip-a722-no-bv.patch",
     "0022-mesa-monotonic-gl-names.patch",
     "0024-mesa-ir3-cache-source-identity.patch",
+    "0025-mesa-turnip-deferred-swapchain-bind.patch",
 ];
 pub fn build_targets(
     repo: &Path,
