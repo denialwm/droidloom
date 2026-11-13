@@ -104,7 +104,7 @@ mod tests {
 
     #[test]
     fn device_tree_model_is_cleaned() {
-        assert_eq!(value("OnePlus Ace 3\0").as_deref(), Some("OnePlus Ace 3"));
+        assert_eq!(value("OnePlus 12R\0").as_deref(), Some("OnePlus 12R"));
         assert_eq!(value("\0\n"), None);
         let long = "é".repeat(60);
         assert!(value(&long).unwrap().len() <= VALUE_BYTES);
@@ -125,14 +125,14 @@ mod tests {
     #[test]
     fn replaces_the_image_identity_and_keeps_everything_else() {
         let identity = Identity {
-            model: "OnePlus Ace 3".into(),
+            model: "OnePlus 12R".into(),
             name: Some("AstonDenial".into()),
         };
         let input = "# image\nro.product.product.model=Cuttlefish arm64 phone\nro.product.product.name=aosp_cf\n";
         let result = product_properties(input, &identity);
         assert_eq!(
             result,
-            "# image\nro.product.product.name=aosp_cf\nro.product.model=OnePlus Ace 3\nro.product.product.model=OnePlus Ace 3\nro.droidloom.device_name=AstonDenial\n"
+            "# image\nro.product.product.name=aosp_cf\nro.product.model=OnePlus 12R\nro.product.product.model=OnePlus 12R\nro.droidloom.device_name=AstonDenial\n"
         );
         assert_eq!(product_properties(&result, &identity), result);
         let unnamed = Identity {
