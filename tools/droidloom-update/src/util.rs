@@ -73,6 +73,9 @@ pub fn hash(path: &Path) -> Result<String> {
     }
     Ok(hex::encode(hash.finalize()))
 }
+pub fn sha256_hex(bytes: impl AsRef<[u8]>) -> String {
+    hex::encode(Sha256::digest(bytes))
+}
 pub fn write(path: &Path, bytes: impl AsRef<[u8]>) -> Result<()> {
     fs::create_dir_all(path.parent().ok_or("path has no parent")?)?;
     if fs::read(path).ok().as_deref() != Some(bytes.as_ref()) {

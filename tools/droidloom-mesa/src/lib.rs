@@ -196,6 +196,27 @@ pub fn prepare(
     })
 }
 
+/// Digest of the inputs a prepared tree was made from: the Mesa archive and
+/// every patch, by name and content. Unlike the tree digest it ignores files
+/// the host's tools leave behind, so equal inputs give equal identities.
+///
+/// # Errors
+///
+/// Returns an error when the prepared tree has no readable manifest.
+pub fn source_identity(output_path: &Path) -> Result<String, PrepareError> {
+    let manifest: PreparedManifest =
+        serde_json::from_reader(File::open(output_path.join(MANIFEST_NAME))?)?;
+    let mut digest = Sha256::new();
+    digest.update(manifest.archive_sha256.as_bytes());
+    for patch in &manifest.patches {
+        digest.update(b"\n");
+        digest.update(patch.name.as_bytes());
+        digest.update(b" ");
+        digest.update(patch.sha256.as_bytes());
+    }
+    Ok(hex::encode(digest.finalize()))
+}
+
 fn validate_lock(lock: &MesaLock) -> Result<(), PrepareError> {
     if !lock.url.starts_with("https://archive.mesa3d.org/mesa-") || !lock.url.ends_with(".tar.xz") {
         return Err(PrepareError::Invalid(format!(

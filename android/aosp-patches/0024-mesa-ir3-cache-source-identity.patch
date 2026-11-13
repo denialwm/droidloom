@@ -1,0 +1,45 @@
+freedreno: key the shader cache by Mesa's source, not the build-id
+
+ir3 derived its disk cache identity from the build-id of the library it is
+linked into. Mesa's Python generators emit their tables in hash order and
+the release and local workspaces build their host shader tools separately,
+so every rebuild of the same source linked a new build-id. Wuthering Waves
+on the Pad 4 then compiled all its shaders again after each Droidloom
+update. The identity is now the digest of the Mesa archive and every patch
+Droidloom applies to it.
+
+--- a/src/freedreno/ir3/ir3_disk_cache.c
++++ b/src/freedreno/ir3/ir3_disk_cache.c
+@@ -7,6 +7,7 @@
+ 
+ #include "ir3_compiler.h"
+ #include "ir3_nir.h"
++#include "droidloom_mesa_identity.h"
+ 
+ #define debug 0
+ 
+@@ -34,18 +35,16 @@
+       return;
+ 
+    const char *renderer = fd_dev_name(compiler->dev_id);
+-   const struct build_id_note *note =
+-      build_id_find_nhdr_for_addr(ir3_disk_cache_init);
+-   unsigned build_id_len = build_id_length(note);
+-   assert(note && build_id_len == BUILD_ID_EXPECTED_HASH_LENGTH); /* sha1 */
+-
+-   const uint8_t *id_sha1 = build_id_data(note);
+-   assert(id_sha1);
+ 
++   /* Entries are keyed by the Mesa source this build compiles, not by the
++    * library's build-id: each rebuild of the same source links a different
++    * build-id, and every stored shader would be compiled again.
++    */
+    blake3_hasher ctx;
+    uint8_t blake3[BLAKE3_KEY_LEN];
+    _mesa_blake3_init(&ctx);
+-   _mesa_blake3_update(&ctx, id_sha1, build_id_len);
++   _mesa_blake3_update(&ctx, DROIDLOOM_MESA_IDENTITY,
++                       sizeof(DROIDLOOM_MESA_IDENTITY) - 1);
+    _mesa_blake3_update(&ctx, &compiler->options.uche_trap_base,
+                      sizeof(compiler->options.uche_trap_base));
+    _mesa_blake3_final(&ctx, blake3);

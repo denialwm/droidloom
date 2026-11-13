@@ -727,6 +727,18 @@ fn full_targets(product: &str) -> Vec<&'static str> {
         .filter(|name| product != "droidloom_arm64" || *name != "droidloom-native-bridge")
         .collect()
 }
+// Applied in order to the prepared Mesa source in the vendor tree.
+const MESA_PATCHES: &[&str] = &[
+    "0011-mesa-zink-kgsl.patch",
+    "0012-mesa-adreno722.patch",
+    "0013-mesa-texture-upload-span.patch",
+    "0014-mesa-background-cpu-placement.patch",
+    "0016-mesa-turnip-hwui-queues.patch",
+    "0018-mesa-ir3-alias-array-sources.patch",
+    "0019-mesa-turnip-a722-no-bv.patch",
+    "0022-mesa-monotonic-gl-names.patch",
+    "0024-mesa-ir3-cache-source-identity.patch",
+];
 pub fn build_targets(
     repo: &Path,
     source: &Path,
@@ -865,45 +877,17 @@ pub fn build_targets(
         .args(["-a", "--delete"])
         .arg(format!("{}/", work.join("mesa-source").display()))
         .arg(&mesa))?;
-    p.patch(
-        source,
-        "vendor/droidloom/mesa3d",
-        &repo.join("android/aosp-patches/0011-mesa-zink-kgsl.patch"),
-    )?;
-    p.patch(
-        source,
-        "vendor/droidloom/mesa3d",
-        &repo.join("android/aosp-patches/0012-mesa-adreno722.patch"),
-    )?;
-    p.patch(
-        source,
-        "vendor/droidloom/mesa3d",
-        &repo.join("android/aosp-patches/0013-mesa-texture-upload-span.patch"),
-    )?;
-    p.patch(
-        source,
-        "vendor/droidloom/mesa3d",
-        &repo.join("android/aosp-patches/0014-mesa-background-cpu-placement.patch"),
-    )?;
-    p.patch(
-        source,
-        "vendor/droidloom/mesa3d",
-        &repo.join("android/aosp-patches/0016-mesa-turnip-hwui-queues.patch"),
-    )?;
-    p.patch(
-        source,
-        "vendor/droidloom/mesa3d",
-        &repo.join("android/aosp-patches/0018-mesa-ir3-alias-array-sources.patch"),
-    )?;
-    p.patch(
-        source,
-        "vendor/droidloom/mesa3d",
-        &repo.join("android/aosp-patches/0019-mesa-turnip-a722-no-bv.patch"),
-    )?;
-    p.patch(
-        source,
-        "vendor/droidloom/mesa3d",
-        &repo.join("android/aosp-patches/0022-mesa-monotonic-gl-names.patch"),
+    // ir3 keys its shader cache by the digest of Mesa's prepared source and
+    // these patches: a rebuild of the same source keeps the games' shaders.
+    let mut identity = droidloom_mesa::source_identity(&work.join("mesa-source"))?;
+    for name in MESA_PATCHES {
+        let patch = repo.join("android/aosp-patches").join(name);
+        p.patch(source, "vendor/droidloom/mesa3d", &patch)?;
+        identity = sha256_hex(format!("{identity}\n{name} {}", hash(&patch)?));
+    }
+    p.put(
+        &mesa.join("src/freedreno/ir3/droidloom_mesa_identity.h"),
+        format!("#define DROIDLOOM_MESA_IDENTITY \"{identity}\"\n"),
     )?;
     let cross = mesa.join("android/mesa3d_cross.mk");
     let cross_text = fs::read_to_string(&cross)?;
