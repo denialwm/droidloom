@@ -124,6 +124,10 @@ const PATCHES: &[(&str, &str)] = &[
         "android/aosp-patches/0030-angle-qcom-motion-estimation.patch",
     ),
     (
+        "external/angle",
+        "android/aosp-patches/0031-angle-version-after-blank-lines.patch",
+    ),
+    (
         "frameworks/native",
         "android/surfaceflinger/0009-droidloom-cpu-placement.patch",
     ),

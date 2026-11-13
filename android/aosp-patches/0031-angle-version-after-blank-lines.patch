@@ -1,0 +1,27 @@
+ANGLE: accept blank lines before #version 300 es and later
+
+ANGLE's preprocessor rejected #version 300 es and later unless it sat on
+the very first line. Qualcomm's frame generation library starts every
+shader with a newline, which Qualcomm's and Mesa's compilers accept, so
+none of its shaders compiled. Blank lines and comments may now come
+first; any other token before #version is still an error.
+
+diff --git a/src/compiler/preprocessor/DirectiveParser.cpp b/src/compiler/preprocessor/DirectiveParser.cpp
+index ab6f9a2..bcd6a30 100644
+--- a/src/compiler/preprocessor/DirectiveParser.cpp
++++ b/src/compiler/preprocessor/DirectiveParser.cpp
+@@ -790,12 +790,8 @@ void DirectiveParser::parseVersion(Token *token)
+         valid = false;
+     }
+ 
+-    if (valid && version >= 300 && token->location.line > 1)
+-    {
+-        mDiagnostics->report(Diagnostics::PP_VERSION_NOT_FIRST_LINE_ESSL3, token->location,
+-                             token->text);
+-        valid = false;
+-    }
++    // Droidloom: blank lines and comments may precede #version 300 es and later, as Qualcomm's
++    // and Mesa's compilers allow.  Anything else before it is still PP_VERSION_NOT_FIRST_STATEMENT.
+ 
+     if (valid)
+     {
