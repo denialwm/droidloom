@@ -1,0 +1,96 @@
+util: keep the Mesa shader cache in each Android app's cache directory
+
+Mesa's disk cache was off on Android, because GL uses EGL_ANDROID_blob_cache.
+Vulkan has no such cache, so turnip kept compiled shaders only in the
+VkPipelineCache objects an application saves itself. ANGLE saves them inside
+GL program binaries and never saves its final pipelines; a game such as
+Wuthering Waves keeps those binaries for good, so once turnip's cache UUID
+moved, every run compiled its shaders again while drawing and stalled.
+
+An app process now gets the cache in /data/user_de/<user>/<package>/cache,
+next to the EGL blob cache. Clearing the app's cache clears it too. GL still
+uses the blob cache, whose callbacks take over from the directory, and
+processes without an app cache directory keep the cache off.
+
+diff --git a/src/util/disk_cache_os.c b/src/util/disk_cache_os.c
+--- a/src/util/disk_cache_os.c
++++ b/src/util/disk_cache_os.c
+@@ -875,6 +875,42 @@
+    blob_finish(&cache_blob);
+ }
+ 
++#if DETECT_OS_ANDROID
++/* An Android app has no home directory. Its own cache directory, where the
++ * framework also keeps the EGL blob cache, holds the Mesa cache, so Vulkan
++ * drivers keep their shaders across runs. Processes without one, such as
++ * system services and isolated processes, keep the cache off.
++ */
++static char *
++android_app_cache_dir(void *mem_ctx)
++{
++   char name[256];
++   int fd = open("/proc/self/cmdline", O_RDONLY | O_CLOEXEC);
++   if (fd < 0)
++      return NULL;
++   ssize_t n = read(fd, name, sizeof(name) - 1);
++   close(fd);
++   if (n <= 0)
++      return NULL;
++   name[n] = '\0';
++
++   /* Secondary processes of an app are named "package:process". */
++   char *colon = strchr(name, ':');
++   if (colon)
++      *colon = '\0';
++   if (name[0] == '\0' || strchr(name, '/'))
++      return NULL;
++
++   char *dir = ralloc_asprintf(mem_ctx, "/data/user_de/%u/%s/cache",
++                               (unsigned)(getuid() / 100000), name);
++   if (access(dir, W_OK | X_OK) != 0) {
++      ralloc_free(dir);
++      return NULL;
++   }
++   return dir;
++}
++#endif
++
+ /* Determine path for cache based on the first defined name as follows:
+  *
+  *   $MESA_SHADER_CACHE_DIR/mesa_shader_cache*
+@@ -926,6 +962,18 @@
+          return NULL;
+    }
+ 
++#if DETECT_OS_ANDROID
++   if (path == NULL) {
++      char *app_cache = android_app_cache_dir(mem_ctx);
++      if (app_cache) {
++         path = concatenate_and_mkdir(mem_ctx, app_cache, cache_dir_name,
++                                      mkdir);
++         if (!path)
++            return NULL;
++      }
++   }
++#endif
++
+    if (path == NULL) {
+       const char *xdg_cache_home = os_get_option_secure("XDG_CACHE_HOME");
+ 
+@@ -1014,8 +1062,15 @@
+     * Don't forget to also set the shader cache path to something readable
+     * and writable by the application via `mesa.shader.cache.dir`.
+     */
+-#if defined(SHADER_CACHE_DISABLE_BY_DEFAULT) || DETECT_OS_ANDROID
++#if defined(SHADER_CACHE_DISABLE_BY_DEFAULT)
+    bool disable_by_default = true;
++#elif DETECT_OS_ANDROID
++   /* Apps get the cache in their own cache directory. GL keeps using
++    * EGL_ANDROID_blob_cache: its callbacks take over from the directory.
++    */
++   char *app_cache = android_app_cache_dir(NULL);
++   bool disable_by_default = app_cache == NULL;
++   ralloc_free(app_cache);
+ #else
+    bool disable_by_default = false;
+ #endif

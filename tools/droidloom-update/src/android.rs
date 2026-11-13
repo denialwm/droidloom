@@ -741,6 +741,7 @@ const MESA_PATCHES: &[&str] = &[
     "0025-mesa-turnip-deferred-swapchain-bind.patch",
     "0026-mesa-turnip-cache-source-identity.patch",
     "0027-mesa-turnip-lrz-default-attachment-locations.patch",
+    "0028-mesa-android-app-shader-cache.patch",
 ];
 pub fn build_targets(
     repo: &Path,
