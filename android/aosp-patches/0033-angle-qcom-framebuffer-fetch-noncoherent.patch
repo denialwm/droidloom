@@ -1,0 +1,241 @@
+ANGLE: GL_QCOM_shader_framebuffer_fetch_noncoherent
+
+Qualcomm's driver offers framebuffer fetch under this name as well, and
+games written for Adreno look for it. Where ANGLE has coherent fetch it
+now offers the extension too: FRAMEBUFFER_FETCH_NONCOHERENT_QCOM is kept
+for IsEnabled while reads stay coherent, and glFramebufferFetchBarrierQCOM
+is the EXT barrier.
+
+diff --git a/src/common/entry_points_enum_autogen.cpp b/src/common/entry_points_enum_autogen.cpp
+index db385e2..2be6776 100644
+--- a/src/common/entry_points_enum_autogen.cpp
++++ b/src/common/entry_points_enum_autogen.cpp
+@@ -930,6 +930,8 @@ const char *GetEntryPointName(EntryPoint ep)
+             return "glFogxv";
+         case EntryPoint::GLFramebufferFetchBarrierEXT:
+             return "glFramebufferFetchBarrierEXT";
++        case EntryPoint::GLFramebufferFetchBarrierQCOM:
++            return "glFramebufferFetchBarrierQCOM";
+         case EntryPoint::GLFramebufferFoveationConfigQCOM:
+             return "glFramebufferFoveationConfigQCOM";
+         case EntryPoint::GLFramebufferFoveationParametersQCOM:
+diff --git a/src/common/entry_points_enum_autogen.h b/src/common/entry_points_enum_autogen.h
+index 0beaf3c..a4940a0 100644
+--- a/src/common/entry_points_enum_autogen.h
++++ b/src/common/entry_points_enum_autogen.h
+@@ -471,6 +471,7 @@ enum class EntryPoint
+     GLFogx,
+     GLFogxv,
+     GLFramebufferFetchBarrierEXT,
++    GLFramebufferFetchBarrierQCOM,
+     GLFramebufferFoveationConfigQCOM,
+     GLFramebufferFoveationParametersQCOM,
+     GLFramebufferMemorylessPixelLocalStorageANGLE,
+diff --git a/src/libANGLE/State.cpp b/src/libANGLE/State.cpp
+index ad864ea..cb65342 100644
+--- a/src/libANGLE/State.cpp
++++ b/src/libANGLE/State.cpp
+@@ -391,6 +391,7 @@ PrivateState::PrivateState(const Version &clientVersion,
+       mBoundingBoxMaxZ(1.0f),
+       mBoundingBoxMaxW(1.0f),
+       mShadingRatePreserveAspectRatio(false),
++      mFramebufferFetchNoncoherentQCOM(false),
+       mShadingRateQCOM(ShadingRate::Undefined),
+       // If the shading rate has not been set, the shading rate will be SHADING_RATE_1X1_PIXELS_EXT
+       mShadingRateEXT(ShadingRate::_1x1),
+@@ -1572,6 +1573,9 @@ void PrivateState::setEnableFeature(GLenum feature, bool enabled)
+         case GL_SHADING_RATE_PRESERVE_ASPECT_RATIO_QCOM:
+             mShadingRatePreserveAspectRatio = enabled;
+             return;
++        case GL_FRAMEBUFFER_FETCH_NONCOHERENT_QCOM:
++            mFramebufferFetchNoncoherentQCOM = enabled;
++            return;
+         case GL_FETCH_PER_SAMPLE_ARM:
+             setFetchPerSample(enabled);
+             return;
+@@ -1739,6 +1743,8 @@ bool PrivateState::getEnableFeature(GLenum feature) const
+             break;
+         case GL_SHADING_RATE_PRESERVE_ASPECT_RATIO_QCOM:
+             return mShadingRatePreserveAspectRatio;
++        case GL_FRAMEBUFFER_FETCH_NONCOHERENT_QCOM:
++            return mFramebufferFetchNoncoherentQCOM;
+         case GL_FETCH_PER_SAMPLE_ARM:
+             return mFetchPerSample;
+     }
+diff --git a/src/libANGLE/State.h b/src/libANGLE/State.h
+index 67bc68d..c5406f4 100644
+--- a/src/libANGLE/State.h
++++ b/src/libANGLE/State.h
+@@ -806,6 +806,9 @@ class PrivateState : angle::NonCopyable
+ 
+     // QCOM_shading_rate
+     bool mShadingRatePreserveAspectRatio;
++
++    // GL_QCOM_shader_framebuffer_fetch_noncoherent: kept for IsEnabled, fetch stays coherent.
++    bool mFramebufferFetchNoncoherentQCOM;
+     ShadingRate mShadingRateQCOM;
+ 
+     // GL_EXT_fragment_shading_rate
+diff --git a/src/libANGLE/gles_extensions_autogen.cpp b/src/libANGLE/gles_extensions_autogen.cpp
+index fad9dbb..3810a45 100644
+--- a/src/libANGLE/gles_extensions_autogen.cpp
++++ b/src/libANGLE/gles_extensions_autogen.cpp
+@@ -221,6 +221,7 @@ const ExtensionInfoMap &GetExtensionInfoMap()
+         map["GL_ANGLE_texture_usage"] = enableableExtension(&Extensions::textureUsageANGLE);
+         map["GL_QCOM_tiled_rendering"] = enableableExtension(&Extensions::tiledRenderingQCOM);
+         map["GL_QCOM_motion_estimation"] = enableableExtension(&Extensions::motionEstimationQCOM);
++        map["GL_QCOM_shader_framebuffer_fetch_noncoherent"] = enableableExtension(&Extensions::shaderFramebufferFetchNoncoherentQCOM);
+         map["GL_ANGLE_translated_shader_source"] = esOnlyExtension(&Extensions::translatedShaderSourceANGLE);
+         map["GL_EXT_unpack_subimage"] = enableableExtension(&Extensions::unpackSubimageEXT);
+         map["GL_OES_vertex_array_object"] = enableableExtension(&Extensions::vertexArrayObjectOES);
+diff --git a/src/libANGLE/gles_extensions_autogen.h b/src/libANGLE/gles_extensions_autogen.h
+index dc9658d..fcf176b 100644
+--- a/src/libANGLE/gles_extensions_autogen.h
++++ b/src/libANGLE/gles_extensions_autogen.h
+@@ -647,6 +647,9 @@ struct Extensions
+     // GL_QCOM_motion_estimation
+     bool motionEstimationQCOM = false;
+ 
++    // GL_QCOM_shader_framebuffer_fetch_noncoherent
++    bool shaderFramebufferFetchNoncoherentQCOM = false;
++
+     // GL_ANGLE_translated_shader_source
+     bool translatedShaderSourceANGLE = false;
+ 
+diff --git a/src/libANGLE/renderer/vulkan/vk_caps_utils.cpp b/src/libANGLE/renderer/vulkan/vk_caps_utils.cpp
+index d3e538d..729f451 100644
+--- a/src/libANGLE/renderer/vulkan/vk_caps_utils.cpp
++++ b/src/libANGLE/renderer/vulkan/vk_caps_utils.cpp
+@@ -1025,6 +1025,9 @@ void Renderer::ensureCapsInitialized() const
+     {
+         mNativeExtensions.shaderFramebufferFetchEXT = true;
+         mNativeExtensions.shaderFramebufferFetchARM = true;
++        // Droidloom: coherent fetch also serves Qualcomm's noncoherent mode, whose barrier then
++        // has nothing to wait for.
++        mNativeExtensions.shaderFramebufferFetchNoncoherentQCOM = true;
+         // ANGLE correctly maps gl_LastFragColorARM to input attachment 0 and has no problem with
+         // MRT.
+         mNativeCaps.fragmentShaderFramebufferFetchMRT = true;
+diff --git a/src/libANGLE/validationES2.cpp b/src/libANGLE/validationES2.cpp
+index 43f58f7..7ae73e3 100644
+--- a/src/libANGLE/validationES2.cpp
++++ b/src/libANGLE/validationES2.cpp
+@@ -709,6 +709,9 @@ bool ValidCapUncommon(const PrivateState &state, ErrorSet *errors, GLenum cap, b
+         case GL_FETCH_PER_SAMPLE_ARM:
+             return state.getExtensions().shaderFramebufferFetchARM;
+ 
++        case GL_FRAMEBUFFER_FETCH_NONCOHERENT_QCOM:
++            return state.getExtensions().shaderFramebufferFetchNoncoherentQCOM;
++
+         case GL_FRAGMENT_SHADER_FRAMEBUFFER_FETCH_MRT_ARM:
+             return queryOnly && state.getExtensions().shaderFramebufferFetchARM;
+ 
+diff --git a/src/libANGLE/validationESEXT.cpp b/src/libANGLE/validationESEXT.cpp
+index f753a50..c45bb31 100644
+--- a/src/libANGLE/validationESEXT.cpp
++++ b/src/libANGLE/validationESEXT.cpp
+@@ -2577,6 +2577,11 @@ bool ValidateFramebufferFetchBarrierEXT(const Context *context, angle::EntryPoin
+     return true;
+ }
+ 
++bool ValidateFramebufferFetchBarrierQCOM(const Context *context, angle::EntryPoint entryPoint)
++{
++    return true;
++}
++
+ bool ValidatePatchParameteriEXT(const PrivateState &state,
+                                 ErrorSet *errors,
+                                 angle::EntryPoint entryPoint,
+diff --git a/src/libANGLE/validationESEXT_autogen.h b/src/libANGLE/validationESEXT_autogen.h
+index 50add76..f5171bd 100644
+--- a/src/libANGLE/validationESEXT_autogen.h
++++ b/src/libANGLE/validationESEXT_autogen.h
+@@ -1832,6 +1832,9 @@ bool ValidateValidateProgramPipelineEXT(const Context *context,
+ // GL_EXT_shader_framebuffer_fetch_non_coherent
+ bool ValidateFramebufferFetchBarrierEXT(const Context *context, angle::EntryPoint entryPoint);
+ 
++// GL_QCOM_shader_framebuffer_fetch_noncoherent
++bool ValidateFramebufferFetchBarrierQCOM(const Context *context, angle::EntryPoint entryPoint);
++
+ // GL_EXT_shader_io_blocks
+ 
+ // GL_EXT_shader_non_constant_global_initializers
+diff --git a/src/libGLESv2/egl_stubs_getprocaddress_autogen.cpp b/src/libGLESv2/egl_stubs_getprocaddress_autogen.cpp
+index 824ab5b..2e24ce3 100644
+--- a/src/libGLESv2/egl_stubs_getprocaddress_autogen.cpp
++++ b/src/libGLESv2/egl_stubs_getprocaddress_autogen.cpp
+@@ -379,6 +379,7 @@ const ProcEntry g_procTable[] = {
+     {"glFogx", P(GL_Fogx)},
+     {"glFogxv", P(GL_Fogxv)},
+     {"glFramebufferFetchBarrierEXT", P(GL_FramebufferFetchBarrierEXT)},
++    {"glFramebufferFetchBarrierQCOM", P(GL_FramebufferFetchBarrierQCOM)},
+     {"glFramebufferFoveationConfigQCOM", P(GL_FramebufferFoveationConfigQCOM)},
+     {"glFramebufferFoveationParametersQCOM", P(GL_FramebufferFoveationParametersQCOM)},
+     {"glFramebufferMemorylessPixelLocalStorageANGLE", P(GL_FramebufferMemorylessPixelLocalStorageANGLE)},
+diff --git a/src/libGLESv2/entry_points_gles_ext_autogen.cpp b/src/libGLESv2/entry_points_gles_ext_autogen.cpp
+index c0fb603..8e190ab 100644
+--- a/src/libGLESv2/entry_points_gles_ext_autogen.cpp
++++ b/src/libGLESv2/entry_points_gles_ext_autogen.cpp
+@@ -13489,6 +13489,48 @@ void GL_APIENTRY GL_FramebufferFetchBarrierEXT()
+     ASSERT(!egl::Display::GetCurrentThreadUnlockedTailCall()->any());
+ }
+ 
++// GL_QCOM_shader_framebuffer_fetch_noncoherent
++void GL_APIENTRY GL_FramebufferFetchBarrierQCOM()
++{
++    ASSERT(!egl::Display::GetCurrentThreadUnlockedTailCall()->any());
++    Context *context = GetValidGlobalContext();
++    ANGLE_UNSAFE_TODO(EVENT(context, GLFramebufferFetchBarrierQCOM, "context = %d", CID(context)));
++
++    if (ANGLE_LIKELY(context != nullptr))
++    {
++        SCOPED_SHARE_CONTEXT_LOCK(context);
++        bool isCallValid = context->skipValidation();
++        if (!isCallValid)
++        {
++            if (ANGLE_LIKELY(context->getExtensions().shaderFramebufferFetchNoncoherentQCOM))
++            {
++#if defined(ANGLE_ENABLE_ASSERTS)
++                const uint32_t errorCount = context->getPushedErrorCount();
++#endif
++                isCallValid = ValidateFramebufferFetchBarrierQCOM(
++                    context, angle::EntryPoint::GLFramebufferFetchBarrierQCOM);
++#if defined(ANGLE_ENABLE_ASSERTS)
++                ASSERT(context->getPushedErrorCount() - errorCount == (isCallValid ? 0 : 1));
++#endif
++            }
++            else
++            {
++                RecordVersionErrorESEXT(context, angle::EntryPoint::GLFramebufferFetchBarrierQCOM);
++            }
++        }
++        if (ANGLE_LIKELY(isCallValid))
++        {
++            context->framebufferFetchBarrier();
++        }
++    }
++    else
++    {
++        GenerateContextLostErrorOnCurrentGlobalContext(
++            angle::EntryPoint::GLFramebufferFetchBarrierQCOM);
++    }
++    ASSERT(!egl::Display::GetCurrentThreadUnlockedTailCall()->any());
++}
++
+ // GL_EXT_shader_io_blocks
+ 
+ // GL_EXT_shader_non_constant_global_initializers
+diff --git a/src/libGLESv2/entry_points_gles_ext_autogen.h b/src/libGLESv2/entry_points_gles_ext_autogen.h
+index 6b51481..7a8bc09 100644
+--- a/src/libGLESv2/entry_points_gles_ext_autogen.h
++++ b/src/libGLESv2/entry_points_gles_ext_autogen.h
+@@ -1244,6 +1244,9 @@ ANGLE_EXPORT void GL_APIENTRY GL_ValidateProgramPipelineEXT(GLuint pipeline);
+ // GL_EXT_shader_framebuffer_fetch_non_coherent
+ ANGLE_EXPORT void GL_APIENTRY GL_FramebufferFetchBarrierEXT();
+ 
++// GL_QCOM_shader_framebuffer_fetch_noncoherent
++ANGLE_EXPORT void GL_APIENTRY GL_FramebufferFetchBarrierQCOM();
++
+ // GL_EXT_shader_io_blocks
+ 
+ // GL_EXT_shader_non_constant_global_initializers

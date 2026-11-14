@@ -132,6 +132,10 @@ const PATCHES: &[(&str, &str)] = &[
         "android/aosp-patches/0032-angle-log-validation-errors.patch",
     ),
     (
+        "external/angle",
+        "android/aosp-patches/0033-angle-qcom-framebuffer-fetch-noncoherent.patch",
+    ),
+    (
         "frameworks/native",
         "android/surfaceflinger/0009-droidloom-cpu-placement.patch",
     ),
