@@ -44,6 +44,17 @@ encoding for unchanged entries. No extra persistent host daemon or
 compositor extension is needed. Inline replies and custom Android layouts are
 outside the current mapping.
 
+## Apps that check the hardware by name
+
+Some apps check the chip or the GPU driver by name before turning on a
+feature, as Wuthering Waves does for Qualcomm frame generation. Android keeps
+the stock names in persistent properties and copies them at every Droidloom
+start: `persist.vendor.droidloom.soc_model` becomes `ro.soc.model`, and
+`persist.vendor.droidloom.angle.gl_renderer` and `.angle.gl_version` become
+ANGLE's GL_RENDERER and GL_VERSION. Set them once inside Android with
+`setprop`; they take effect at the next start. ANGLE's strings reach only apps
+that run on ANGLE.
+
 ## Diagnostics
 
 As the desktop user, without sudo:

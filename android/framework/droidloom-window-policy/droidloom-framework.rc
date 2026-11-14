@@ -20,6 +20,19 @@ on post-fs-data
     # profile-only compilation. Inactive-app storage reclamation is unchanged.
     setprop pm.dexopt.bg-dexopt speed
 
+# Some apps check the chip or GPU driver by name, as a game's Qualcomm frame
+# generation does. A phone keeps its stock names in these persistent
+# properties; init copies them at every start, before zygote. ro.soc.model
+# takes one value per start.
+on property:persist.vendor.droidloom.soc_model=*
+    setprop ro.soc.model ${persist.vendor.droidloom.soc_model}
+
+on property:persist.vendor.droidloom.angle.gl_renderer=*
+    setprop debug.angle.gl_renderer ${persist.vendor.droidloom.angle.gl_renderer}
+
+on property:persist.vendor.droidloom.angle.gl_version=*
+    setprop debug.angle.gl_version ${persist.vendor.droidloom.angle.gl_version}
+
 on property:init.svc.zygote=stopped
     setprop sys.droidloom.framework_ready 0
     setprop sys.droidloom.credential locked
