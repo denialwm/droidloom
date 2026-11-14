@@ -1,0 +1,38 @@
+ANGLE: keep every color attachment over depth/stencil fetch
+
+Turnip offers 8 input attachments, as many as color attachments. To offer
+GL_ARM_shader_framebuffer_fetch_depth_stencil ANGLE then cut the color
+attachments and draw buffers to 6. Adreno's own driver offers 8 together
+with depth/stencil fetch, and games written for it size their G-buffers
+for 8: Wuthering Waves skips its velocity target with fewer and its frame
+generation then reads a texture that was never made. Depth/stencil fetch
+is now offered only where it fits beside every color attachment.
+
+diff --git a/src/libANGLE/renderer/vulkan/vk_renderer.cpp b/src/libANGLE/renderer/vulkan/vk_renderer.cpp
+index 38dddb9..4e328bc 100644
+--- a/src/libANGLE/renderer/vulkan/vk_renderer.cpp
++++ b/src/libANGLE/renderer/vulkan/vk_renderer.cpp
+@@ -6700,6 +6700,12 @@ void Renderer::initFeatures(const vk::ExtensionNameList &deviceExtensionNames,
+     //
+     // Additionally, the implementation assumes VK_KHR_dynamic_rendering_local_read to avoid
+     // complications with VkRenderPass objects.
++    //
++    // Droidloom: only where depth and stencil fit beside every color attachment as input
++    // attachments.  Otherwise ANGLE would offer fewer color attachments than the device has, 6
++    // instead of 8 on Adreno with turnip, and games written for Adreno's own driver, which offers
++    // 8 together with depth/stencil fetch, drop render targets they still read.
++    const VkPhysicalDeviceLimits &limits = mPhysicalDeviceProperties.limits;
+     ANGLE_FEATURE_CONDITION(
+         &mFeatures, supportsShaderFramebufferFetchDepthStencil,
+         mFeatures.supportsShaderFramebufferFetch.enabled &&
+@@ -6707,7 +6713,9 @@ void Renderer::initFeatures(const vk::ExtensionNameList &deviceExtensionNames,
+                 VK_TRUE &&
+             mRasterizationOrderAttachmentAccessFeatures.rasterizationOrderStencilAttachmentAccess ==
+                 VK_TRUE &&
+-            mFeatures.preferDynamicRendering.enabled);
++            mFeatures.preferDynamicRendering.enabled &&
++            std::min(limits.maxColorAttachments, limits.maxFragmentOutputAttachments) + 2 <=
++                limits.maxPerStageDescriptorInputAttachments);
+ 
+     ANGLE_FEATURE_CONDITION(&mFeatures, supportsSynchronization2,
+                             mSynchronization2Features.synchronization2 == VK_TRUE);
