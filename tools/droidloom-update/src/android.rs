@@ -140,6 +140,10 @@ const PATCHES: &[(&str, &str)] = &[
         "android/aosp-patches/0034-angle-keep-every-color-attachment.patch",
     ),
     (
+        "external/angle",
+        "android/aosp-patches/0035-angle-motion-vector-scale.patch",
+    ),
+    (
         "frameworks/native",
         "android/surfaceflinger/0009-droidloom-cpu-placement.patch",
     ),
