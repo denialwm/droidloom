@@ -60,6 +60,9 @@ mod credential_prompt;
 #[path = "ui_mode.rs"]
 mod ui_mode;
 
+#[path = "games_driver.rs"]
+mod games_driver;
+
 use progress::{LOG_HINT, Reporter};
 
 /// Default root-owned lifecycle socket.
@@ -205,6 +208,23 @@ pub enum ControlRequest {
         /// Dark when true, light otherwise.
         night: bool,
     },
+    /// Read the OpenGL driver games start with.
+    GamesDriver,
+    /// Keep an OpenGL driver for games; each takes it when it next starts.
+    SetGamesDriver {
+        /// The driver.
+        driver: GlDriver,
+    },
+}
+
+/// An OpenGL driver for Android apps.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GlDriver {
+    /// ANGLE, over the Vulkan driver.
+    Angle,
+    /// Mesa's own OpenGL driver.
+    Mesa,
 }
 
 /// Coarse lifecycle state exposed to users and session integration.
@@ -370,6 +390,9 @@ pub struct ControlResponse {
     /// The display's density, when requested.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub display: Option<DisplayDensity>,
+    /// The OpenGL driver games start with.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub games_driver: Option<GlDriver>,
 }
 
 /// Daemon filesystem and executable configuration.
@@ -525,6 +548,8 @@ impl Daemon {
             ControlRequest::Display => self.display(peer_uid),
             ControlRequest::SetDpi { spec, dpi } => self.set_dpi(peer_uid, &spec, dpi),
             ControlRequest::SetNightMode { night } => self.set_night_mode(peer_uid, night),
+            ControlRequest::GamesDriver => self.games_driver(peer_uid),
+            ControlRequest::SetGamesDriver { driver } => self.set_games_driver(peer_uid, driver),
             ControlRequest::Stats => self.stats(peer_uid),
             ControlRequest::ApplicationDetails { package, user } => {
                 self.application_details(peer_uid, &package, user)
@@ -580,6 +605,7 @@ impl Daemon {
             stats: None,
             application: None,
             display: None,
+            games_driver: None,
         })
     }
 
@@ -807,6 +833,7 @@ impl Daemon {
             stats: None,
             application: None,
             display: None,
+            games_driver: None,
         })
     }
 
@@ -842,6 +869,7 @@ impl Daemon {
             stats: None,
             application: None,
             display: None,
+            games_driver: None,
         })
     }
 
@@ -916,6 +944,7 @@ impl Daemon {
             stats: None,
             application: None,
             display: None,
+            games_driver: None,
         })
     }
 
@@ -1078,6 +1107,7 @@ impl Daemon {
             stats: None,
             application: None,
             display: None,
+            games_driver: None,
         })
     }
 
@@ -1089,6 +1119,26 @@ impl Daemon {
         } else {
             "Android night mode is off"
         }))
+    }
+
+    fn games_driver(&self, peer_uid: u32) -> Result<ControlResponse, ControlError> {
+        let active = self.require_active_cell(peer_uid, None)?;
+        let driver = games_driver::read(active.ready_init(&self.progress)?)?;
+        let mut response = self.success(format!("games start on {driver:?}"));
+        response.games_driver = Some(driver);
+        Ok(response)
+    }
+
+    fn set_games_driver(
+        &self,
+        peer_uid: u32,
+        driver: GlDriver,
+    ) -> Result<ControlResponse, ControlError> {
+        let active = self.require_active_cell(peer_uid, None)?;
+        games_driver::set(active.ready_init(&self.progress)?, driver)?;
+        let mut response = self.success(format!("games start on {driver:?} from now on"));
+        response.games_driver = Some(driver);
+        Ok(response)
     }
 
     fn ensure_active_cell(&mut self, peer_uid: u32, spec_path: &Path) -> Result<(), ControlError> {
@@ -1180,6 +1230,7 @@ impl Daemon {
             stats: None,
             application: None,
             display: None,
+            games_driver: None,
         }
     }
 
@@ -2015,7 +2066,8 @@ mod tests {
                         diagnostics: None,
                         stats: None,
                         application: None,
-            display: None,
+                        display: None,
+                        games_driver: None,
                     },
                 )
                 .unwrap();

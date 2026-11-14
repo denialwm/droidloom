@@ -99,8 +99,11 @@ PRODUCT_COPY_FILES += \
 # multi-file cache keeps up to 1 GiB per app.
 # Games are not held to Android's 60 fps default: SurfaceFlinger rounds it
 # down to a divisor of the host's refresh, 48 fps on a 144 Hz screen.
+# Games run OpenGL on ANGLE over turnip: Mesa's GL ran WuWa out of memory.
+# Settings can put them back on Mesa (persist.vendor.droidloom.games_gl_driver).
 PRODUCT_VENDOR_PROPERTIES += \
     debug.graphics.game_default_frame_rate.disabled=true \
+    debug.graphics.angle.force_enable_angle_for_games=1 \
     ro.egl.blobcache.multifile=true \
     ro.egl.blobcache.multifile_limit=1073741824 \
     ro.egl.blobcache.multifile_entry_limit=65536 \

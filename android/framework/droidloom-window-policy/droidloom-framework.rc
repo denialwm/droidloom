@@ -33,6 +33,14 @@ on property:persist.vendor.droidloom.angle.gl_renderer=*
 on property:persist.vendor.droidloom.angle.gl_version=*
     setprop debug.angle.gl_version ${persist.vendor.droidloom.angle.gl_version}
 
+# Android gives ANGLE to apps of the game category while this switch is 1.
+# The image sets its default; a choice made in Settings stays across starts.
+on property:persist.vendor.droidloom.games_gl_driver=angle
+    setprop debug.graphics.angle.force_enable_angle_for_games 1
+
+on property:persist.vendor.droidloom.games_gl_driver=mesa
+    setprop debug.graphics.angle.force_enable_angle_for_games 0
+
 on property:init.svc.zygote=stopped
     setprop sys.droidloom.framework_ready 0
     setprop sys.droidloom.credential locked
