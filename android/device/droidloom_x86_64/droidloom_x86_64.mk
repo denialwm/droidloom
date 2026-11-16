@@ -75,6 +75,8 @@ PRODUCT_COPY_FILES += \
     frameworks/av/services/audiopolicy/config/default_volume_tables.xml:$(TARGET_COPY_OUT_VENDOR)/etc/default_volume_tables.xml \
     frameworks/av/services/audiopolicy/config/surround_sound_configuration_5_0.xml:$(TARGET_COPY_OUT_VENDOR)/etc/surround_sound_configuration_5_0.xml
 
+# The 64-bit-only base has no dex2oat32, so ART must select dex2oat64 for
+# installation and background optimization, as core_64_bit_only.mk does.
 # HWUI reports each frame's work to a hint session, which Droidloom's power
 # service turns into utilization floors for the UI thread and RenderThread.
 # Android's stream volumes start at full scale; the host mixer owns loudness.
@@ -94,6 +96,7 @@ PRODUCT_VENDOR_PROPERTIES += \
     media.c2.hal.selection=aidl \
     persist.audio.normal_playback_period_ms=5 \
     ro.zygote=zygote64 \
+    dalvik.vm.dex2oat64.enabled=true \
     ro.vendor.droidloom.surfaceflinger_direct=true \
     ro.vendor.droidloom.surfaceflinger_tasks=true \
     ro.opengles.version=196610 \
