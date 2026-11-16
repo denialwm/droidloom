@@ -1752,6 +1752,8 @@ impl App {
             .ok_or(PresenterError::UnknownTask(object))?;
         task.closing = true;
         task.unmap_requested = true;
+        // Android has dropped the task: nothing more may be sent about it.
+        task.hide_due = None;
         self.task_work.mark(
             object,
             readiness::UNMAP | readiness::CONFIG | readiness::CLEANUP,
