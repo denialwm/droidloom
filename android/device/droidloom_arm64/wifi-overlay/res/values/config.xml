@@ -5,6 +5,11 @@
       does not look for a saved network while the screen is off.
     -->
     <bool translatable="false" name="config_wifi_background_scan_support">true</bool>
+    <!--
+      The Wi-Fi module would otherwise skip wificond and ask the kernel's
+      nl80211, which has no Wi-Fi device in the cell.
+    -->
+    <bool translatable="false" name="config_wificondMigrationEnabled">false</bool>
     <!-- The access point is on 5 GHz channel 36. -->
     <bool translatable="false" name="config_wifi5ghzSupport">true</bool>
 </resources>

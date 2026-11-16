@@ -1103,9 +1103,10 @@ the namespace it is named `wlan0`. No kernel driver or radio is involved, so
 this works on any host kernel.
 
 - `droidloom-wificond` runs from the cell's `/droidloom/wifi`; the base image
-  has no wificond. It serves the framework's wificond interface and reports one access point,
-  `Droidloom`, open, on 5 GHz channel 36, in every scan and in background
-  (PNO) scans.
+  has no wificond. It serves the framework's wificond interface and reports one
+  access point, `Droidloom`, open, on 5 GHz channel 36, in every scan and in
+  background (PNO) scans. The Wi-Fi overlay turns off the module's move from
+  wificond to the kernel's nl80211, which has no Wi-Fi device in the cell.
 - `android.hardware.wifi.supplicant-service.droidloom` is the supplicant AIDL
   V5 service. It joins that access point with the callbacks wpa_supplicant
   sends for an open network and reports any other network as not found.
