@@ -116,9 +116,9 @@ fn prepare_inputs_from(
         path
     } else {
         let archive = repo.join(".work").join(&typed.aosp_ci_base.artifact_name);
-        // Public redirect endpoint used by Android's kleaf kernel_prebuilt_repo.bzl.
+        // Android CI's raw artifact path redirects to a signed storage URL.
         let url = format!(
-            "https://androidbuildinternal.googleapis.com/android/internal/build/v3/builds/{}/{}/attempts/latest/artifacts/{}/url?redirect=true",
+            "https://ci.android.com/builds/submitted/{}/{}/latest/raw/{}",
             typed.aosp_ci_base.build_number,
             typed.aosp_ci_base.target,
             typed.aosp_ci_base.artifact_name
