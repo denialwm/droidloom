@@ -870,6 +870,9 @@ pub fn build_targets(
         // Upstream's software gatekeepers need system/gatekeeper, which the
         // sparse tree omits; Droidloom's authentication service replaces them.
         "hardware/interfaces/gatekeeper/aidl/software",
+        // wificond's headers need the netlink interceptor's types; its
+        // service and APEX are not part of the cell.
+        "hardware/interfaces/wifi/netlinkinterceptor/aidl/default",
     ] {
         p.put(&source.join(relative).join(".find-ignore"), b"")?;
     }

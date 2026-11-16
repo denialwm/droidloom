@@ -2,7 +2,7 @@ diff --git a/Android.bp b/Android.bp
 index cd67391..dca56bc 100644
 --- a/Android.bp
 +++ b/Android.bp
-@@ -218,6 +218,38 @@ cc_library_static {
+@@ -218,6 +218,44 @@ cc_library_static {
      static_libs: ["libnlinterceptor"],
  }
  
@@ -35,6 +35,12 @@ index cd67391..dca56bc 100644
 +        "libbase",
 +        "libbinder",
 +        "libutils",
++    ],
++    // logging_utils.h reaches the netlink manager's header, which names the
++    // interceptor's socket type; nothing here calls into it.
++    static_libs: [
++        "android.hardware.net.nlinterceptor-V1-ndk",
++        "libnlinterceptor",
 +    ],
 +}
 +
