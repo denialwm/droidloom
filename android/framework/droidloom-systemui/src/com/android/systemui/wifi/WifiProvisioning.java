@@ -68,7 +68,8 @@ public final class WifiProvisioning {
         // The link's address is the cell's own; a random one would only be
         // refused by the missing vendor HAL.
         config.macRandomizationSetting = WifiConfiguration.RANDOMIZATION_NONE;
-        if (wifi.addNetwork(config) < 0) {
+        int networkId = wifi.addNetwork(config);
+        if (networkId < 0) {
             if (++attempts < ATTEMPTS) {
                 main.postDelayed(this::attempt, RETRY_MS);
             } else {
@@ -76,6 +77,9 @@ public final class WifiProvisioning {
             }
             return;
         }
+        // addNetwork saves a network disabled; auto-join skips it until it is
+        // enabled, as Settings does when the user saves one.
+        wifi.enableNetwork(networkId, false);
         wifi.setWifiEnabled(true);
         preferences.edit().putBoolean(DONE, true).apply();
         Log.i(TAG, "Wi-Fi on, network Droidloom saved");
