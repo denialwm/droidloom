@@ -1,6 +1,6 @@
 # Pinned Mesa Android build
 
-Droidloom builds Mesa 26.1.7 from the archive and checksums in the source lock.
+Droidloom builds Mesa 26.3.0 from the archive and checksums in the source lock.
 It uses Mesa's Android Meson wrapper with the pinned AOSP/Bionic compiler and
 Android API 37, rather than AOSP's incomplete generated Mesa Soong modules.
 
@@ -10,16 +10,9 @@ in `tools/droidloom-update/src/android.rs` mirrors that tree into its temporary
 AOSP projection, applies the runtime patches below, and restores projected
 sources after building. The cached ARM64 build uses the same projection.
 
-`patches/0005-panfrost-v11-support.patch` backports the GLES portion of
-[Mesa MR 41803](https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/41803)
-(ending at `73210bf69dfa4cfb5d5c5b3b7c6c91a05209e2b6`) to the pinned release.
-It retains the tablet's working `c35c76d76250cd089baa9f52f79d1ad2a45468e1`
-v11 XML so the shared decoder and format fields match this release. It adds
-the v11 hardware descriptions, compiled architecture
-dispatch and Mali-G615/G715 model entries. The tablet's native Mesa already
-uses an earlier revision of this series. `0006-panfrost-v11-cs-decode.patch`
-retains its two command-stream diagnostic dispatch fixes. The changes apply
-to the prepared source used by both native shader tools and Android libraries.
+Panfrost v11 (Mali-G615/G715) is part of the pinned release: its hardware
+descriptions, architecture dispatch, command-stream decoder and model entries
+need no patch.
 
 The ARM64 product builds Gallium Freedreno, Panfrost and Zink, Vulkan Freedreno
 (Turnip), and both MSM and KGSL kernel interfaces. Native DRM remains the cell
@@ -45,14 +38,6 @@ Runtime patches under `android/aosp-patches/`:
   select a unique Turnip device without DRM identity only if external DMA-BUF
   memory and image modifier extensions are present. Other DRM drivers keep
   their existing matching behavior.
-- `0012-mesa-adreno722.patch`: upstream device entry from Mesa commit
-  `803731f7ed4aa8e8265fe0aff08b85efb3f3c7e9`, also used by the validated host
-  Turnip build. It retains upstream's initial A730-derived register settings.
-
-- `0013-mesa-texture-upload-span.patch`: preserve the threaded staging layout
-  while copying only the valid source span, excluding trailing row/layer
-  padding. Prevents guard-page overreads during Skia glyph-atlas uploads on
-  the Zink render-pass path; keeps threading and GPU buffer-to-image copies.
 - `0015-libdrm-empty-version-strings.patch`: preserve empty kernel driver
   version strings as owned empty strings. Panthor advertises an empty date;
   the pinned libdrm otherwise passes its NULL kernel pointer to `strdup` and
@@ -70,7 +55,7 @@ Runtime patches under `android/aosp-patches/`:
   registers no BV bin preamble and keeps concurrent binning off on it. The BV
   amble replaced the BR one, which restores the CCU's GMEM state after a
   preemption; resumed render passes then wrote tiles to address 0. Same
-  change as the Moto's host Mesa (Phonewave `mesa-a722` 0002).
+  change as the Moto's host Mesa (Phonewave recipe `mesa-denial`).
 
 Validate a new host using real Android allocations, raw DMA-BUF and native
 Android EGL imports, GPU rendering/readback, native fences and synchronized CPU

@@ -41,7 +41,7 @@ frozen Composer V5 bindings, the complete generic Composer Binder library
 `libdroidloom_composer_aidl`, the ARM64
 `android.hardware.graphics.composer3-service.droidloom` executable, and
 upstream minigbm's Allocator V3/Mapper V5 artifacts succeeds and assembles a
-real sparse ext4 `vendor.img`. The image also contains pinned Mesa 26.1.7
+real sparse ext4 `vendor.img`. The image also contains pinned Mesa 26.3.0
 Freedreno EGL/GLES and Turnip Vulkan drivers. ANGLE is rebuilt from
 `external/angle` at the superproject's commit, the one the base image ships,
 and the runtime mounts it over the base's `/system/lib64/lib*_angle.so`.

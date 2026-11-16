@@ -35,9 +35,9 @@
     "usage": "system, system_ext, and product are reusable base inputs; the Cuttlefish vendor, ODM, kernel, and boot images are inspection-only"
   },
   "mesa": {
-    "url": "https://archive.mesa3d.org/mesa-26.1.7.tar.xz",
-    "version": "26.1.7",
-    "sha256": "25e0a669e6638c3563e7be32a0a09f1888317e6eed0d047dc41d49dc8de26c7d",
-    "sha512": "9acc75c3d6386f90cf761dfa42e72b1c36d399a6905127d18aa3eb84d665502da7c3cebead82fdbca91ad510673ba7e296b5e148602d6db7e79172d6155f3ec5"
+    "url": "https://archive.mesa3d.org/mesa-26.3.0.tar.xz",
+    "version": "26.3.0",
+    "sha256": "91d729aa68bb89e4ec857841300bbe922bcb3e52b1f97566ca83930d3b28343a",
+    "sha512": "b4abd266ecaf813ef078a0461bcdf7c03d2ecddeb5b6e1c51054fb0afe0d830c0f27fc78f0effe68df5ea7b48f76f4e6ca36ed9afe98513f0e4bf8e0bbbe96dd"
   }
 }

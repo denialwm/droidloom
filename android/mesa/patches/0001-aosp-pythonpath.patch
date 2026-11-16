@@ -5,6 +5,8 @@ The Android build runs behind AOSP's PATH interposer. Use the source-pinned
 Mako module with the first supported system Python instead of depending on an
 untracked host Python installation.
 
+diff --git a/android/mesa3d_cross.mk b/android/mesa3d_cross.mk
+index 8e709a43..18064411 100644
 --- a/android/mesa3d_cross.mk
 +++ b/android/mesa3d_cross.mk
 @@ -82,8 +82,10 @@ MESA3D_GLES_BINS := \
@@ -19,7 +21,7 @@ untracked host Python installation.
  	--cross-file $(call relative-to-absolute,$(MESON_GEN_DIR))/aosp_cross        \
  	--buildtype=release                                                          \
  	-Dplatforms=android                                                          \
-@@ -99,7 +101,7 @@ MESON_GEN_NINJA := \
+@@ -100,7 +102,7 @@ MESON_GEN_NINJA := \
  	-Dandroid-libbacktrace=disabled                                              \
  	$(BOARD_MESA3D_MESON_ARGS)                                                   \
  

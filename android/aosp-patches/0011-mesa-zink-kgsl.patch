@@ -1,9 +1,13 @@
+
+diff --git a/src/gallium/drivers/zink/zink_screen.c b/src/gallium/drivers/zink/zink_screen.c
+index d05df40e..77fdb971 100644
 --- a/src/gallium/drivers/zink/zink_screen.c
 +++ b/src/gallium/drivers/zink/zink_screen.c
-@@ -1713,6 +1713,55 @@
+@@ -1793,6 +1793,55 @@ zink_get_display_device(const struct zink_screen *screen, uint32_t pdev_count,
+    return -1;
  }
  
- static int
++static int
 +zink_get_kgsl_device(const struct zink_screen *screen, uint32_t pdev_count,
 +                     const VkPhysicalDevice *pdevs)
 +{
@@ -52,11 +56,10 @@
 +   return selected;
 +}
 +
-+static int
+ static int
  zink_get_cpu_device_type(const struct zink_screen *screen, uint32_t pdev_count,
                           const VkPhysicalDevice *pdevs)
- {
-@@ -1755,7 +1804,8 @@
+@@ -1836,7 +1885,8 @@ zink_match_adapter_luid(const struct zink_screen *screen, uint32_t pdev_count, c
  }
  
  static void
@@ -66,7 +69,7 @@
  {
     bool cpu = debug_get_bool_option("LIBGL_ALWAYS_SOFTWARE", false) ||
                debug_get_bool_option("D3D_ALWAYS_SOFTWARE", false);
-@@ -1788,9 +1838,12 @@
+@@ -1869,9 +1919,12 @@ choose_pdev(struct zink_screen *screen, int64_t dev_major, int64_t dev_minor, ui
           idx = zink_match_adapter_luid(screen, pdev_count, pdevs, adapter_luid);
        else if (cpu)
           idx = zink_get_cpu_device_type(screen, pdev_count, pdevs);
@@ -77,10 +80,10 @@
 +         if (idx == -1 && kgsl_display)
 +            idx = zink_get_kgsl_device(screen, pdev_count, pdevs);
 +      }
- 
-       if (idx != -1)
-          /* valid cpu device */
-@@ -3371,7 +3424,8 @@
+       /* Not all Vulkan implementations expose DRM device information through
+        * VK_EXT_physical_device_drm. When DRM matching is requested with a
+        * valid render node and only a single Vulkan physical device is
+@@ -3480,7 +3533,8 @@ zink_cl_cts_version(struct pipe_screen *pscreen)
  }
  
  static struct zink_screen *
@@ -90,7 +93,7 @@
  {
     if (os_get_option("ZINK_USE_LAVAPIPE")) {
        mesa_loge("ZINK_USE_LAVAPIPE is obsolete. Use LIBGL_ALWAYS_SOFTWARE\n");
-@@ -3469,7 +3523,7 @@
+@@ -3579,7 +3633,7 @@ zink_internal_create_screen(const struct pipe_screen_config *config, int64_t dev
           debug_printf("ZINK: failed to setup debug utils\n");
     }
  
@@ -99,7 +102,7 @@
     if (screen->pdev == VK_NULL_HANDLE) {
        if (!screen->driver_name_is_inferred)
           mesa_loge("ZINK: failed to choose pdev");
-@@ -3842,7 +3896,7 @@
+@@ -3961,7 +4015,7 @@ fail:
  struct pipe_screen *
  zink_create_screen(struct sw_winsys *winsys, const struct pipe_screen_config *config)
  {
@@ -108,7 +111,7 @@
     if (ret) {
        ret->drm_fd = -1;
     }
-@@ -3894,7 +3948,18 @@
+@@ -4013,7 +4067,18 @@ zink_drm_create_screen(int fd, const struct pipe_screen_config *config, struct r
     if (zink_render_rdev(fd, &dev_major, &dev_minor))
        return NULL;
  
@@ -128,7 +131,7 @@
     if (!ret)
        return NULL;
  
-@@ -3929,7 +3994,7 @@
+@@ -4048,7 +4113,7 @@ fail:
  struct pipe_screen *
  zink_win32_create_screen(uint64_t adapter_luid)
  {

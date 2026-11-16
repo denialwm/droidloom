@@ -71,10 +71,10 @@ pub const PINNED_AOSP_TAG: &str = "android-17.0.0_r1";
 /// Commit referenced by the selected annotated AOSP manifest tag.
 pub const PINNED_AOSP_COMMIT: &str = "5bc9a7ce1cd78dd53613bbfd0ebf506e1e4adb0f";
 /// Stable Mesa release selected for the Android/Bionic graphics stack.
-pub const PINNED_MESA_VERSION: &str = "26.1.7";
+pub const PINNED_MESA_VERSION: &str = "26.3.0";
 /// SHA-256 of the selected upstream Mesa release archive.
 pub const PINNED_MESA_SHA256: &str =
-    "25e0a669e6638c3563e7be32a0a09f1888317e6eed0d047dc41d49dc8de26c7d";
+    "91d729aa68bb89e4ec857841300bbe922bcb3e52b1f97566ca83930d3b28343a";
 
 /// CPU architecture encoded in an image manifest.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -399,7 +399,7 @@ mod tests {
                 commit: PINNED_AOSP_COMMIT.to_owned(),
             },
             mesa: ArchiveSource {
-                url: "https://archive.mesa3d.org/mesa-26.1.7.tar.xz".to_owned(),
+                url: "https://archive.mesa3d.org/mesa-26.3.0.tar.xz".to_owned(),
                 version: PINNED_MESA_VERSION.to_owned(),
                 sha256: PINNED_MESA_SHA256.to_owned(),
             },

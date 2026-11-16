@@ -469,8 +469,8 @@ mod tests {
     fn validates_release_identity() {
         assert!(
             validate_lock(&MesaLock {
-                url: "https://archive.mesa3d.org/mesa-26.1.7.tar.xz".into(),
-                version: "26.1.7".into(),
+                url: "https://archive.mesa3d.org/mesa-26.3.0.tar.xz".into(),
+                version: "26.3.0".into(),
                 sha256: "a".repeat(64),
                 sha512: "b".repeat(128),
             })

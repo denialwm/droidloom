@@ -8,22 +8,24 @@ on the Pad 4 then compiled all its shaders again after each Droidloom
 update. The identity is now the digest of the Mesa archive and every patch
 Droidloom applies to it.
 
---- a/src/freedreno/ir3/ir3_disk_cache.c
-+++ b/src/freedreno/ir3/ir3_disk_cache.c
-@@ -7,6 +7,7 @@
- 
+diff --git a/src/freedreno/ir3/ir3_disk_cache.cpp b/src/freedreno/ir3/ir3_disk_cache.cpp
+index 4de5af5d..a91d0c59 100644
+--- a/src/freedreno/ir3/ir3_disk_cache.cpp
++++ b/src/freedreno/ir3/ir3_disk_cache.cpp
+@@ -8,6 +8,7 @@
  #include "ir3_compiler.h"
  #include "ir3_nir.h"
+ #include <type_traits>
 +#include "droidloom_mesa_identity.h"
  
  #define debug 0
  
-@@ -34,18 +35,16 @@
+@@ -35,18 +36,16 @@ ir3_disk_cache_init(struct ir3_compiler *compiler)
        return;
  
     const char *renderer = fd_dev_name(compiler->dev_id);
 -   const struct build_id_note *note =
--      build_id_find_nhdr_for_addr(ir3_disk_cache_init);
+-      build_id_find_nhdr_for_addr((const void *)ir3_disk_cache_init);
 -   unsigned build_id_len = build_id_length(note);
 -   assert(note && build_id_len == BUILD_ID_EXPECTED_HASH_LENGTH); /* sha1 */
 -

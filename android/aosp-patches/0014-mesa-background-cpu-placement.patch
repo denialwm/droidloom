@@ -6,7 +6,44 @@ cache writer is minimum-priority work; cache lookup and submission are not.
 Without either environment variable, the placement hook does nothing. Zink's
 cache writer now requests minimum priority independently of that optional hook.
 
---- a/src/util/u_queue_cpu.h
+diff --git a/src/gallium/drivers/zink/zink_screen.c b/src/gallium/drivers/zink/zink_screen.c
+index 77fdb971..f379a44c 100644
+--- a/src/gallium/drivers/zink/zink_screen.c
++++ b/src/gallium/drivers/zink/zink_screen.c
+@@ -363,7 +363,8 @@ disk_cache_init(struct zink_screen *screen)
+    if (!screen->disk_cache)
+       return true;
+ 
+-   if (!util_queue_init(&screen->cache_put_thread, "zcq", 8, 1, UTIL_QUEUE_INIT_RESIZE_IF_FULL, screen)) {
++   if (!util_queue_init(&screen->cache_put_thread, "zcq", 8, 1,
++                        UTIL_QUEUE_INIT_RESIZE_IF_FULL | UTIL_QUEUE_INIT_USE_MINIMUM_PRIORITY, screen)) {
+       mesa_loge("zink: Failed to create disk cache queue\n");
+ 
+       disk_cache_destroy(screen->disk_cache);
+diff --git a/src/util/u_queue.c b/src/util/u_queue.c
+index 90a62a9e..f0371ce6 100644
+--- a/src/util/u_queue.c
++++ b/src/util/u_queue.c
+@@ -25,6 +25,7 @@
+  */
+ 
+ #include "u_queue.h"
++#include "u_queue_cpu.h"
+ 
+ #include "c11/threads.h"
+ #include "perf/u_perfetto.h"
+@@ -259,6 +260,7 @@ util_queue_thread_func(void *input)
+    if (queue->flags & UTIL_QUEUE_INIT_USE_MINIMUM_PRIORITY) {
+       /* The nice() function can only set a maximum of 19. */
+       setpriority(PRIO_PROCESS, syscall(SYS_gettid), 19);
++      util_queue_apply_background_policy();
+    }
+ #endif
+ 
+diff --git a/src/util/u_queue_cpu.h b/src/util/u_queue_cpu.h
+new file mode 100644
+index 00000000..c2a9fbff
+--- /dev/null
 +++ b/src/util/u_queue_cpu.h
 @@ -0,0 +1,83 @@
 +/* SPDX-License-Identifier: MIT */
@@ -92,33 +129,3 @@ cache writer now requests minimum priority independently of that optional hook.
 +static inline void util_queue_apply_background_policy(void) {}
 +#endif
 +#endif
---- a/src/util/u_queue.c
-+++ b/src/util/u_queue.c
-@@ -25,6 +25,7 @@
-  */
- 
- #include "u_queue.h"
-+#include "u_queue_cpu.h"
- 
- #include "c11/threads.h"
- #include "util/u_cpu_detect.h"
-@@ -255,6 +256,7 @@
-    if (queue->flags & UTIL_QUEUE_INIT_USE_MINIMUM_PRIORITY) {
-       /* The nice() function can only set a maximum of 19. */
-       setpriority(PRIO_PROCESS, syscall(SYS_gettid), 19);
-+      util_queue_apply_background_policy();
-    }
- #endif
- 
---- a/src/gallium/drivers/zink/zink_screen.c
-+++ b/src/gallium/drivers/zink/zink_screen.c
-@@ -362,7 +362,8 @@
-    if (!screen->disk_cache)
-       return true;
- 
--   if (!util_queue_init(&screen->cache_put_thread, "zcq", 8, 1, UTIL_QUEUE_INIT_RESIZE_IF_FULL, screen)) {
-+   if (!util_queue_init(&screen->cache_put_thread, "zcq", 8, 1,
-+                        UTIL_QUEUE_INIT_RESIZE_IF_FULL | UTIL_QUEUE_INIT_USE_MINIMUM_PRIORITY, screen)) {
-       mesa_loge("zink: Failed to create disk cache queue\n");
- 
-       disk_cache_destroy(screen->disk_cache);

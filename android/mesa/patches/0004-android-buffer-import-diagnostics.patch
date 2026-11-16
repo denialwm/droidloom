@@ -1,4 +1,6 @@
+
 diff --git a/src/egl/drivers/dri2/platform_android.c b/src/egl/drivers/dri2/platform_android.c
+index 5da2a252..a3ab8cac 100644
 --- a/src/egl/drivers/dri2/platform_android.c
 +++ b/src/egl/drivers/dri2/platform_android.c
 @@ -82,13 +82,19 @@ droid_create_image_from_native_buffer(_EGLDisplay *disp,
@@ -25,7 +27,7 @@ diff --git a/src/egl/drivers/dri2/platform_android.c b/src/egl/drivers/dri2/plat
  
     img = droid_create_image_from_buffer_info(dri2_dpy, buf->width, buf->height,
                                               &buf_info, &color_info, priv);
-@@ -106,6 +112,12 @@ droid_create_image_from_native_buffer(_EGLDisplay *disp,
+@@ -105,6 +111,12 @@ droid_create_image_from_native_buffer(_EGLDisplay *disp,
           dri2_dpy, buf->width, buf->height, &buf_info, &color_info, priv);
     }
  

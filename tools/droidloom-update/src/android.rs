@@ -761,17 +761,12 @@ fn full_targets(product: &str) -> Vec<&'static str> {
 // Applied in order to the prepared Mesa source in the vendor tree.
 const MESA_PATCHES: &[&str] = &[
     "0011-mesa-zink-kgsl.patch",
-    "0012-mesa-adreno722.patch",
-    "0013-mesa-texture-upload-span.patch",
     "0014-mesa-background-cpu-placement.patch",
     "0016-mesa-turnip-hwui-queues.patch",
     "0018-mesa-ir3-alias-array-sources.patch",
     "0019-mesa-turnip-a722-no-bv.patch",
     "0022-mesa-monotonic-gl-names.patch",
     "0024-mesa-ir3-cache-source-identity.patch",
-    "0025-mesa-turnip-deferred-swapchain-bind.patch",
-    "0026-mesa-turnip-cache-source-identity.patch",
-    "0027-mesa-turnip-lrz-default-attachment-locations.patch",
     "0028-mesa-android-app-shader-cache.patch",
 ];
 pub fn build_targets(
@@ -912,8 +907,9 @@ pub fn build_targets(
         .args(["-a", "--delete"])
         .arg(format!("{}/", work.join("mesa-source").display()))
         .arg(&mesa))?;
-    // ir3 keys its shader cache by the digest of Mesa's prepared source and
-    // these patches: a rebuild of the same source keeps the games' shaders.
+    // ir3 and Turnip key their caches by the digest of Mesa's prepared source
+    // and these patches: a rebuild of the same source keeps the games' shaders
+    // and pipelines.
     let mut identity = droidloom_mesa::source_identity(&work.join("mesa-source"))?;
     for name in MESA_PATCHES {
         let patch = repo.join("android/aosp-patches").join(name);
@@ -964,7 +960,7 @@ pub fn build_targets(
         &board,
         fs::read_to_string(&board)?
             + &format!(
-                "\nBOARD_MESA3D_MESON_ARGS += -Dmesa-clc=system {}--native-file {}\n",
+                "\nBOARD_MESA3D_MESON_ARGS += -Dmesa-clc=system {}-Dtu-build-id={identity} --native-file {}\n",
                 if product == "droidloom_arm64" {
                     "-Dprecomp-compiler=system "
                 } else {
