@@ -1,5 +1,5 @@
 diff --git a/rootdir/init.rc b/rootdir/init.rc
-index 5e26d12..be4a5dd 100644
+index 5e26d12..0db7e67 100644
 --- a/rootdir/init.rc
 +++ b/rootdir/init.rc
 @@ -13,6 +13,18 @@ import /system/etc/init/hw/init.${ro.zygote}.rc
@@ -21,7 +21,7 @@ index 5e26d12..be4a5dd 100644
      # Allow bootchart to capture from the beginning of second-stage init.
      mkdir /dev/bootchart 0755 root root
      bootchart start
-@@ -231,7 +243,8 @@ on init
+@@ -230,11 +242,13 @@ on init
  
      # Mount binderfs
      mkdir /dev/binderfs
@@ -30,8 +30,15 @@ index 5e26d12..be4a5dd 100644
 +    # created its binder, hwbinder, and vndbinder nodes before second stage.
      chmod 0755 /dev/binderfs
  
-     # Mount fusectl
-@@ -548,6 +561,10 @@ on late-init
+-    # Mount fusectl
+-    mount fusectl none /sys/fs/fuse/connections
++    # fusectl is one kernel-wide view of every FUSE connection, the host's
++    # included, and vold aborts each connection it lists there. Droidloom
++    # leaves /sys/fs/fuse/connections empty.
+ 
+     symlink /dev/binderfs/binder /dev/binder
+     symlink /dev/binderfs/hwbinder /dev/hwbinder
+@@ -548,6 +562,10 @@ on late-init
      trigger early-boot
      trigger boot
  
@@ -42,7 +49,7 @@ index 5e26d12..be4a5dd 100644
  on early-fs
      # Once metadata has been mounted, we'll need vold to deal with userdata checkpointing
      start vold
-@@ -1046,7 +1063,7 @@ on post-fs-data
+@@ -1046,7 +1064,7 @@ on post-fs-data
  
      # Define and export *CLASSPATH variables
      # Must start before 'odsign', as odsign depends on *CLASSPATH variables
@@ -51,7 +58,7 @@ index 5e26d12..be4a5dd 100644
      load_exports /data/system/environ/classpath
  
      # Start ART's oneshot boot service to propagate boot experiment flags to
-@@ -1318,3 +1335,12 @@ on property:sys.snapshotctl.map=requested
+@@ -1318,3 +1336,12 @@ on property:sys.snapshotctl.map=requested
  on property:sys.snapshotctl.unmap=requested
      exec - root root system -- /system/bin/snapshotctl unmap
      setprop sys.snapshotctl.unmap "finished"

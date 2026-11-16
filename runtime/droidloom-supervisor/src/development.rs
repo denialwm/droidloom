@@ -1447,10 +1447,10 @@ fn mount_proc_and_sys(spec: &CellSpec, root: &Path) -> Result<(), DevelopmentErr
     // own the bpffs mount and BPF program loading sequence.
     fs::create_dir_all(sys.join("fs/bpf"))
         .map_err(|source| io_error("create Android BPF mount point", source))?;
-    // vold mounts fusectl here before constructing Android's emulated-storage
-    // FUSE view. The host sysfs normally supplies this directory, but the cell
-    // intentionally receives a synthetic sysfs with only explicit kernel
-    // interfaces.
+    // Android expects this directory, which the host sysfs normally supplies.
+    // It stays empty: fusectl is one kernel-wide view of every FUSE
+    // connection, so the cell's init.rc no longer mounts it and vold's abort
+    // sweep finds nothing to abort.
     fs::create_dir_all(sys.join("fs/fuse/connections"))
         .map_err(|source| io_error("create Android fusectl mount point", source))?;
     project_loop_sysfs(&sys)?;
