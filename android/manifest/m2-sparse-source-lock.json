@@ -1969,6 +1969,7 @@
       "sparse_paths": [
         "aidl",
         "client",
+        "net",
         "scanning"
       ]
     },
