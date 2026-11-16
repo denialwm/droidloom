@@ -867,6 +867,8 @@
         "camera/provider/aidl",
         "gatekeeper/aidl",
         "wifi/common/aidl",
+        "wifi/netlinkinterceptor/aidl",
+        "wifi/netlinkinterceptor/libnlinterceptor",
         "wifi/supplicant/aidl"
       ]
     },
