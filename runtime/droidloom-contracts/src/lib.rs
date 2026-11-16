@@ -32,6 +32,38 @@ pub const TARGET_ARCHITECTURE: Architecture = Architecture::Aarch64;
 pub const TARGET_ARCHITECTURE: Architecture = Architecture::X86_64;
 #[cfg(not(any(target_arch = "aarch64", target_arch = "x86_64")))]
 compile_error!("Droidloom supports only aarch64 and x86_64 hosts");
+/// CPU features the pinned Android base is compiled to use without checking,
+/// as the kernel names them in `/proc/cpuinfo`. The `x86_64` base is Android
+/// CI's Cuttlefish build, which targets Silvermont.
+#[cfg(target_arch = "x86_64")]
+pub const REQUIRED_CPU_FEATURES: &[&str] = &["sse4_2", "popcnt", "movbe", "pclmulqdq", "rdrand"];
+/// CPU features the pinned Android base is compiled to use without checking.
+/// The ARM64 base targets plain Armv8-A.
+#[cfg(target_arch = "aarch64")]
+pub const REQUIRED_CPU_FEATURES: &[&str] = &[];
+
+/// The [`REQUIRED_CPU_FEATURES`] a `/proc/cpuinfo` text lacks, or `None` when
+/// it lists no CPU features at all.
+pub fn missing_cpu_features(cpuinfo: &str) -> Option<Vec<&'static str>> {
+    if REQUIRED_CPU_FEATURES.is_empty() {
+        return Some(Vec::new());
+    }
+    let features: BTreeSet<&str> = cpuinfo
+        .lines()
+        .find_map(|line| {
+            let (key, value) = line.split_once(':')?;
+            matches!(key.trim(), "flags" | "Features").then_some(value)
+        })?
+        .split_whitespace()
+        .collect();
+    Some(
+        REQUIRED_CPU_FEATURES
+            .iter()
+            .copied()
+            .filter(|feature| !features.contains(feature))
+            .collect(),
+    )
+}
 /// Contiguous subordinate IDs reserved for one Android user-0 cell.
 pub const MIN_SUBORDINATE_IDS: u64 = 100_000;
 /// Immutable AOSP release selected for the first Droidloom product.
@@ -416,5 +448,23 @@ mod tests {
         let mut value = serde_json::to_value(valid_manifest()).unwrap();
         value["surprise"] = serde_json::json!(true);
         assert!(serde_json::from_value::<ImageManifest>(value).is_err());
+    }
+
+    #[test]
+    fn required_cpu_features_are_read_from_cpuinfo() {
+        let all = REQUIRED_CPU_FEATURES.join(" ");
+        let cpuinfo = format!("processor\t: 0\nflags\t\t: fpu {all} avx\n\nprocessor\t: 1\n");
+        assert_eq!(missing_cpu_features(&cpuinfo), Some(Vec::new()));
+        assert_eq!(
+            missing_cpu_features("processor\t: 0\n"),
+            REQUIRED_CPU_FEATURES.is_empty().then(Vec::new)
+        );
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn ivy_bridge_lacks_movbe() {
+        let cpuinfo = "flags\t\t: fpu sse4_1 sse4_2 popcnt aes pclmulqdq rdrand avx\n";
+        assert_eq!(missing_cpu_features(cpuinfo), Some(vec!["movbe"]));
     }
 }

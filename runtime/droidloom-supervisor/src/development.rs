@@ -123,6 +123,12 @@ pub enum DevelopmentError {
     /// An input is absent, has the wrong type, or has the wrong image format.
     #[error("invalid development boot input: {0}")]
     InvalidInput(String),
+    /// The CPU lacks instructions Android's system binaries use.
+    #[error(
+        "this CPU lacks {}, which Android's system binaries in this image use; on Intel, Haswell and newer have them, on AMD, Zen and newer",
+        .0.join(", ")
+    )]
+    UnsupportedCpu(Vec<&'static str>),
     /// A required host command failed.
     #[error("{program} failed ({status})")]
     Command {
@@ -137,10 +143,18 @@ pub enum DevelopmentError {
 ///
 /// # Errors
 ///
-/// Rejects malformed specs, sparse/non-ext4 vendor images, unsupported base
-/// image formats, non-device render paths, and non-socket Denial endpoints.
+/// Rejects malformed specs, CPUs without the instructions the base image uses,
+/// sparse/non-ext4 vendor images, unsupported base image formats, non-device
+/// render paths, and non-socket Denial endpoints.
 pub fn validate_development_inputs(spec: &CellSpec) -> Result<(), DevelopmentError> {
     spec.validate()?;
+    let cpuinfo = fs::read_to_string("/proc/cpuinfo")
+        .map_err(|source| io_error("read /proc/cpuinfo", source))?;
+    if let Some(missing) = droidloom_contracts::missing_cpu_features(&cpuinfo)
+        && !missing.is_empty()
+    {
+        return Err(DevelopmentError::UnsupportedCpu(missing));
+    }
     for path in spec.graphics_backend.auxiliary_devices() {
         auxiliary_graphics_device_numbers(Path::new(path))?;
     }

@@ -14,7 +14,9 @@ use std::os::unix::fs::FileTypeExt as _;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use droidloom_contracts::{ImageManifest, TARGET_ARCHITECTURE};
+use droidloom_contracts::{
+    ImageManifest, REQUIRED_CPU_FEATURES, TARGET_ARCHITECTURE, missing_cpu_features,
+};
 use flate2::read::GzDecoder;
 use serde::{Deserialize, Serialize};
 
@@ -164,6 +166,7 @@ pub fn probe(options: &ProbeOptions) -> Report {
     let mut checks = vec![
         check_linux(&os),
         check_architecture(&architecture),
+        check_cpu_features(&view),
         check_namespaces(&view),
         check_binderfs(&view, &kernel),
     ];
@@ -383,6 +386,43 @@ fn check_architecture(architecture: &str) -> Check {
             format!(
                 "Use a {} host and image pair. Droidloom does not provide CPU instruction translation.",
                 TARGET_ARCHITECTURE.as_str()
+            )
+        }),
+    )
+}
+
+fn check_cpu_features(view: &HostView) -> Check {
+    let missing = view
+        .read("/proc/cpuinfo")
+        .and_then(|cpuinfo| missing_cpu_features(&cpuinfo));
+    let (status, evidence) = match &missing {
+        None => (
+            CheckStatus::Unknown,
+            "/proc/cpuinfo lists no CPU features".to_owned(),
+        ),
+        Some(_) if REQUIRED_CPU_FEATURES.is_empty() => (
+            CheckStatus::Pass,
+            "the Android image needs no optional CPU features".to_owned(),
+        ),
+        Some(missing) if missing.is_empty() => (
+            CheckStatus::Pass,
+            format!("CPU has {}", REQUIRED_CPU_FEATURES.join(", ")),
+        ),
+        Some(missing) => (
+            CheckStatus::Fail,
+            format!("CPU lacks {}", missing.join(", ")),
+        ),
+    };
+    check(
+        "cpu.features",
+        "CPU features the Android image uses",
+        status,
+        true,
+        vec![evidence],
+        (status != CheckStatus::Pass).then(|| {
+            format!(
+                "Android's system binaries in this image use {}; on Intel, Haswell and newer have them, on AMD, Zen and newer.",
+                REQUIRED_CPU_FEATURES.join(", ")
             )
         }),
     )
@@ -858,6 +898,14 @@ mod tests {
         put(root.path(), "/proc/sys/kernel/osrelease", "7.0-test\n");
         put(
             root.path(),
+            "/proc/cpuinfo",
+            &format!(
+                "processor\t: 0\nflags\t\t: fpu {}\n",
+                REQUIRED_CPU_FEATURES.join(" ")
+            ),
+        );
+        put(
+            root.path(),
             "/proc/sys/kernel/seccomp/actions_avail",
             "kill_process kill_thread trap errno user_notif trace log allow\n",
         );
@@ -949,6 +997,30 @@ mod tests {
                 check.id == "kernel.binderfs" && check.status == CheckStatus::Fail
             })
         );
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn cpu_without_movbe_is_a_blocker() {
+        let root = ready_fixture();
+        put(
+            root.path(),
+            "/proc/cpuinfo",
+            "flags\t\t: fpu sse4_2 popcnt aes pclmulqdq rdrand avx\n",
+        );
+        let report = probe(&ProbeOptions {
+            root: root.path().to_path_buf(),
+            architecture: Some(TARGET_ARCHITECTURE.as_str().to_owned()),
+            ..ProbeOptions::default()
+        });
+        assert_eq!(report.blocker_count, 1);
+        let check = report
+            .checks
+            .iter()
+            .find(|check| check.id == "cpu.features")
+            .unwrap();
+        assert_eq!(check.status, CheckStatus::Fail);
+        assert_eq!(check.evidence, ["CPU lacks movbe"]);
     }
 
     #[test]
