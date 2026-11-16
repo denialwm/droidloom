@@ -121,6 +121,10 @@ const PATCHES: &[(&str, &str)] = &[
         "android/aosp-patches/0015-libdrm-empty-version-strings.patch",
     ),
     (
+        "external/rust/android-crates-io",
+        "android/aosp-patches/0037-drm-ffi-syncobj-point.patch",
+    ),
+    (
         "external/angle",
         "android/aosp-patches/0029-angle-save-program-without-waiting.patch",
     ),

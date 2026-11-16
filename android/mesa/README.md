@@ -42,6 +42,8 @@ Runtime patches under `android/aosp-patches/`:
   Mesa's RadeonSI and RADV need libdrm_amdgpu 2.4.133. The patch brings the
   libraries, headers and data to the signed upstream 2.4.134 release and keeps
   AOSP's build files and Bionic changes; its header lists what it covers.
+- `0037-drm-ffi-syncobj-point.patch`: the new kernel headers add a timeline
+  `point` to `drm_syncobj_handle`; the Rust `drm-ffi` crate sets it to zero.
 - `0015-libdrm-empty-version-strings.patch`: applied after the upgrade,
   preserve empty kernel driver version strings as owned empty strings.
   Panthor advertises an empty date; libdrm otherwise returns a NULL date

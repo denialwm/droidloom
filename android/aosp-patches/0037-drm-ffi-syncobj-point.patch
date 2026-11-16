@@ -1,0 +1,27 @@
+drm-ffi: set the syncobj handle's timeline point
+
+libdrm 2.4.134's drm.h adds the kernel's point field to
+drm_syncobj_handle, and drm-sys generates its bindings from those headers.
+drm-ffi 0.9.0 initializes the struct without it. Zero is the binary
+syncobj these calls export and import.
+
+diff --git a/crates/drm-ffi/src/syncobj.rs b/crates/drm-ffi/src/syncobj.rs
+index 5334944..b1cee07 100644
+--- a/crates/drm-ffi/src/syncobj.rs
++++ b/crates/drm-ffi/src/syncobj.rs
+@@ -54,6 +54,7 @@ pub fn handle_to_fd(
+         },
+         fd: 0,
+         pad: 0,
++        point: 0,
+     };
+ 
+     unsafe {
+@@ -78,6 +79,7 @@ pub fn fd_to_handle(
+         },
+         fd: syncobj_fd.as_raw_fd(),
+         pad: 0,
++        point: 0,
+     };
+ 
+     unsafe {
