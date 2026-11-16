@@ -1,3 +1,10 @@
+# The base image ships /system/bin/wificond without a service for it; the
+# cell's file overrides put Droidloom's wificond there.
+service wificond /system/bin/wificond
+    class main
+    user wifi
+    group wifi
+
 # servicemanager starts the supplicant when the framework asks for it, as Wi-Fi
 # turns on. terminate() exits it as Wi-Fi turns off; oneway keeps it down.
 service wpa_supplicant /vendor/bin/hw/android.hardware.wifi.supplicant-service.droidloom

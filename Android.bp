@@ -288,9 +288,9 @@ cc_library_headers {
     vendor_available: true,
 }
 
-// Installed over the base image's /system_ext/bin/wificond, whose init script
-// it keeps. It serves the framework's unstable wificond interface, so it is
-// built as a system_ext module like the binary it replaces.
+// Installed over the base image's /system/bin/wificond; the supplicant's init
+// script declares its service. It serves the framework's unstable wificond
+// interface, so it is built as a platform module, not a vendor one.
 cc_binary {
     name: "droidloom-wificond",
     system_ext_specific: true,
@@ -316,7 +316,7 @@ cc_binary {
     name: "android.hardware.wifi.supplicant-service.droidloom",
     vendor: true,
     relative_install_path: "hw",
-    init_rc: ["android/device/droidloom_arm64/droidloom-supplicant.rc"],
+    init_rc: ["android/device/droidloom_arm64/droidloom-wifi.rc"],
     vintf_fragments: ["android/device/droidloom_arm64/droidloom-supplicant.xml"],
     srcs: ["android/wifi/droidloom-supplicant/supplicant.cpp"],
     header_libs: ["libdroidloom_wifi_headers"],

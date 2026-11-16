@@ -49,7 +49,7 @@
     },
     {
       "source": "/usr/lib/droidloom/current/bin/droidloom-wificond",
-      "target": "/system_ext/bin/wificond"
+      "target": "/system/bin/wificond"
     },
     {
       "source": "/usr/lib/droidloom/current/framework/services.jar",
