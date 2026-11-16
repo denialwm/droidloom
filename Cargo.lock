@@ -885,6 +885,7 @@ dependencies = [
 name = "droidloom-wayland"
 version = "0.1.0"
 dependencies = [
+ "ash",
  "async-channel",
  "async-io",
  "drm-fourcc",

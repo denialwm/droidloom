@@ -8,6 +8,7 @@ mod clock;
 mod density;
 mod fence_wakeup;
 mod frame_timeline;
+mod gpu_layouts;
 mod imports;
 mod input;
 mod input_time;
@@ -137,7 +138,10 @@ enum PresenterError {
     Gbm(String),
     #[error("the compositor does not advertise linux-dmabuf v4 feedback")]
     DmabufV4Required,
-    #[error("the compositor exposes no linear ARGB8888 or XRGB8888 DMA-BUF format")]
+    #[error(
+        "the compositor offers ARGB8888 and XRGB8888 DMA-BUFs neither linear nor in a \
+         layout its GPU's Vulkan driver draws into"
+    )]
     NoRenderFormat,
     #[error("task {0:?} does not exist")]
     UnknownTask(TaskObjectId),
@@ -373,6 +377,9 @@ struct App {
     sync_manager: Option<WpLinuxDrmSyncobjManagerV1>,
     syncobj: SyncobjDevice,
     gbm: GbmDevice<File>,
+    /// The compositor's GPU and its own layouts Vulkan draws into, opened
+    /// only when the compositor offers no linear buffers.
+    gpu_targets: std::cell::OnceCell<Option<gpu_layouts::Targets>>,
     listener: DenialEndpointListener,
     window_policy: WindowPolicyStore,
     /// The density each task gets on the output it is on.
@@ -726,37 +733,77 @@ impl App {
         )
     }
 
-    fn selected_format(&self) -> Result<(DrmFourcc, Vec<Modifier>), PresenterError> {
+    /// The format and modifiers of new window targets, and the GPU that
+    /// allocates them.
+    fn selected_format(
+        &self,
+    ) -> Result<(DrmFourcc, Vec<Modifier>, &GbmDevice<File>), PresenterError> {
         let feedback = self
             .feedback
             .as_ref()
             .ok_or(PresenterError::DmabufV4Required)?;
-        for fourcc in [DrmFourcc::Argb8888, DrmFourcc::Xrgb8888] {
+        let offered = |fourcc: DrmFourcc| {
             let mut modifiers = feedback
                 .tranches()
                 .iter()
                 .flat_map(|tranche| tranche.formats.iter())
                 .filter_map(|index| feedback.format_table().get(*index as usize))
-                // Host Mesa and Android Mesa can disagree about compressed or
-                // tiled layouts even when Wayland advertises them. Linear
-                // DMA-BUFs keep the shared render targets importable across
-                // that boundary, including laptops with multiple GPUs.
-                .filter(|entry| {
-                    entry.format == fourcc as u32 && entry.modifier == u64::from(Modifier::Linear)
-                })
-                .map(|entry| Modifier::from(entry.modifier))
+                .filter(|entry| entry.format == fourcc as u32)
+                .map(|entry| entry.modifier)
                 .collect::<Vec<_>>();
-            modifiers.sort_unstable_by_key(|modifier| u64::from(*modifier));
+            modifiers.sort_unstable();
             modifiers.dedup();
-            if !modifiers.is_empty() {
-                return Ok((fourcc, modifiers));
+            modifiers
+        };
+        // Host Mesa and Android Mesa can disagree about compressed or tiled
+        // layouts even when Wayland advertises them. Linear DMA-BUFs keep the
+        // shared render targets importable across that boundary, including
+        // laptops with multiple GPUs.
+        for fourcc in [DrmFourcc::Argb8888, DrmFourcc::Xrgb8888] {
+            if offered(fourcc).contains(&u64::from(Modifier::Linear)) {
+                return Ok((fourcc, vec![Modifier::Linear], &self.gbm));
             }
         }
-        Err(PresenterError::NoRenderFormat)
+        // A compositor without linear buffers, as KWin on NVIDIA: its GPU's
+        // own layouts it imports and Vulkan, which Android renders with
+        // through GPU forwarding, draws into. The forwarding offers Android
+        // only layouts the compositor imports with and without alpha.
+        let gpu = self
+            .gpu_targets
+            .get_or_init(|| match gpu_layouts::open(feedback.main_device()) {
+                Ok(gpu) => {
+                    eprintln!(
+                        "Droidloom: the compositor offers no linear buffers; window targets use \
+                         the {} layouts the Vulkan driver of {} draws into",
+                        gpu.layouts.len(),
+                        gpu.node.display()
+                    );
+                    Some(gpu)
+                }
+                Err(error) => {
+                    eprintln!(
+                        "Droidloom: the compositor offers no linear buffers, and its GPU \
+                         answers no layouts: {error}"
+                    );
+                    None
+                }
+            })
+            .as_ref()
+            .ok_or(PresenterError::NoRenderFormat)?;
+        let opaque = offered(DrmFourcc::Xrgb8888);
+        let modifiers = offered(DrmFourcc::Argb8888)
+            .into_iter()
+            .filter(|modifier| opaque.contains(modifier) && gpu.layouts.contains(modifier))
+            .map(Modifier::from)
+            .collect::<Vec<_>>();
+        if modifiers.is_empty() {
+            return Err(PresenterError::NoRenderFormat);
+        }
+        Ok((DrmFourcc::Argb8888, modifiers, &gpu.gbm))
     }
 
     fn published_formats(&self) -> Result<Vec<FormatModifier>, PresenterError> {
-        let (fourcc, modifiers) = self.selected_format()?;
+        let (fourcc, modifiers, _) = self.selected_format()?;
         Ok(modifiers
             .into_iter()
             .map(|modifier| FormatModifier {
@@ -1069,9 +1116,8 @@ impl App {
         width: u32,
         height: u32,
     ) -> Result<RenderTarget, PresenterError> {
-        let (fourcc, modifiers) = self.selected_format()?;
-        let allocation = self
-            .gbm
+        let (fourcc, modifiers, gbm) = self.selected_format()?;
+        let allocation = gbm
             .create_buffer_object_with_modifiers::<()>(
                 width,
                 height,
@@ -3451,6 +3497,7 @@ fn run() -> Result<(), PresenterError> {
         sync_manager,
         syncobj,
         gbm,
+        gpu_targets: std::cell::OnceCell::new(),
         listener,
         window_policy,
         densities: density::Densities::load(env::var_os("XDG_CONFIG_HOME"), env::var_os("HOME")),

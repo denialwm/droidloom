@@ -12,6 +12,7 @@ droidloom-timing = { path = "../../runtime/droidloom-timing" }
 droidloom-contracts = { path = "../../runtime/droidloom-contracts" }
 droidloom-cpu-placement = { path = "../../runtime/droidloom-cpu-placement" }
 droidloom-surface-bridge = { path = "../droidloom-surface-bridge" }
+ash = "0.38.0"
 drm-fourcc.workspace = true
 droidloom-denial-endpoint = { path = "../droidloom-denial-endpoint" }
 droidloom-denial-ipc = { path = "../droidloom-denial-ipc" }

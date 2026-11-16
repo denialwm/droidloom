@@ -74,8 +74,16 @@ With GPU forwarding, RGB buffers nobody maps may instead lie in VRAM in a
 modifier of the host GPU's own (`docs/gpu-forwarding.md`); mapping one fails.
 Images are bounded to 16384 pixels per dimension and 1 GiB per allocation; R8
 blobs may exceed the image width limit. Protected allocations are rejected.
-The host presenter still allocates final Wayland targets. Linear images add no
-required CPU copy, but their bandwidth cost needs workload-specific measurement.
+The host presenter still allocates final Wayland targets, linear whenever the
+compositor offers linear ARGB8888 or XRGB8888. A compositor that offers no
+linear buffers, as KWin on NVIDIA, gets targets in its GPU's own layouts that
+it imports with and without alpha and that the GPU's Vulkan driver draws into,
+allocated on that GPU (its feedback's main device), even when the cell's render
+node is another one. The presenter asks Vulkan once, the first time it needs
+to. Android renders those through GPU forwarding on that GPU, whose list holds
+the same layouts.
+Linear images add no required CPU copy, but their bandwidth cost needs
+workload-specific measurement.
 Passing host feedback/syncobj checks alone does not establish guest GPU support.
 
 ## Input ownership and recovery
@@ -106,8 +114,10 @@ or application-level delivery qualification.
 
 ## Wayland and Denial
 
-The presenter requires `xdg-shell`, `linux-dmabuf` v4 feedback and
-`linux-drm-syncobj` synchronization. Each task has a bounded, generation-scoped
+The presenter requires `xdg-shell` and `linux-dmabuf` v4 feedback. Without
+`linux-drm-syncobj`, as on niri, fences ride on the DMA-BUFs (see the target
+timelines below). Without `wlr-output-power-management`, as on KWin and GNOME,
+Android gets no display power hint. Each task has a bounded, generation-scoped
 target pool for composition fallback. The default task path first resolves
 SurfaceFlinger's ordinary layer occlusion and output geometry, then exports
 eligible original Android buffers as synchronized Wayland subsurfaces. Denial
@@ -207,6 +217,12 @@ alternate only across reuses of that same buffer, after its preceding release
 has completed. A newer buffer's acquire fence or out-of-order release must not
 advance another buffer's release state. This follows linux-drm-syncobj's
 per-buffer timeline recommendation and preserves GPU fencing without a CPU copy.
+Without `linux-drm-syncobj` the timelines stay and only their exchange with
+the compositor changes: Android's acquire `sync_file` becomes each plane's
+DMA-BUF write fence, which the compositor's implicit sync waits for, and at
+`wl_buffer.release` the fences the compositor's reads left on the planes are
+imported at the release point. One `wl_buffer.release` ends every read of a
+buffer, so a direct layer buffer then has one read in flight at a time.
 On kernels with syncobj eventfd support, completion of the buffer's release
 point wakes the presenter directly. Older kernels retain a bounded polling
 fallback. Waking alone never releases a buffer: the actual release timeline
