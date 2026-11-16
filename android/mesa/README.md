@@ -38,10 +38,15 @@ Runtime patches under `android/aosp-patches/`:
   select a unique Turnip device without DRM identity only if external DMA-BUF
   memory and image modifier extensions are present. Other DRM drivers keep
   their existing matching behavior.
-- `0015-libdrm-empty-version-strings.patch`: preserve empty kernel driver
-  version strings as owned empty strings. Panthor advertises an empty date;
-  the pinned libdrm otherwise passes its NULL kernel pointer to `strdup` and
-  crashes SurfaceFlinger during EGL initialization. This applies to libdrm,
+- `0036-libdrm-2.4.134.patch`: AOSP's libdrm is a 2.4.124 snapshot, and
+  Mesa's RadeonSI and RADV need libdrm_amdgpu 2.4.133. The patch brings the
+  libraries, headers and data to the signed upstream 2.4.134 release and keeps
+  AOSP's build files and Bionic changes; its header lists what it covers.
+- `0015-libdrm-empty-version-strings.patch`: applied after the upgrade,
+  preserve empty kernel driver version strings as owned empty strings.
+  Panthor advertises an empty date; libdrm otherwise returns a NULL date
+  (2.4.124 passed the NULL kernel pointer to `strdup` and crashed
+  SurfaceFlinger during EGL initialization). This applies to libdrm,
   retaining the real driver name and version without changing the kernel.
 - `0016-mesa-turnip-hwui-queues.patch`: two queues in Turnip's VM_BIND graphics
   family, which HWUI's Vulkan pipeline requires (render and upload queues).
@@ -75,7 +80,7 @@ cargo test --locked -j 1 -p droidloom-update --test panfrost_model -- --ignored
 This covers the reported 576x1024 YV12 import failure, even widths through
 4096, plane alignment/overlap, Android stride requirements, and unchanged
 RGB/NV12/P010 layouts. GPU import and app behavior require device validation.
-The libdrm test compiles its actual pinned implementation with the patch and
+The libdrm test compiles its actual pinned implementation with both patches and
 injects DRM version replies covering Panthor's empty date, an empty description,
 all-empty strings and ordinary nonempty strings. It opens no device.
 The model test compiles the prepared Mesa lookup and checks the tablet's exact

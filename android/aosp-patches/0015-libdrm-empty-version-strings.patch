@@ -1,7 +1,10 @@
 diff --git a/xf86drm.c b/xf86drm.c
+index 53d1354..5b35362 100644
 --- a/xf86drm.c
 +++ b/xf86drm.c
-@@ -1341,12 +1341,15 @@ static void drmCopyVersion(drmVersionPtr d, const drm_version_t *s)
+@@ -1348,15 +1348,18 @@ static void drmFreeKernelVersion(drm_version_t *v)
+  */
+ static void drmCopyVersion(drmVersionPtr d, const drm_version_t *s)
  {
 +    /* DRM drivers may advertise empty strings, leaving the kernel-version
 +     * pointers NULL. Keep the public strings owned and NUL-terminated.
@@ -10,13 +13,14 @@ diff --git a/xf86drm.c b/xf86drm.c
      d->version_minor      = s->version_minor;
      d->version_patchlevel = s->version_patchlevel;
      d->name_len           = s->name_len;
--    d->name               = strdup(s->name);
+-    d->name               = s->name ? strdup(s->name) : NULL;
 +    d->name               = strdup(s->name ? s->name : "");
      d->date_len           = s->date_len;
--    d->date               = strdup(s->date);
+-    d->date               = s->date ? strdup(s->date) : NULL;
 +    d->date               = strdup(s->date ? s->date : "");
      d->desc_len           = s->desc_len;
--    d->desc               = strdup(s->desc);
+-    d->desc               = s->desc ? strdup(s->desc) : NULL;
 +    d->desc               = strdup(s->desc ? s->desc : "");
  }
+ 
  

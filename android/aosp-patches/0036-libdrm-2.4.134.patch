@@ -1,0 +1,2914 @@
+libdrm: upgrade AOSP's 2.4.124 snapshot to libdrm 2.4.134
+
+Mesa 26.2 and later need libdrm_amdgpu 2.4.133 for RadeonSI and RADV, and
+AOSP's external/libdrm has stayed at 2.4.124. This takes every library,
+header and data change between the upstream 2.4.124 and 2.4.134 releases:
+https://dri.freedesktop.org/libdrm/libdrm-2.4.134.tar.xz
+SHA-256 ac5e74d157830eb8bee44c6a6bf3ad49774ef0dd2a72bdad74a8f20308b52a95,
+signed by Simon Ser.
+
+AOSP's own changes stay: its Soong build files, the Bionic mmap check, the
+etnaviv kernel header include and the Rust bindings. virtgpu_drm.h is
+upstream's, which contains AOSP's backport. The Meson version Mesa reads,
+the prebuilt fourcc table and METADATA follow the release, and the amdgpu
+source list gains amdgpu_userq.c, which upstream's Android.sources.bp
+lacks. Upstream tests, man pages and Meson files are left out.
+
+diff --git a/METADATA b/METADATA
+index 994214f..788559e 100644
+--- a/METADATA
++++ b/METADATA
+@@ -7,14 +7,14 @@ description: "libdrm Direct Rendering Manager library and headers"
+ third_party {
+   license_type: NOTICE
+   last_upgrade_date {
+-    year: 2024
+-    month: 12
+-    day: 4
++    year: 2026
++    month: 11
++    day: 16
+   }
+   identifier {
+     type: "Git"
+     value: "https://gitlab.freedesktop.org/mesa/drm.git"
+-    version: "38ec7dbd4df3141441afafe5ac62dfc9df36a77e"
+-    closest_version: "libdrm-2.4.124"
++    version: "libdrm-2.4.134"
++    closest_version: "libdrm-2.4.134"
+   }
+ }
+diff --git a/amdgpu/Android.sources.bp b/amdgpu/Android.sources.bp
+index e2a2888..6678b87 100644
+--- a/amdgpu/Android.sources.bp
++++ b/amdgpu/Android.sources.bp
+@@ -10,6 +10,7 @@ cc_defaults {
+         "amdgpu_gpu_info.c",
+         "amdgpu_vamgr.c",
+         "amdgpu_vm.c",
++        "amdgpu_userq.c",
+         "handle_table.c",
+     ],
+ }
+diff --git a/amdgpu/amdgpu-symbols.txt b/amdgpu/amdgpu-symbols.txt
+index 594480e..60c7d06 100644
+--- a/amdgpu/amdgpu-symbols.txt
++++ b/amdgpu/amdgpu-symbols.txt
+@@ -14,6 +14,7 @@ amdgpu_bo_query_info
+ amdgpu_bo_set_metadata
+ amdgpu_bo_va_op
+ amdgpu_bo_va_op_raw
++amdgpu_bo_va_op_raw2
+ amdgpu_bo_wait_for_idle
+ amdgpu_create_bo_from_user_mem
+ amdgpu_cs_chunk_fence_info_to_data
+@@ -70,11 +71,14 @@ amdgpu_query_hw_ip_count
+ amdgpu_query_hw_ip_info
+ amdgpu_query_info
+ amdgpu_query_sensor_info
++amdgpu_query_uq_fw_area_info
+ amdgpu_query_video_caps_info
+ amdgpu_read_mm_registers
+ amdgpu_va_manager_alloc
+ amdgpu_va_manager_init
++amdgpu_va_manager_init2
+ amdgpu_va_manager_deinit
++amdgpu_va_manager_query_sw_info
+ amdgpu_va_range_alloc
+ amdgpu_va_range_alloc2
+ amdgpu_va_range_free
+@@ -82,3 +86,7 @@ amdgpu_va_get_start_addr
+ amdgpu_va_range_query
+ amdgpu_vm_reserve_vmid
+ amdgpu_vm_unreserve_vmid
++amdgpu_create_userqueue
++amdgpu_free_userqueue
++amdgpu_userq_signal
++amdgpu_userq_wait
+diff --git a/amdgpu/amdgpu.h b/amdgpu/amdgpu.h
+index c9c1f12..6efb7a7 100644
+--- a/amdgpu/amdgpu.h
++++ b/amdgpu/amdgpu.h
+@@ -42,7 +42,10 @@ extern "C" {
+ #endif
+ 
+ struct drm_amdgpu_info_hw_ip;
++struct drm_amdgpu_info_uq_fw_areas;
+ struct drm_amdgpu_bo_list_entry;
++struct drm_amdgpu_userq_signal;
++struct drm_amdgpu_userq_wait;
+ 
+ /*--------------------------------------------------------------------------*/
+ /* --------------------------- Defines ------------------------------------ */
+@@ -102,6 +105,19 @@ enum amdgpu_gpu_va_range
+ 
+ enum amdgpu_sw_info {
+ 	amdgpu_sw_info_address32_hi = 0,
++	/** Query the PRT control bit when the half VA range is reserved for
++	 * PRT when the device is initialized. This depends on the GFX version.
++	 * A return value of ~0 should be ignored.
++	 */
++	amdgpu_sw_info_address_prt_wa_control_bit = 1,
++};
++
++enum amdgpu_va_manager_sw_info {
++	/** Query the PRT control bit when the half VA range is reserved for
++	 * PRT with AMDGPU_VA_MGR_RESERVE_HALF_VA_FOR_PRT. The default value of
++	 * ~0 shouldn't be considered a valid value.
++	 */
++	amdgpu_va_manager_sw_info_address_prt_wa_control_bit = 0,
+ };
+ 
+ /*--------------------------------------------------------------------------*/
+@@ -1172,6 +1188,26 @@ int amdgpu_query_hw_ip_info(amdgpu_device_handle dev, unsigned type,
+ 			    unsigned ip_instance,
+ 			    struct drm_amdgpu_info_hw_ip *info);
+ 
++/**
++ * Query FW area related information.
++ *
++ * The return size is query-specific and depends on the "type" parameter.
++ * No more than "size" bytes is returned.
++ *
++ * \param	dev		- \c [in] Device handle. See #amdgpu_device_initialize()
++ * \param	type		- \c [in] AMDGPU_HW_IP_*
++ * \param	ip_instance	- \c [in] HW IP index.
++ * \param	info		- \c [out] The pointer to return value
++ *
++ * \return   0 on success\n
++ *          <0 - Negative POSIX error code
++ *
++*/
++int amdgpu_query_uq_fw_area_info(amdgpu_device_handle dev,
++				  unsigned type,
++				  unsigned ip_instance,
++				  struct drm_amdgpu_info_uq_fw_areas *info);
++
+ /**
+  * Query heap information
+  *
+@@ -1444,6 +1480,14 @@ void amdgpu_va_manager_init(amdgpu_va_manager_handle va_mgr,
+ 			    uint64_t high_va_offset, uint64_t high_va_max,
+ 			    uint32_t virtual_address_alignment);
+ 
++#define AMDGPU_VA_MGR_RESERVE_HALF_VA_FOR_PRT 0x1
++
++void amdgpu_va_manager_init2(struct amdgpu_va_manager *va_mgr,
++			     uint64_t low_va_offset, uint64_t low_va_max,
++			     uint64_t high_va_offset, uint64_t high_va_max,
++			     uint32_t virtual_address_alignment,
++			     uint32_t flags);
++
+ void amdgpu_va_manager_deinit(amdgpu_va_manager_handle va_mgr);
+ 
+ /**
+@@ -1461,6 +1505,21 @@ int amdgpu_va_range_alloc2(amdgpu_va_manager_handle va_mgr,
+ 			   amdgpu_va_handle *va_range_handle,
+ 			   uint64_t flags);
+ 
++/**
++ * Query VA manager information.
++ *
++ * \param   va_mgr  - \c [in] VA manager
++ * \param   info    - \c [in] amdgpu_va_manager_sw_info_*
++ * \param   value   - \c [out] Pointer to the return value.
++ *
++ * \return   0 on success\n
++ *          <0 - Negative POSIX error code
++ *
++*/
++int amdgpu_va_manager_query_sw_info(struct amdgpu_va_manager *va_mgr,
++				    enum amdgpu_va_manager_sw_info info,
++				    void *value);
++
+ /**
+  *  VA mapping/unmapping for the buffer object
+  *
+@@ -1511,6 +1570,42 @@ int amdgpu_bo_va_op_raw(amdgpu_device_handle dev,
+ 			uint64_t flags,
+ 			uint32_t ops);
+ 
++/**
++ *  VA mapping/unmapping of buffer object for usermode queue.
++ *
++ * This is not a simple drop-in extension for amdgpu_bo_va_op; instead, all
++ * parameters are treated "raw2", i.e. size is not automatically aligned, and
++ * all flags must be specified explicitly.
++ *
++ * \param  dev				- \c [in] device handle
++ * \param  bo				- \c [in] BO handle (may be NULL)
++ * \param  offset			- \c [in] Start offset to map
++ * \param  size				- \c [in] Size to map
++ * \param  addr				- \c [in] Start virtual address.
++ * \param  flags			- \c [in] Supported flags for mapping/unmapping
++ * \param  ops				- \c [in] AMDGPU_VA_OP_MAP or AMDGPU_VA_OP_UNMAP
++ * \param  vm_timeline_syncobj_out	- \c [out] syncobj handle for PT update fence
++ * \param  vm_timeline_point		- \c [in] input timeline point
++ * \param  input_fence_syncobj_handles	- \c [in] Array of syncobj handles for bo unmap,
++ * 						  clear and replace
++ * \param  num_syncobj_handles		- \c [in] Number of syncobj handles
++ *
++ * \return   0 on success\n
++ *          <0 - Negative POSIX Error code
++ *
++*/
++int amdgpu_bo_va_op_raw2(amdgpu_device_handle dev,
++			 amdgpu_bo_handle bo,
++			 uint64_t offset,
++			 uint64_t size,
++			 uint64_t addr,
++			 uint64_t flags,
++			 uint32_t ops,
++			 uint32_t vm_timeline_syncobj_out,
++			 uint64_t vm_timeline_point,
++			 uint64_t input_fence_syncobj_array_in,
++			 uint32_t num_syncobj_handles_in);
++
+ /**
+  *  create semaphore
+  *
+@@ -1942,6 +2037,65 @@ int amdgpu_vm_reserve_vmid(amdgpu_device_handle dev, uint32_t flags);
+ */
+ int amdgpu_vm_unreserve_vmid(amdgpu_device_handle dev, uint32_t flags);
+ 
++/**
++ * Create USERQUEUE
++ * \param   dev			- \c [in] device handle
++ * \param   ip_type		- \c [in] ip type
++ * \param   doorbell_handle	- \c [in] doorbell handle
++ * \param   doorbell_offset	- \c [in] doorbell index
++ * \param   mqd_in		- \c [in] MQD data
++ * \param   queue_va		- \c [in] Virtual address of queue
++ * \param   queue_size		- \c [in] userqueue size
++ * \param   wptr_va		- \c [in] Virtual address of wptr
++ * \param   rptr_va		- \c [in] Virtual address of rptr
++ * \param   queue_id		- \c [out] queue id
++ *
++ * \return  0 on success otherwise POSIX Error code
++ */
++
++int amdgpu_create_userqueue(amdgpu_device_handle dev,
++			    uint32_t ip_type,
++			    uint32_t doorbell_handle,
++			    uint32_t doorbell_offset,
++			    uint64_t queue_va,
++			    uint64_t queue_size,
++			    uint64_t wptr_va,
++			    uint64_t rptr_va,
++			    void *mqd_in,
++			    uint32_t flags,
++			    uint32_t *queue_id);
++
++/**
++ * Free USERQUEUE
++ * \param   dev		- \c [in] device handle
++ * \param   queue_id	- \c [in]  queue id
++ *
++ * \return  0 on success otherwise POSIX Error code
++ */
++int amdgpu_free_userqueue(amdgpu_device_handle dev, uint32_t queue_id);
++
++/**
++ * Signal USERQUEUE
++ * \param   dev               - \c [in] device handle
++ * \param   signal_data       - \c [in] pointer to struct drm_amdgpu_userq_signal
++ *                                      to be filled by the caller
++ *
++ * \return  0 on success otherwise POSIX Error code
++ */
++int amdgpu_userq_signal(amdgpu_device_handle dev,
++		        struct drm_amdgpu_userq_signal *signal_data);
++
++/**
++ * Wait USERQUEUE
++ * \param   dev               - \c [in]     device handle
++ * \param   wait_data         - \c [in/out] pointer to struct drm_amdgpu_userq_wait
++ *                                          to be filled by the caller
++ *
++ * \return  0 on success otherwise POSIX Error code
++ */
++int amdgpu_userq_wait(amdgpu_device_handle dev,
++		      struct drm_amdgpu_userq_wait *wait_data);
++
+ #ifdef __cplusplus
+ }
+ #endif
+diff --git a/amdgpu/amdgpu_asic_id.c b/amdgpu/amdgpu_asic_id.c
+index a5007ff..fed3a53 100644
+--- a/amdgpu/amdgpu_asic_id.c
++++ b/amdgpu/amdgpu_asic_id.c
+@@ -22,6 +22,11 @@
+  *
+  */
+ 
++// secure_getenv requires _GNU_SOURCE
++#ifndef _GNU_SOURCE
++#define _GNU_SOURCE
++#endif
++
+ #include <ctype.h>
+ #include <stdio.h>
+ #include <stdlib.h>
+@@ -104,6 +109,168 @@ out:
+ 	return r;
+ }
+ 
++static void amdgpu_parse_proc_cpuinfo(struct amdgpu_device *dev)
++{
++	const char *search_key = "model name";
++	const char *radeon_key = "Radeon";
++	char *line = NULL;
++	size_t len = 0;
++	FILE *fp;
++
++	fp = fopen("/proc/cpuinfo", "r");
++	if (fp == NULL) {
++		fprintf(stderr, "%s\n", strerror(errno));
++		return;
++	}
++
++	while (getline(&line, &len, fp) != -1) {
++		char *saveptr;
++		char *value;
++
++		if (strncmp(line, search_key, strlen(search_key)))
++			continue;
++
++		/* check for parts that have both CPU and GPU information */
++		value = strstr(line, radeon_key);
++
++		/* get content after the first colon */
++		if (value == NULL) {
++			value = strstr(line, ":");
++			if (value == NULL)
++				continue;
++			value++;
++		}
++
++		/* strip whitespace */
++		while (*value == ' ' || *value == '\t')
++			value++;
++		saveptr = strchr(value, '\n');
++		if (saveptr)
++			*saveptr = '\0';
++
++		/* Add AMD to the new string if it's missing from slicing/dicing */
++		if (strncmp(value, "AMD", 3) != 0) {
++			char *tmp = malloc(strlen(value) + 5);
++
++			if (!tmp)
++				break;
++			sprintf(tmp, "AMD %s", value);
++			dev->marketing_name = tmp;
++		} else
++			dev->marketing_name = strdup(value);
++		break;
++	}
++
++	free(line);
++	fclose(fp);
++}
++
++#if HAVE_SECURE_GETENV
++static char *join_path(const char *dir, const char *file) {
++	size_t dir_len = strlen(dir);
++	size_t file_len = strlen(file);
++	char *full_path = NULL;
++
++	int need_slash = ((dir_len > 0) && (dir[dir_len - 1] != '/'));
++	size_t total_len = dir_len + (need_slash ? 1 : 0) + file_len + 1; // +1 for null terminator
++
++	if (dir_len == 0) {
++		return strdup(file);
++	}
++
++	full_path = malloc(total_len);
++	if (!full_path) {
++		return NULL; // Memory allocation failed
++	}
++
++	strcpy(full_path, dir);
++	if (need_slash) {
++		full_path[dir_len] = '/';
++		dir_len++;
++	}
++	strcpy(full_path + dir_len, file);
++
++	return full_path;
++}
++
++static char **split_env_var(const char *env_var_content)
++{
++	char **ret = NULL;
++	char *dup_env_val;
++	int elements = 1;
++	int index = 1;
++
++	if (!env_var_content || env_var_content[0] == '\0')
++		return NULL;
++
++	for(char *p = (char *)env_var_content; *p; p++) {
++		if (*p == ':')
++			elements++;
++	}
++
++	dup_env_val = strdup(env_var_content);
++	if (!dup_env_val) {
++		return NULL;
++	}
++	ret = malloc(sizeof(char *) * (elements + 1));
++	ret[0] = dup_env_val;
++	for(char *p = (char *)dup_env_val; *p; p++) {
++		if (*p == ':') {
++			*p = 0;
++			ret[index++] = p + 1;
++		}
++	}
++	ret[index] = NULL; // ensure that the last element in the array is NULL
++	return ret;
++}
++
++static void split_env_var_free(char **split_var)
++{
++	if (split_var) {
++		// remember that the first element also points to the whole duplicated string,
++		// which was modified in place by replacing ':' with '\0' characters
++		free(split_var[0]);
++		free(split_var);
++	}
++}
++
++static char *find_asic_id_table(void)
++{
++	// first check the paths in AMDGPU_ASIC_ID_TABLE_PATHS environment variable
++	const char *amdgpu_asic_id_table_paths = secure_getenv("AMDGPU_ASIC_ID_TABLE_PATHS");
++	const char *file_name = NULL;
++	char *found_path = NULL;
++	char **paths = NULL;
++
++	if (!amdgpu_asic_id_table_paths)
++		return NULL;
++
++	// extract the file name from AMDGPU_ASIC_ID_TABLE
++	file_name = strrchr(AMDGPU_ASIC_ID_TABLE, '/');
++	if (!file_name)
++		return NULL;
++	file_name++; // skip the '/'
++
++	paths = split_env_var(amdgpu_asic_id_table_paths);
++	if (!paths)
++		return NULL;
++
++	// for each path, join with file_name and check if it exists
++	for (int i = 0; paths[i] != NULL; i++) {
++		char *full_path = join_path(paths[i], file_name);
++		if (!full_path) {
++			continue;
++		}
++		if (access(full_path, R_OK) == 0) {
++			found_path = full_path;
++			break;
++		}
++	}
++	split_env_var_free(paths);
++	return found_path;
++}
++#endif
++
+ void amdgpu_parse_asic_ids(struct amdgpu_device *dev)
+ {
+ 	FILE *fp;
+@@ -113,11 +280,21 @@ void amdgpu_parse_asic_ids(struct amdgpu_device *dev)
+ 	int line_num = 1;
+ 	int r = 0;
+ 
+-	fp = fopen(AMDGPU_ASIC_ID_TABLE, "r");
++	char *amdgpu_asic_id_table_path = NULL;
++#if HAVE_SECURE_GETENV
++	// if this system lacks secure_getenv(), don't allow extra paths
++	// for security reasons.
++	amdgpu_asic_id_table_path = find_asic_id_table();
++#endif
++	// if not found, use the default AMDGPU_ASIC_ID_TABLE path
++	if (!amdgpu_asic_id_table_path)
++		amdgpu_asic_id_table_path = strdup(AMDGPU_ASIC_ID_TABLE);
++
++	fp = fopen(amdgpu_asic_id_table_path, "r");
+ 	if (!fp) {
+-		fprintf(stderr, "%s: %s\n", AMDGPU_ASIC_ID_TABLE,
++		fprintf(stderr, "%s: %s\n", amdgpu_asic_id_table_path,
+ 			strerror(errno));
+-		return;
++		goto get_cpu;
+ 	}
+ 
+ 	/* 1st valid line is file version */
+@@ -132,7 +309,7 @@ void amdgpu_parse_asic_ids(struct amdgpu_device *dev)
+ 			continue;
+ 		}
+ 
+-		drmMsg("%s version: %s\n", AMDGPU_ASIC_ID_TABLE, line);
++		drmMsg("%s version: %s\n", amdgpu_asic_id_table_path, line);
+ 		break;
+ 	}
+ 
+@@ -150,7 +327,7 @@ void amdgpu_parse_asic_ids(struct amdgpu_device *dev)
+ 
+ 	if (r == -EINVAL) {
+ 		fprintf(stderr, "Invalid format: %s: line %d: %s\n",
+-			AMDGPU_ASIC_ID_TABLE, line_num, line);
++			amdgpu_asic_id_table_path, line_num, line);
+ 	} else if (r && r != -EAGAIN) {
+ 		fprintf(stderr, "%s: Cannot parse ASIC IDs: %s\n",
+ 			__func__, strerror(-r));
+@@ -158,4 +335,11 @@ void amdgpu_parse_asic_ids(struct amdgpu_device *dev)
+ 
+ 	free(line);
+ 	fclose(fp);
++
++get_cpu:
++	free(amdgpu_asic_id_table_path);
++	if (dev->info.ids_flags & AMDGPU_IDS_FLAGS_FUSION &&
++	    dev->marketing_name == NULL) {
++		amdgpu_parse_proc_cpuinfo(dev);
++	}
+ }
+diff --git a/amdgpu/amdgpu_bo.c b/amdgpu/amdgpu_bo.c
+index 672f000..74e6398 100644
+--- a/amdgpu/amdgpu_bo.c
++++ b/amdgpu/amdgpu_bo.c
+@@ -74,6 +74,9 @@ drm_public int amdgpu_bo_alloc(amdgpu_device_handle dev,
+ 	union drm_amdgpu_gem_create args;
+ 	int r;
+ 
++	if (!alloc_buffer || !buf_handle)
++		return -EINVAL;
++
+ 	memset(&args, 0, sizeof(args));
+ 	args.in.bo_size = alloc_buffer->alloc_size;
+ 	args.in.alignment = alloc_buffer->phys_alignment;
+@@ -105,6 +108,9 @@ drm_public int amdgpu_bo_set_metadata(amdgpu_bo_handle bo,
+ {
+ 	struct drm_amdgpu_gem_metadata args = {};
+ 
++	if (!info)
++		return -EINVAL;
++
+ 	args.handle = bo->handle;
+ 	args.op = AMDGPU_GEM_METADATA_OP_SET_METADATA;
+ 	args.data.flags = info->flags;
+@@ -132,7 +138,7 @@ drm_public int amdgpu_bo_query_info(amdgpu_bo_handle bo,
+ 	int r;
+ 
+ 	/* Validate the BO passed in */
+-	if (!bo->handle)
++	if (!bo->handle || !info)
+ 		return -EINVAL;
+ 
+ 	/* Query metadata. */
+@@ -642,7 +648,7 @@ drm_public int amdgpu_bo_list_create(amdgpu_device_handle dev,
+ 	unsigned i;
+ 	int r;
+ 
+-	if (!number_of_resources)
++	if (!number_of_resources || !resources)
+ 		return -EINVAL;
+ 
+ 	/* overflow check for multiplication */
+@@ -789,3 +795,39 @@ drm_public int amdgpu_bo_va_op_raw(amdgpu_device_handle dev,
+ 
+ 	return r;
+ }
++
++drm_public int amdgpu_bo_va_op_raw2(amdgpu_device_handle dev,
++				    amdgpu_bo_handle bo,
++				    uint64_t offset,
++				    uint64_t size,
++				    uint64_t addr,
++				    uint64_t flags,
++				    uint32_t ops,
++				    uint32_t vm_timeline_syncobj_out,
++				    uint64_t vm_timeline_point,
++				    uint64_t input_fence_syncobj_handles,
++				    uint32_t num_syncobj_handles)
++{
++	struct drm_amdgpu_gem_va va;
++	int r;
++
++	if (ops != AMDGPU_VA_OP_MAP && ops != AMDGPU_VA_OP_UNMAP &&
++	    ops != AMDGPU_VA_OP_REPLACE && ops != AMDGPU_VA_OP_CLEAR)
++		return -EINVAL;
++
++	memset(&va, 0, sizeof(va));
++	va.handle = bo ? bo->handle : 0;
++	va.operation = ops;
++	va.flags = flags;
++	va.va_address = addr;
++	va.offset_in_bo = offset;
++	va.map_size = size;
++	va.vm_timeline_syncobj_out = vm_timeline_syncobj_out;
++	va.vm_timeline_point = vm_timeline_point;
++	va.input_fence_syncobj_handles = input_fence_syncobj_handles;
++	va.num_syncobj_handles = num_syncobj_handles;
++
++	r = drmCommandWriteRead(dev->fd, DRM_AMDGPU_GEM_VA, &va, sizeof(va));
++
++	return r;
++}
+diff --git a/amdgpu/amdgpu_device.c b/amdgpu/amdgpu_device.c
+index 34463b5..b7d5589 100644
+--- a/amdgpu/amdgpu_device.c
++++ b/amdgpu/amdgpu_device.c
+@@ -144,6 +144,39 @@ static void amdgpu_device_reference(struct amdgpu_device **dst,
+ 	*dst = src;
+ }
+ 
++static int amdgpu_query_gfx_level_major(amdgpu_device_handle dev,
++					uint8_t *gfx_ip_version_major)
++{
++	struct drm_amdgpu_info_hw_ip ip_info;
++	uint32_t gfx_ip_count = 0;
++	int r;
++
++	*gfx_ip_version_major = 0;
++
++	r = amdgpu_query_hw_ip_count(dev, AMDGPU_HW_IP_GFX, &gfx_ip_count);
++	if (r)
++		return r;
++
++	/* No graphics support. */
++	if (gfx_ip_count == 0)
++		return 0;
++
++	memset(&ip_info, 0, sizeof(ip_info));
++
++	r = amdgpu_query_hw_ip_info(dev, AMDGPU_HW_IP_GFX, 0, &ip_info);
++	if (r)
++		return r;
++
++	/* GFX6-8 don't set ip_discovery_version. */
++	if (dev->minor_version >= 48 && ip_info.ip_discovery_version) {
++		*gfx_ip_version_major = (ip_info.ip_discovery_version >> 16) & 0xff;
++	} else {
++		*gfx_ip_version_major = ip_info.hw_ip_version_major;
++	}
++
++	return r;
++}
++
+ static int _amdgpu_device_initialize(int fd,
+ 				     uint32_t *major_version,
+ 				     uint32_t *minor_version,
+@@ -151,11 +184,13 @@ static int _amdgpu_device_initialize(int fd,
+ 				     bool deduplicate_device)
+ {
+ 	struct amdgpu_device *dev = NULL;
++	uint8_t gfx_ip_version_major = 0;
+ 	drmVersionPtr version;
+ 	int r;
+ 	int flag_auth = 0;
+ 	int flag_authexist=0;
+ 	uint32_t accel_working = 0;
++	uint32_t va_mgr_flags = 0;
+ 
+ 	*device_handle = NULL;
+ 
+@@ -244,12 +279,25 @@ static int _amdgpu_device_initialize(int fd,
+ 		goto cleanup;
+ 	}
+ 
+-	amdgpu_va_manager_init(&dev->va_mgr,
+-			       dev->dev_info.virtual_address_offset,
+-			       dev->dev_info.virtual_address_max,
+-			       dev->dev_info.high_va_offset,
+-			       dev->dev_info.high_va_max,
+-			       dev->dev_info.virtual_address_alignment);
++	r = amdgpu_query_gfx_level_major(dev, &gfx_ip_version_major);
++	if (!r) {
++		/* Split the HIGH addr space for GFX6-GFX12, except GFX9 to
++		 * implement a workaround for SMEM loads with NULL PRT pages.
++		 * This is silently ignored if querying the GFX level failed.
++		 */
++		if (gfx_ip_version_major >= 6 && gfx_ip_version_major <= 12 &&
++		    gfx_ip_version_major != 9) {
++			va_mgr_flags |= AMDGPU_VA_MGR_RESERVE_HALF_VA_FOR_PRT;
++		}
++	}
++
++	amdgpu_va_manager_init2(&dev->va_mgr,
++				dev->dev_info.virtual_address_offset,
++				dev->dev_info.virtual_address_max,
++				dev->dev_info.high_va_offset,
++				dev->dev_info.high_va_max,
++				dev->dev_info.virtual_address_alignment,
++				va_mgr_flags);
+ 
+ 	amdgpu_parse_asic_ids(dev);
+ 
+@@ -322,6 +370,9 @@ drm_public int amdgpu_query_sw_info(amdgpu_device_handle dev,
+ 		else
+ 			*val32 = (dev->va_mgr.vamgr_32.va_max - 1) >> 32;
+ 		return 0;
++	case amdgpu_sw_info_address_prt_wa_control_bit:
++		*val32 = dev->va_mgr.address_prt_wa_control_bit;
++		return 0;
+ 	}
+ 	return -EINVAL;
+ }
+diff --git a/amdgpu/amdgpu_gpu_info.c b/amdgpu/amdgpu_gpu_info.c
+index 1a5143a..62552a9 100644
+--- a/amdgpu/amdgpu_gpu_info.c
++++ b/amdgpu/amdgpu_gpu_info.c
+@@ -137,6 +137,24 @@ drm_public int amdgpu_query_firmware_version(amdgpu_device_handle dev,
+ 	return 0;
+ }
+ 
++drm_public int amdgpu_query_uq_fw_area_info(amdgpu_device_handle dev,
++					     unsigned type,
++					     unsigned ip_instance,
++					     struct drm_amdgpu_info_uq_fw_areas *info)
++{
++	struct drm_amdgpu_info request;
++
++	memset(&request, 0, sizeof(request));
++	request.return_pointer = (uintptr_t)info;
++	request.return_size = sizeof(*info);
++	request.query = AMDGPU_INFO_UQ_FW_AREAS;
++	request.query_hw_ip.type = type;
++	request.query_hw_ip.ip_instance = ip_instance;
++
++	return drmCommandWrite(dev->fd, DRM_AMDGPU_INFO, &request,
++			       sizeof(struct drm_amdgpu_info));
++}
++
+ drm_private int amdgpu_query_gpu_info_init(amdgpu_device_handle dev)
+ {
+ 	int r, i;
+diff --git a/amdgpu/amdgpu_internal.h b/amdgpu/amdgpu_internal.h
+index af85b84..593b9f8 100644
+--- a/amdgpu/amdgpu_internal.h
++++ b/amdgpu/amdgpu_internal.h
+@@ -72,6 +72,11 @@ struct amdgpu_va_manager {
+ 	struct amdgpu_bo_va_mgr vamgr_high;
+ 	/** The VA manager for the 32bit high address space */
+ 	struct amdgpu_bo_va_mgr vamgr_high_32;
++
++	/** The bit to control whether it's the "LOW" or "HIGH" halves, when
++	 *  half of the address space is reserved for PRT to implement a SW
++	 *  workaround. */
++	unsigned address_prt_wa_control_bit;
+ };
+ 
+ struct amdgpu_device {
+diff --git a/amdgpu/amdgpu_userq.c b/amdgpu/amdgpu_userq.c
+new file mode 100644
+index 0000000..123c979
+--- /dev/null
++++ b/amdgpu/amdgpu_userq.c
+@@ -0,0 +1,123 @@
++/*
++ * Copyright 2024 Advanced Micro Devices, Inc.
++ *
++ * Permission is hereby granted, free of charge, to any person obtaining a
++ * copy of this software and associated documentation files (the "Software"),
++ * to deal in the Software without restriction, including without limitation
++ * the rights to use, copy, modify, merge, publish, distribute, sublicense,
++ * and/or sell copies of the Software, and to permit persons to whom the
++ * Software is furnished to do so, subject to the following conditions:
++ *
++ * The above copyright notice and this permission notice shall be included in
++ * all copies or substantial portions of the Software.
++ *
++ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
++ * THE COPYRIGHT HOLDER(S) OR AUTHOR(S) BE LIABLE FOR ANY CLAIM, DAMAGES OR
++ * OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
++ * ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
++ * OTHER DEALINGS IN THE SOFTWARE.
++ *
++ */
++
++#include <string.h>
++#include <errno.h>
++#include "xf86drm.h"
++#include "amdgpu_drm.h"
++#include "amdgpu_internal.h"
++
++drm_public int
++amdgpu_create_userqueue(amdgpu_device_handle dev,
++			uint32_t ip_type,
++			uint32_t doorbell_handle,
++			uint32_t doorbell_offset,
++			uint64_t queue_va,
++			uint64_t queue_size,
++			uint64_t wptr_va,
++			uint64_t rptr_va,
++			void *mqd_in,
++			uint32_t flags,
++			uint32_t *queue_id)
++{
++	int ret;
++	union drm_amdgpu_userq userq;
++	uint64_t mqd_size;
++
++	if (!dev)
++		return -EINVAL;
++
++	switch (ip_type) {
++	case AMDGPU_HW_IP_GFX:
++		mqd_size = sizeof(struct drm_amdgpu_userq_mqd_gfx11);
++		break;
++	case AMDGPU_HW_IP_DMA:
++		mqd_size = sizeof(struct drm_amdgpu_userq_mqd_sdma_gfx11);
++		break;
++	case AMDGPU_HW_IP_COMPUTE:
++		mqd_size = sizeof(struct drm_amdgpu_userq_mqd_compute_gfx11);
++		break;
++	default:
++		return -EINVAL;
++	}
++
++	memset(&userq, 0, sizeof(userq));
++
++	userq.in.op = AMDGPU_USERQ_OP_CREATE;
++	userq.in.ip_type = ip_type;
++
++	userq.in.doorbell_handle = doorbell_handle;
++	userq.in.doorbell_offset = doorbell_offset;
++
++	userq.in.queue_va = queue_va;
++	userq.in.queue_size = queue_size;
++	userq.in.wptr_va = wptr_va;
++	userq.in.rptr_va = rptr_va;
++
++	userq.in.mqd = (uint64_t)mqd_in;
++	userq.in.mqd_size = mqd_size;
++	userq.in.flags = flags;
++
++	ret = drmCommandWriteRead(dev->fd, DRM_AMDGPU_USERQ,
++				  &userq, sizeof(userq));
++	*queue_id = userq.out.queue_id;
++
++	return ret;
++}
++
++drm_public int
++amdgpu_free_userqueue(amdgpu_device_handle dev, uint32_t queue_id)
++{
++	union drm_amdgpu_userq userq;
++
++	memset(&userq, 0, sizeof(userq));
++	userq.in.op = AMDGPU_USERQ_OP_FREE;
++	userq.in.queue_id = queue_id;
++
++	return drmCommandWriteRead(dev->fd, DRM_AMDGPU_USERQ,
++				   &userq, sizeof(userq));
++}
++
++drm_public int
++amdgpu_userq_signal(amdgpu_device_handle dev,
++		    struct drm_amdgpu_userq_signal *signal_data)
++{
++	int r;
++
++	r = drmCommandWriteRead(dev->fd, DRM_AMDGPU_USERQ_SIGNAL,
++				signal_data, sizeof(struct drm_amdgpu_userq_signal));
++
++	return r;
++}
++
++drm_public int
++amdgpu_userq_wait(amdgpu_device_handle dev,
++		  struct drm_amdgpu_userq_wait *wait_data)
++{
++	int r;
++
++	r = drmCommandWriteRead(dev->fd, DRM_AMDGPU_USERQ_WAIT,
++				wait_data, sizeof(struct drm_amdgpu_userq_wait));
++
++	return r;
++}
+diff --git a/amdgpu/amdgpu_vamgr.c b/amdgpu/amdgpu_vamgr.c
+index 29944ec..6e9cb65 100644
+--- a/amdgpu/amdgpu_vamgr.c
++++ b/amdgpu/amdgpu_vamgr.c
+@@ -323,19 +323,42 @@ drm_public amdgpu_va_manager_handle amdgpu_va_manager_alloc(void)
+ }
+ 
+ drm_public void amdgpu_va_manager_init(struct amdgpu_va_manager *va_mgr,
++				       uint64_t low_va_offset, uint64_t low_va_max,
++				       uint64_t high_va_offset, uint64_t high_va_max,
++				       uint32_t virtual_address_alignment)
++{
++	amdgpu_va_manager_init2(va_mgr, low_va_offset, low_va_max,
++				high_va_offset, high_va_max,
++				virtual_address_alignment, 0);
++}
++
++drm_public void amdgpu_va_manager_init2(struct amdgpu_va_manager *va_mgr,
+ 					uint64_t low_va_offset, uint64_t low_va_max,
+ 					uint64_t high_va_offset, uint64_t high_va_max,
+-					uint32_t virtual_address_alignment)
++					uint32_t virtual_address_alignment,
++					uint32_t flags)
+ {
+ 	uint64_t start, max;
+ 
++	va_mgr->address_prt_wa_control_bit = ~0;
++
+ 	start = low_va_offset;
+ 	max = MIN2(low_va_max, 0x100000000ULL);
+ 	amdgpu_vamgr_init(&va_mgr->vamgr_32, start, max,
+ 			  virtual_address_alignment);
+ 
+ 	start = max;
+-	max = MAX2(low_va_max, 0x100000000ULL);
++	if ((flags & AMDGPU_VA_MGR_RESERVE_HALF_VA_FOR_PRT) && !high_va_max) {
++		/* Reserve the half VA range for PRT by splitting it in two
++		 * equal halves where one bit controls whether it's the LOW or
++		 * HIGH half.
++		 */
++		va_mgr->address_prt_wa_control_bit = util_last_bit64(low_va_offset ^ low_va_max) - 1;
++		max = low_va_max ^ (1ull << va_mgr->address_prt_wa_control_bit);
++	} else {
++		max = MAX2(low_va_max, 0x100000000ULL);
++	}
++
+ 	amdgpu_vamgr_init(&va_mgr->vamgr_low, start, max,
+ 			  virtual_address_alignment);
+ 
+@@ -345,7 +368,17 @@ drm_public void amdgpu_va_manager_init(struct amdgpu_va_manager *va_mgr,
+ 			  virtual_address_alignment);
+ 
+ 	start = max;
+-	max = MAX2(high_va_max, (start & ~0xffffffffULL) + 0x100000000ULL);
++	if ((flags & AMDGPU_VA_MGR_RESERVE_HALF_VA_FOR_PRT) && high_va_max) {
++		/* Reserve the half VA range for PRT by splitting it in two
++		 * equal halves where one bit controls whether it's the LOW or
++		 * HIGH half.
++		 */
++		va_mgr->address_prt_wa_control_bit = util_last_bit64(high_va_offset ^ high_va_max) - 1;
++		max = high_va_max ^ (1ull << va_mgr->address_prt_wa_control_bit);
++	} else {
++		max = MAX2(high_va_max, (start & ~0xffffffffULL) + 0x100000000ULL);
++	}
++
+ 	amdgpu_vamgr_init(&va_mgr->vamgr_high, start, max,
+ 			  virtual_address_alignment);
+ }
+@@ -357,3 +390,17 @@ drm_public void amdgpu_va_manager_deinit(struct amdgpu_va_manager *va_mgr)
+ 	amdgpu_vamgr_deinit(&va_mgr->vamgr_high_32);
+ 	amdgpu_vamgr_deinit(&va_mgr->vamgr_high);
+ }
++
++drm_public int amdgpu_va_manager_query_sw_info(struct amdgpu_va_manager *va_mgr,
++					       enum amdgpu_va_manager_sw_info info,
++					       void *value)
++{
++	uint32_t *val32 = (uint32_t*)value;
++
++	switch (info) {
++	case amdgpu_va_manager_sw_info_address_prt_wa_control_bit:
++		*val32 = va_mgr->address_prt_wa_control_bit;
++		return 0;
++	}
++	return -EINVAL;
++}
+diff --git a/data/amdgpu.ids b/data/amdgpu.ids
+index 914d0e5..978e5f7 100644
+--- a/data/amdgpu.ids
++++ b/data/amdgpu.ids
+@@ -4,6 +4,23 @@
+ # device_id,	revision_id,	product_name        <-- single tab after comma
+ 
+ 1.0.0
++1114,	C2,	AMD Radeon 860M Graphics
++1114,	C3,	AMD Radeon 840M Graphics
++1114,	D2,	AMD Radeon 860M Graphics
++1114,	D3,	AMD Radeon 840M Graphics
++1114,	E2,	AMD Radeon 860M Graphics
++1114,	E4,	AMD Radeon 860M Graphics
++1114,	E5,	AMD Radeon 840M Graphics
++1114,	E9,	AMD Radeon 860M Graphics
++1114,	EA,	AMD Radeon 840M Graphics
++1114,	ED,	AMD Radeon 860M Graphics
++1114,	EE,	AMD Radeon 840M Graphics
++1114,	F2,	AMD Radeon 860M Graphics
++1114,	F3,	AMD Radeon 840M Graphics
++1114,	F9,	AMD Radeon 860M Graphics
++1114,	FA,	AMD Radeon 840M Graphics
++1114,	FC,	AMD Radeon 860M Graphics
++1114,	FD,	AMD Radeon 840M Graphics
+ 1309,	00,	AMD Radeon R7 Graphics
+ 130A,	00,	AMD Radeon R6 Graphics
+ 130B,	00,	AMD Radeon R4 Graphics
+@@ -34,48 +51,84 @@
+ 1506,	C2,	AMD Radeon 610M
+ 1506,	C3,	AMD Radeon 610M
+ 1506,	C4,	AMD Radeon 610M
+-15BF,	00,	AMD Radeon 780M
+-15BF,	01,	AMD Radeon 760M
+-15BF,	02,	AMD Radeon 780M
+-15BF,	03,	AMD Radeon 760M
+-15BF,	C1,	AMD Radeon 780M
+-15BF,	C2,	AMD Radeon 780M
+-15BF,	C3,	AMD Radeon 760M
+-15BF,	C4,	AMD Radeon 780M
+-15BF,	C5,	AMD Radeon 740M
+-15BF,	C6,	AMD Radeon 780M
+-15BF,	C7,	AMD Radeon 780M
+-15BF,	C8,	AMD Radeon 760M
+-15BF,	C9,	AMD Radeon 780M
+-15BF,	CA,	AMD Radeon 740M
+-15BF,	CB,	AMD Radeon 760M
+-15BF,	CD,	AMD Radeon 760M
+-15BF,	CF,	AMD Radeon 780M
+-15BF,	D0,	AMD Radeon 780M
+-15BF,	D1,	AMD Radeon 780M
+-15BF,	D2,	AMD Radeon 760M
+-15BF,	D3,	AMD Radeon 780M
+-15BF,	D4,	AMD Radeon 780M
+-15BF,	D5,	AMD Radeon 760M
+-15BF,	D6,	AMD Radeon 760M
+-15BF,	D7,	AMD Radeon 780M
+-15BF,	D8,	AMD Radeon 740M
+-15BF,	D9,	AMD Radeon 780M
+-15BF,	DA,	AMD Radeon 780M
+-15BF,	DB,	AMD Radeon 760M
+-15BF,	DC,	AMD Radeon 780M
+-15BF,	DD,	AMD Radeon 780M
+-15BF,	DE,	AMD Radeon 740M
+-15BF,	DF,	AMD Radeon 760M
+-15BF,	F0,	AMD Radeon 760M
+-15C8,	C1,	AMD Radeon 740M
+-15C8,	C2,	AMD Radeon 740M
+-15C8,	C3,	AMD Radeon 740M
+-15C8,	C4,	AMD Radeon 740M
+-15C8,	D1,	AMD Radeon 740M
+-15C8,	D2,	AMD Radeon 740M
+-15C8,	D3,	AMD Radeon 740M
+-15C8,	D4,	AMD Radeon 740M
++150E,	C1,	AMD Radeon 890M Graphics
++150E,	C4,	AMD Radeon 880M Graphics
++150E,	C5,	AMD Radeon 890M Graphics
++150E,	C6,	AMD Radeon 890M Graphics
++150E,	C7,	AMD Radeon 890M Graphics
++150E,	D1,	AMD Radeon 890M Graphics
++150E,	D2,	AMD Radeon 880M Graphics
++150E,	D3,	AMD Radeon 890M Graphics
++150E,	E1,	AMD Radeon 890M Graphics
++150E,	E3,	AMD Radeon 890M Graphics
++150E,	E4,	AMD Radeon 890M Graphics
++150E,	F1,	AMD Radeon 890M Graphics
++150E,	F3,	AMD Radeon 890M Graphics
++1586,	C1,	AMD Radeon 8060S Graphics
++1586,	C2,	AMD Radeon 8050S Graphics
++1586,	C3,	AMD Radeon 8060S Graphics
++1586,	C4,	AMD Radeon 8050S Graphics
++1586,	C6,	AMD Radeon 8060S Graphics
++1586,	D1,	AMD Radeon 8060S Graphics
++1586,	D2,	AMD Radeon 8050S Graphics
++1586,	D4,	AMD Radeon 8050S Graphics
++1586,	D5,	AMD Radeon 8040S Graphics
++15BF,	00,	AMD Radeon 780M Graphics
++15BF,	01,	AMD Radeon 760M Graphics
++15BF,	02,	AMD Radeon 780M Graphics
++15BF,	03,	AMD Radeon 760M Graphics
++15BF,	05,	AMD Radeon 760M Graphics
++15BF,	06,	AMD Radeon 780M Graphics
++15BF,	07,	AMD Radeon 740M Graphics
++15BF,	08,	AMD Radeon 740M Graphics
++15BF,	C1,	AMD Radeon 780M Graphics
++15BF,	C2,	AMD Radeon 780M Graphics
++15BF,	C3,	AMD Radeon 760M Graphics
++15BF,	C4,	AMD Radeon 780M Graphics
++15BF,	C5,	AMD Radeon 740M Graphics
++15BF,	C6,	AMD Radeon 780M Graphics
++15BF,	C7,	AMD Radeon 780M Graphics
++15BF,	C8,	AMD Radeon 760M Graphics
++15BF,	C9,	AMD Radeon 780M Graphics
++15BF,	CA,	AMD Radeon 740M Graphics
++15BF,	CB,	AMD Radeon 760M Graphics
++15BF,	CC,	AMD Radeon 740M Graphics
++15BF,	CD,	AMD Radeon 760M Graphics
++15BF,	CE,	AMD Radeon 740M Graphics
++15BF,	CF,	AMD Radeon 780M Graphics
++15BF,	D0,	AMD Radeon 780M Graphics
++15BF,	D1,	AMD Radeon 780M Graphics
++15BF,	D2,	AMD Radeon 780M Graphics
++15BF,	D3,	AMD Radeon 780M Graphics
++15BF,	D4,	AMD Radeon 780M Graphics
++15BF,	D5,	AMD Radeon 760M Graphics
++15BF,	D6,	AMD Radeon 760M Graphics
++15BF,	D7,	AMD Radeon 780M Graphics
++15BF,	D8,	AMD Radeon 740M Graphics
++15BF,	D9,	AMD Radeon 780M Graphics
++15BF,	DA,	AMD Radeon 780M Graphics
++15BF,	DB,	AMD Radeon 760M Graphics
++15BF,	DC,	AMD Radeon 760M Graphics
++15BF,	DD,	AMD Radeon 780M Graphics
++15BF,	DE,	AMD Radeon 740M Graphics
++15BF,	DF,	AMD Radeon 760M Graphics
++15BF,	F0,	AMD Radeon 760M Graphics
++15C8,	C1,	AMD Radeon 740M Graphics
++15C8,	C2,	AMD Radeon 740M Graphics
++15C8,	C3,	AMD Radeon 740M Graphics
++15C8,	C4,	AMD Radeon 740M Graphics
++15C8,	C5,	AMD Radeon 740M Graphics
++15C8,	C6,	AMD Radeon 740M Graphics
++15C8,	C7,	AMD Radeon 740M Graphics
++15C8,	C8,	AMD Radeon 740M Graphics
++15C8,	D1,	AMD Radeon 740M Graphics
++15C8,	D2,	AMD Radeon 740M Graphics
++15C8,	D3,	AMD Radeon 740M Graphics
++15C8,	D4,	AMD Radeon 740M Graphics
++15C8,	D5,	AMD Radeon 740M Graphics
++15C8,	D6,	AMD Radeon 740M Graphics
++15C8,	D7,	AMD Radeon 740M Graphics
++15C8,	D8,	AMD Radeon 740M Graphics
+ 15D8,	00,	AMD Radeon RX Vega 8 Graphics WS
+ 15D8,	91,	AMD Radeon Vega 3 Graphics
+ 15D8,	91,	AMD Ryzen Embedded R1606G with Radeon Vega Gfx
+@@ -161,6 +214,89 @@
+ 1681,	C7,	AMD Radeon 680M
+ 1681,	C8,	AMD Radeon 680M
+ 1681,	C9,	AMD Radeon 660M
++1900,	01,	AMD Radeon 780M Graphics
++1900,	02,	AMD Radeon 760M Graphics
++1900,	03,	AMD Radeon 780M Graphics
++1900,	04,	AMD Radeon 760M Graphics
++1900,	05,	AMD Radeon 780M Graphics
++1900,	06,	AMD Radeon 780M Graphics
++1900,	07,	AMD Radeon 760M Graphics
++1900,	B0,	AMD Radeon 780M Graphics
++1900,	B1,	AMD Radeon 780M Graphics
++1900,	B2,	AMD Radeon 780M Graphics
++1900,	B3,	AMD Radeon 780M Graphics
++1900,	B4,	AMD Radeon 780M Graphics
++1900,	B5,	AMD Radeon 780M Graphics
++1900,	B6,	AMD Radeon 780M Graphics
++1900,	B7,	AMD Radeon 760M Graphics
++1900,	B8,	AMD Radeon 760M Graphics
++1900,	B9,	AMD Radeon 780M Graphics
++1900,	BA,	AMD Radeon 780M Graphics
++1900,	BB,	AMD Radeon 780M Graphics
++1900,	C0,	AMD Radeon 780M Graphics
++1900,	C1,	AMD Radeon 760M Graphics
++1900,	C2,	AMD Radeon 780M Graphics
++1900,	C3,	AMD Radeon 760M Graphics
++1900,	C4,	AMD Radeon 780M Graphics
++1900,	C5,	AMD Radeon 780M Graphics
++1900,	C6,	AMD Radeon 760M Graphics
++1900,	C7,	AMD Radeon 780M Graphics
++1900,	C8,	AMD Radeon 760M Graphics
++1900,	C9,	AMD Radeon 780M Graphics
++1900,	CA,	AMD Radeon 760M Graphics
++1900,	CB,	AMD Radeon 780M Graphics
++1900,	CC,	AMD Radeon 780M Graphics
++1900,	CD,	AMD Radeon 760M Graphics
++1900,	CE,	AMD Radeon 780M Graphics
++1900,	CF,	AMD Radeon 760M Graphics
++1900,	D0,	AMD Radeon 780M Graphics
++1900,	D1,	AMD Radeon 760M Graphics
++1900,	D2,	AMD Radeon 780M Graphics
++1900,	D3,	AMD Radeon 760M Graphics
++1900,	D4,	AMD Radeon 780M Graphics
++1900,	D5,	AMD Radeon 780M Graphics
++1900,	D6,	AMD Radeon 760M Graphics
++1900,	D7,	AMD Radeon 780M Graphics
++1900,	D8,	AMD Radeon 760M Graphics
++1900,	D9,	AMD Radeon 780M Graphics
++1900,	DA,	AMD Radeon 760M Graphics
++1900,	DB,	AMD Radeon 780M Graphics
++1900,	DC,	AMD Radeon 780M Graphics
++1900,	DD,	AMD Radeon 760M Graphics
++1900,	DE,	AMD Radeon 780M Graphics
++1900,	DF,	AMD Radeon 760M Graphics
++1900,	F0,	AMD Radeon 780M Graphics
++1900,	F1,	AMD Radeon 780M Graphics
++1900,	F2,	AMD Radeon 780M Graphics
++1901,	C1,	AMD Radeon 740M Graphics
++1901,	C2,	AMD Radeon 740M Graphics
++1901,	C3,	AMD Radeon 740M Graphics
++1901,	C6,	AMD Radeon 740M Graphics
++1901,	C7,	AMD Radeon 740M Graphics
++1901,	C8,	AMD Radeon 740M Graphics
++1901,	C9,	AMD Radeon 740M Graphics
++1901,	CA,	AMD Radeon 740M Graphics
++1901,	D1,	AMD Radeon 740M Graphics
++1901,	D2,	AMD Radeon 740M Graphics
++1901,	D3,	AMD Radeon 740M Graphics
++1901,	D4,	AMD Radeon 740M Graphics
++1901,	D5,	AMD Radeon 740M Graphics
++1901,	D6,	AMD Radeon 740M Graphics
++1901,	D7,	AMD Radeon 740M Graphics
++1901,	D8,	AMD Radeon 740M Graphics
++1902,	C0,	AMD Radeon 840M Graphics
++1902,	C1,	AMD Radeon 840M Graphics
++1902,	C2,	AMD Radeon 820M Graphics
++1902,	C3,	AMD Radeon 840M Graphics
++1902,	C6,	AMD Radeon 820M Graphics
++1902,	C7,	AMD Radeon 840M Graphics
++1902,	C8,	AMD Radeon 840M Graphics
++1902,	C9,	AMD Radeon 820M Graphics
++1902,	CA,	AMD Radeon 840M Graphics
++1902,	D1,	AMD Radeon 840M Graphics
++1902,	D3,	AMD Radeon 840M Graphics
++1902,	D7,	AMD Radeon 840M Graphics
++1902,	D8,	AMD Radeon 840M Graphics
+ 6600,	00,	AMD Radeon HD 8600 / 8700M
+ 6600,	81,	AMD Radeon R7 M370
+ 6601,	00,	AMD Radeon HD 8500M / 8700M
+@@ -417,7 +553,7 @@
+ 73A1,	00,	AMD Radeon Pro V620
+ 73A3,	00,	AMD Radeon Pro W6800
+ 73A5,	C0,	AMD Radeon RX 6950 XT
+-73AE,	00,	AMD Radeon Pro V620
++73AE,	00,	AMD Radeon Pro V620 MxGPU
+ 73AF,	C0,	AMD Radeon RX 6900 XT
+ 73BF,	C0,	AMD Radeon RX 6900 XT
+ 73BF,	C1,	AMD Radeon RX 6800 XT
+@@ -466,28 +602,55 @@
+ 743F,	D3,	AMD Radeon RX 6550M
+ 743F,	D7,	AMD Radeon RX 6400
+ 7448,	00,	AMD Radeon Pro W7900
++7449,	00,	AMD Radeon Pro W7800 48GB
+ 744A,	00,	AMD Radeon Pro W7900 Dual Slot
++744B,	00,	AMD Radeon Pro W7900D
+ 744C,	C8,	AMD Radeon RX 7900 XTX
+ 744C,	CC,	AMD Radeon RX 7900 XT
+ 744C,	CE,	AMD Radeon RX 7900 GRE
+ 744C,	CF,	AMD Radeon RX 7900M
+ 745E,	CC,	AMD Radeon Pro W7800
+ 7460,	00,	AMD Radeon Pro V710
+-7461,	00,	AMD Radeon Pro V710
++7461,	00,	AMD Radeon Pro V710 MxGPU
+ 7470,	00,	AMD Radeon Pro W7700
+ 747E,	C8,	AMD Radeon RX 7800 XT
++747E,	D8,	AMD Radeon RX 7800M
++747E,	DB,	AMD Radeon RX 7700
+ 747E,	FF,	AMD Radeon RX 7700 XT
+ 7480,	00,	AMD Radeon Pro W7600
+ 7480,	C0,	AMD Radeon RX 7600 XT
+ 7480,	C1,	AMD Radeon RX 7700S
++7480,	C2,	AMD Radeon RX 7650 GRE
+ 7480,	C3,	AMD Radeon RX 7600S
+ 7480,	C7,	AMD Radeon RX 7600M XT
+ 7480,	CF,	AMD Radeon RX 7600
++7481,   C7,     AMD Steam Machine
+ 7483,	CF,	AMD Radeon RX 7600M
+ 7489,	00,	AMD Radeon Pro W7500
++7499,	00,	AMD Radeon Pro W7400
++7499,	C0,	AMD Radeon RX 7400
++7499,	C1,	AMD Radeon RX 7300
+ 74A0,	00,	AMD Instinct MI300A
+ 74A1,	00,	AMD Instinct MI300X
++74A2,	00,	AMD Instinct MI308X
++74A5,	00,	AMD Instinct MI325X
++74A8,	00,	AMD Instinct MI308X HF
++74A9,	00,	AMD Instinct MI300X HF
+ 74B5,	00,	AMD Instinct MI300X VF
++74B6,	00,	AMD Instinct MI308X
++74BD,	00,	AMD Instinct MI300X HF
++7550,	C0,	AMD Radeon RX 9070 XT
++7550,	C2,	AMD Radeon RX 9070 GRE
++7550,	C3,	AMD Radeon RX 9070
++7551,	C0,	AMD Radeon AI PRO R9700
++7551,	C8,	AMD Radeon AI PRO R9600D
++7590,	C0,	AMD Radeon RX 9060 XT
++7590,	C1,	AMD Radeon RX 9060 XT LP
++7590,	C7,	AMD Radeon RX 9060
++75A0,	00,	AMD Instinct MI350X
++75A3,	00,	AMD Instinct MI355X
++75B0,	00,	AMD Instinct MI350X VF
++75B3,	00,	AMD Instinct MI355X VF
+ 9830,	00,	AMD Radeon HD 8400 / R3 Series
+ 9831,	00,	AMD Radeon HD 8400E
+ 9832,	00,	AMD Radeon HD 8330
+diff --git a/gen_table_fourcc.py b/gen_table_fourcc.py
+index 1473d43..cb8f162 100644
+--- a/gen_table_fourcc.py
++++ b/gen_table_fourcc.py
+@@ -34,7 +34,7 @@ towrite = sys.argv[2]
+ 
+ fm_re = {
+     'intel': r'^#define I915_FORMAT_MOD_(\w+)',
+-    'others': r'^#define DRM_FORMAT_MOD_((?:ARM|SAMSUNG|QCOM|VIVANTE|NVIDIA|BROADCOM|ALLWINNER)\w+)\s',
++    'others': r'^#define DRM_FORMAT_MOD_((?:ARM|APPLE|SAMSUNG|QCOM|VIVANTE|NVIDIA|BROADCOM|ALLWINNER)\w+)\s',
+     'vendors': r'^#define DRM_FORMAT_MOD_VENDOR_(\w+)'
+ }
+ 
+diff --git a/generated_static_table_fourcc.h b/generated_static_table_fourcc.h
+index a8d014d..214b3e3 100644
+--- a/generated_static_table_fourcc.h
++++ b/generated_static_table_fourcc.h
+@@ -1,7 +1,7 @@
+ /* AUTOMATICALLY GENERATED by gen_table_fourcc.py. You should modify
+    that script instead of adding here entries manually! */
+ static const struct drmFormatModifierInfo drm_format_modifier_table[] = {
+-    { DRM_MODIFIER_INVALID(NONE, INVALID_MODIFIER) },
++    { DRM_MODIFIER_INVALID(NONE, INVALID) },
+     { DRM_MODIFIER_LINEAR(NONE, LINEAR) },
+     { DRM_MODIFIER_INTEL(X_TILED, X_TILED) },
+     { DRM_MODIFIER_INTEL(Y_TILED, Y_TILED) },
+@@ -11,9 +11,20 @@ static const struct drmFormatModifierInfo drm_format_modifier_table[] = {
+     { DRM_MODIFIER_INTEL(Y_TILED_GEN12_RC_CCS, Y_TILED_GEN12_RC_CCS) },
+     { DRM_MODIFIER_INTEL(Y_TILED_GEN12_MC_CCS, Y_TILED_GEN12_MC_CCS) },
+     { DRM_MODIFIER_INTEL(Y_TILED_GEN12_RC_CCS_CC, Y_TILED_GEN12_RC_CCS_CC) },
++    { DRM_MODIFIER_INTEL(4_TILED, 4_TILED) },
++    { DRM_MODIFIER_INTEL(4_TILED_DG2_RC_CCS, 4_TILED_DG2_RC_CCS) },
++    { DRM_MODIFIER_INTEL(4_TILED_DG2_MC_CCS, 4_TILED_DG2_MC_CCS) },
++    { DRM_MODIFIER_INTEL(4_TILED_DG2_RC_CCS_CC, 4_TILED_DG2_RC_CCS_CC) },
++    { DRM_MODIFIER_INTEL(4_TILED_MTL_RC_CCS, 4_TILED_MTL_RC_CCS) },
++    { DRM_MODIFIER_INTEL(4_TILED_MTL_MC_CCS, 4_TILED_MTL_MC_CCS) },
++    { DRM_MODIFIER_INTEL(4_TILED_MTL_RC_CCS_CC, 4_TILED_MTL_RC_CCS_CC) },
++    { DRM_MODIFIER_INTEL(4_TILED_LNL_CCS, 4_TILED_LNL_CCS) },
++    { DRM_MODIFIER_INTEL(4_TILED_BMG_CCS, 4_TILED_BMG_CCS) },
+     { DRM_MODIFIER(SAMSUNG, 64_32_TILE, 64_32_TILE) },
+     { DRM_MODIFIER(SAMSUNG, 16_16_TILE, 16_16_TILE) },
+     { DRM_MODIFIER(QCOM, COMPRESSED, COMPRESSED) },
++    { DRM_MODIFIER(QCOM, TILED3, TILED3) },
++    { DRM_MODIFIER(QCOM, TILED2, TILED2) },
+     { DRM_MODIFIER(VIVANTE, TILED, TILED) },
+     { DRM_MODIFIER(VIVANTE, SUPER_TILED, SUPER_TILED) },
+     { DRM_MODIFIER(VIVANTE, SPLIT_TILED, SPLIT_TILED) },
+@@ -32,7 +43,10 @@ static const struct drmFormatModifierInfo drm_format_modifier_table[] = {
+     { DRM_MODIFIER(BROADCOM, SAND256, SAND256) },
+     { DRM_MODIFIER(BROADCOM, UIF, UIF) },
+     { DRM_MODIFIER(ARM, 16X16_BLOCK_U_INTERLEAVED, 16X16_BLOCK_U_INTERLEAVED) },
++    { DRM_MODIFIER(ARM, INTERLEAVED_64K, INTERLEAVED_64K) },
+     { DRM_MODIFIER(ALLWINNER, TILED, TILED) },
++    { DRM_MODIFIER(APPLE, GPU_TILED, GPU_TILED) },
++    { DRM_MODIFIER(APPLE, GPU_TILED_COMPRESSED, GPU_TILED_COMPRESSED) },
+ };
+ static const struct drmFormatModifierVendorInfo drm_format_modifier_vendor_table[] = {
+     { DRM_FORMAT_MOD_VENDOR_NONE, "NONE" },
+@@ -46,4 +60,6 @@ static const struct drmFormatModifierVendorInfo drm_format_modifier_vendor_table
+     { DRM_FORMAT_MOD_VENDOR_ARM, "ARM" },
+     { DRM_FORMAT_MOD_VENDOR_ALLWINNER, "ALLWINNER" },
+     { DRM_FORMAT_MOD_VENDOR_AMLOGIC, "AMLOGIC" },
++    { DRM_FORMAT_MOD_VENDOR_MTK, "MTK" },
++    { DRM_FORMAT_MOD_VENDOR_APPLE, "APPLE" },
+ };
+diff --git a/include/drm/amdgpu_drm.h b/include/drm/amdgpu_drm.h
+index ae3f4e2..8db4df3 100644
+--- a/include/drm/amdgpu_drm.h
++++ b/include/drm/amdgpu_drm.h
+@@ -54,6 +54,9 @@ extern "C" {
+ #define DRM_AMDGPU_VM			0x13
+ #define DRM_AMDGPU_FENCE_TO_HANDLE	0x14
+ #define DRM_AMDGPU_SCHED		0x15
++#define DRM_AMDGPU_USERQ		0x16
++#define DRM_AMDGPU_USERQ_SIGNAL		0x17
++#define DRM_AMDGPU_USERQ_WAIT		0x18
+ 
+ #define DRM_IOCTL_AMDGPU_GEM_CREATE	DRM_IOWR(DRM_COMMAND_BASE + DRM_AMDGPU_GEM_CREATE, union drm_amdgpu_gem_create)
+ #define DRM_IOCTL_AMDGPU_GEM_MMAP	DRM_IOWR(DRM_COMMAND_BASE + DRM_AMDGPU_GEM_MMAP, union drm_amdgpu_gem_mmap)
+@@ -71,6 +74,9 @@ extern "C" {
+ #define DRM_IOCTL_AMDGPU_VM		DRM_IOWR(DRM_COMMAND_BASE + DRM_AMDGPU_VM, union drm_amdgpu_vm)
+ #define DRM_IOCTL_AMDGPU_FENCE_TO_HANDLE DRM_IOWR(DRM_COMMAND_BASE + DRM_AMDGPU_FENCE_TO_HANDLE, union drm_amdgpu_fence_to_handle)
+ #define DRM_IOCTL_AMDGPU_SCHED		DRM_IOW(DRM_COMMAND_BASE + DRM_AMDGPU_SCHED, union drm_amdgpu_sched)
++#define DRM_IOCTL_AMDGPU_USERQ		DRM_IOWR(DRM_COMMAND_BASE + DRM_AMDGPU_USERQ, union drm_amdgpu_userq)
++#define DRM_IOCTL_AMDGPU_USERQ_SIGNAL	DRM_IOWR(DRM_COMMAND_BASE + DRM_AMDGPU_USERQ_SIGNAL, struct drm_amdgpu_userq_signal)
++#define DRM_IOCTL_AMDGPU_USERQ_WAIT	DRM_IOWR(DRM_COMMAND_BASE + DRM_AMDGPU_USERQ_WAIT, struct drm_amdgpu_userq_wait)
+ 
+ /**
+  * DOC: memory domains
+@@ -317,6 +323,261 @@ union drm_amdgpu_ctx {
+ 	union drm_amdgpu_ctx_out out;
+ };
+ 
++/* user queue IOCTL operations */
++#define AMDGPU_USERQ_OP_CREATE	1
++#define AMDGPU_USERQ_OP_FREE	2
++
++/* queue priority levels */
++#define AMDGPU_USERQ_CREATE_FLAGS_QUEUE_PRIORITY_MASK  0x3
++#define AMDGPU_USERQ_CREATE_FLAGS_QUEUE_PRIORITY_SHIFT 0
++#define AMDGPU_USERQ_CREATE_FLAGS_QUEUE_PRIORITY_NORMAL_LOW 0
++#define AMDGPU_USERQ_CREATE_FLAGS_QUEUE_PRIORITY_LOW 1
++#define AMDGPU_USERQ_CREATE_FLAGS_QUEUE_PRIORITY_NORMAL_HIGH 2
++#define AMDGPU_USERQ_CREATE_FLAGS_QUEUE_PRIORITY_HIGH 3 /* admin only */
++/* for queues that need access to protected content */
++#define AMDGPU_USERQ_CREATE_FLAGS_QUEUE_SECURE  (1 << 2)
++
++/*
++ * This structure is a container to pass input configuration
++ * info for all supported userqueue related operations.
++ * For operation AMDGPU_USERQ_OP_CREATE: user is expected
++ *  to set all fields, excep the parameter 'queue_id'.
++ * For operation AMDGPU_USERQ_OP_FREE: the only input parameter expected
++ *  to be set is 'queue_id', eveything else is ignored.
++ */
++struct drm_amdgpu_userq_in {
++	/** AMDGPU_USERQ_OP_* */
++	__u32	op;
++	/** Queue id passed for operation USERQ_OP_FREE */
++	__u32	queue_id;
++	/** the target GPU engine to execute workload (AMDGPU_HW_IP_*) */
++	__u32   ip_type;
++	/**
++	 * @doorbell_handle: the handle of doorbell GEM object
++	 * associated to this userqueue client.
++	 */
++	__u32   doorbell_handle;
++	/**
++	 * @doorbell_offset: 32-bit offset of the doorbell in the doorbell bo.
++	 * Kernel will generate absolute doorbell offset using doorbell_handle
++	 * and doorbell_offset in the doorbell bo.
++	 */
++	__u32   doorbell_offset;
++	/**
++	 * @flags: flags used for queue parameters
++	 */
++	__u32 flags;
++
++	/**
++	 * @queue_va: Virtual address of the GPU memory which holds the queue
++	 * object. The queue holds the workload packets.
++	 */
++	__u64   queue_va;
++	/**
++	 * @queue_size: Size of the queue in bytes, this needs to be 256-byte
++	 * aligned.
++	 */
++	__u64   queue_size;
++	/**
++	 * @rptr_va : Virtual address of the GPU memory which holds the ring RPTR.
++	 * This object must be at least 8 byte in size and aligned to 8-byte offset.
++	 */
++	__u64   rptr_va;
++	/**
++	 * @wptr_va : Virtual address of the GPU memory which holds the ring WPTR.
++	 * This object must be at least 8 byte in size and aligned to 8-byte offset.
++	 *
++	 * Queue, RPTR and WPTR can come from the same object, as long as the size
++	 * and alignment related requirements are met.
++	 */
++	__u64   wptr_va;
++	/**
++	 * @mqd: MQD (memory queue descriptor) is a set of parameters which allow
++	 * the GPU to uniquely define and identify a usermode queue.
++	 *
++	 * MQD data can be of different size for different GPU IP/engine and
++	 * their respective versions/revisions, so this points to a __u64 *
++	 * which holds IP specific MQD of this usermode queue.
++	 */
++	__u64 mqd;
++	/**
++	 * @size: size of MQD data in bytes, it must match the MQD structure
++	 * size of the respective engine/revision defined in UAPI for ex, for
++	 * gfx11 workloads, size = sizeof(drm_amdgpu_userq_mqd_gfx11).
++	 */
++	__u64 mqd_size;
++};
++
++/* The structure to carry output of userqueue ops */
++struct drm_amdgpu_userq_out {
++	/**
++	 * For operation AMDGPU_USERQ_OP_CREATE: This field contains a unique
++	 * queue ID to represent the newly created userqueue in the system, otherwise
++	 * it should be ignored.
++	 */
++	__u32	queue_id;
++	__u32	_pad;
++};
++
++union drm_amdgpu_userq {
++	struct drm_amdgpu_userq_in in;
++	struct drm_amdgpu_userq_out out;
++};
++
++/* GFX V11 IP specific MQD parameters */
++struct drm_amdgpu_userq_mqd_gfx11 {
++	/**
++	 * @shadow_va: Virtual address of the GPU memory to hold the shadow buffer.
++	 * Use AMDGPU_INFO_IOCTL to find the exact size of the object.
++	 */
++	__u64   shadow_va;
++	/**
++	 * @csa_va: Virtual address of the GPU memory to hold the CSA buffer.
++	 * Use AMDGPU_INFO_IOCTL to find the exact size of the object.
++	 */
++	__u64   csa_va;
++};
++
++/* GFX V11 SDMA IP specific MQD parameters */
++struct drm_amdgpu_userq_mqd_sdma_gfx11 {
++	/**
++	 * @csa_va: Virtual address of the GPU memory to hold the CSA buffer.
++	 * This must be a from a separate GPU object, and use AMDGPU_INFO IOCTL
++	 * to get the size.
++	 */
++	__u64   csa_va;
++};
++
++/* GFX V11 Compute IP specific MQD parameters */
++struct drm_amdgpu_userq_mqd_compute_gfx11 {
++	/**
++	 * @eop_va: Virtual address of the GPU memory to hold the EOP buffer.
++	 * This must be a from a separate GPU object, and use AMDGPU_INFO IOCTL
++	 * to get the size.
++	 */
++	__u64   eop_va;
++};
++
++/* userq signal/wait ioctl */
++struct drm_amdgpu_userq_signal {
++	/**
++	 * @queue_id: Queue handle used by the userq fence creation function
++	 * to retrieve the WPTR.
++	 */
++	__u32	queue_id;
++	__u32	pad;
++	/**
++	 * @syncobj_handles: The list of syncobj handles submitted by the user queue
++	 * job to be signaled.
++	 */
++	__u64	syncobj_handles;
++	/**
++	 * @num_syncobj_handles: A count that represents the number of syncobj handles in
++	 * @syncobj_handles.
++	 */
++	__u64	num_syncobj_handles;
++	/**
++	 * @bo_read_handles: The list of BO handles that the submitted user queue job
++	 * is using for read only. This will update BO fences in the kernel.
++	 */
++	__u64	bo_read_handles;
++	/**
++	 * @bo_write_handles: The list of BO handles that the submitted user queue job
++	 * is using for write only. This will update BO fences in the kernel.
++	 */
++	__u64	bo_write_handles;
++	/**
++	 * @num_bo_read_handles: A count that represents the number of read BO handles in
++	 * @bo_read_handles.
++	 */
++	__u32	num_bo_read_handles;
++	/**
++	 * @num_bo_write_handles: A count that represents the number of write BO handles in
++	 * @bo_write_handles.
++	 */
++	__u32	num_bo_write_handles;
++
++};
++
++struct drm_amdgpu_userq_fence_info {
++	/**
++	 * @va: A gpu address allocated for each queue which stores the
++	 * read pointer (RPTR) value.
++	 */
++	__u64	va;
++	/**
++	 * @value: A 64 bit value represents the write pointer (WPTR) of the
++	 * queue commands which compared with the RPTR value to signal the
++	 * fences.
++	 */
++	__u64	value;
++};
++
++struct drm_amdgpu_userq_wait {
++	/**
++	 * @waitq_id: Queue handle used by the userq wait IOCTL to retrieve the
++	 * wait queue and maintain the fence driver references in it.
++	 */
++	__u32	waitq_id;
++	__u32	pad;
++	/**
++	 * @syncobj_handles: The list of syncobj handles submitted by the user queue
++	 * job to get the va/value pairs.
++	 */
++	__u64	syncobj_handles;
++	/**
++	 * @syncobj_timeline_handles: The list of timeline syncobj handles submitted by
++	 * the user queue job to get the va/value pairs at given @syncobj_timeline_points.
++	 */
++	__u64	syncobj_timeline_handles;
++	/**
++	 * @syncobj_timeline_points: The list of timeline syncobj points submitted by the
++	 * user queue job for the corresponding @syncobj_timeline_handles.
++	 */
++	__u64	syncobj_timeline_points;
++	/**
++	 * @bo_read_handles: The list of read BO handles submitted by the user queue
++	 * job to get the va/value pairs.
++	 */
++	__u64	bo_read_handles;
++	/**
++	 * @bo_write_handles: The list of write BO handles submitted by the user queue
++	 * job to get the va/value pairs.
++	 */
++	__u64	bo_write_handles;
++	/**
++	 * @num_syncobj_timeline_handles: A count that represents the number of timeline
++	 * syncobj handles in @syncobj_timeline_handles.
++	 */
++	__u16	num_syncobj_timeline_handles;
++	/**
++	 * @num_fences: This field can be used both as input and output. As input it defines
++	 * the maximum number of fences that can be returned and as output it will specify
++	 * how many fences were actually returned from the ioctl.
++	 */
++	__u16	num_fences;
++	/**
++	 * @num_syncobj_handles: A count that represents the number of syncobj handles in
++	 * @syncobj_handles.
++	 */
++	__u32	num_syncobj_handles;
++	/**
++	 * @num_bo_read_handles: A count that represents the number of read BO handles in
++	 * @bo_read_handles.
++	 */
++	__u32	num_bo_read_handles;
++	/**
++	 * @num_bo_write_handles: A count that represents the number of write BO handles in
++	 * @bo_write_handles.
++	 */
++	__u32	num_bo_write_handles;
++	/**
++	 * @out_fences: The field is a return value from the ioctl containing the list of
++	 * address/value pairs to wait for.
++	 */
++	__u64	out_fences;
++};
++
+ /* vm ioctl */
+ #define AMDGPU_VM_OP_RESERVE_VMID	1
+ #define AMDGPU_VM_OP_UNRESERVE_VMID	2
+@@ -590,6 +851,19 @@ struct drm_amdgpu_gem_va {
+ 	__u64 offset_in_bo;
+ 	/** Specify mapping size. Must be correctly aligned. */
+ 	__u64 map_size;
++	/**
++	 * vm_timeline_point is a sequence number used to add new timeline point.
++	 */
++	__u64 vm_timeline_point;
++	/**
++	 * The vm page table update fence is installed in given vm_timeline_syncobj_out
++	 * at vm_timeline_point.
++	 */
++	__u32 vm_timeline_syncobj_out;
++	/** the number of syncobj handles in @input_fence_syncobj_handles */
++	__u32 num_syncobj_handles;
++	/** Array of sync object handle to wait for given input fences */
++	__u64 input_fence_syncobj_handles;
+ };
+ 
+ #define AMDGPU_HW_IP_GFX          0
+@@ -931,6 +1205,8 @@ struct drm_amdgpu_cs_chunk_cp_gfx_shadow {
+ #define AMDGPU_INFO_MAX_IBS			0x22
+ /* query last page fault info */
+ #define AMDGPU_INFO_GPUVM_FAULT			0x23
++/* query FW object size and alignment */
++#define AMDGPU_INFO_UQ_FW_AREAS			0x24
+ 
+ #define AMDGPU_INFO_MMR_SE_INDEX_SHIFT	0
+ #define AMDGPU_INFO_MMR_SE_INDEX_MASK	0xff
+@@ -1189,6 +1465,9 @@ struct drm_amdgpu_info_device {
+ 	__u32 csa_size;
+ 	/* context save area base virtual alignment for gfx11 */
+ 	__u32 csa_alignment;
++	/* Userq IP mask (1 << AMDGPU_HW_IP_*) */
++	__u32 userq_ip_mask;
++	__u32 pad;
+ };
+ 
+ struct drm_amdgpu_info_hw_ip {
+@@ -1207,6 +1486,27 @@ struct drm_amdgpu_info_hw_ip {
+ 	__u32  ip_discovery_version;
+ };
+ 
++/* GFX metadata BO sizes and alignment info (in bytes) */
++struct drm_amdgpu_info_uq_fw_areas_gfx {
++	/* shadow area size */
++	__u32 shadow_size;
++	/* shadow area base virtual mem alignment */
++	__u32 shadow_alignment;
++	/* context save area size */
++	__u32 csa_size;
++	/* context save area base virtual mem alignment */
++	__u32 csa_alignment;
++};
++
++/* IP specific metadata related information used in the
++ * subquery AMDGPU_INFO_UQ_FW_AREAS
++ */
++struct drm_amdgpu_info_uq_fw_areas {
++	union {
++		struct drm_amdgpu_info_uq_fw_areas_gfx gfx;
++	};
++};
++
+ struct drm_amdgpu_info_num_handles {
+ 	/** Max handles as supported by firmware for UVD */
+ 	__u32  uvd_max_handles;
+diff --git a/include/drm/drm.h b/include/drm/drm.h
+index 4e4f7c2..1666e91 100644
+--- a/include/drm/drm.h
++++ b/include/drm/drm.h
+@@ -591,34 +591,65 @@ struct drm_set_version {
+ 	int drm_dd_minor;
+ };
+ 
+-/* DRM_IOCTL_GEM_CLOSE ioctl argument type */
++/**
++ * struct drm_gem_close - Argument for &DRM_IOCTL_GEM_CLOSE ioctl.
++ * @handle: Handle of the object to be closed.
++ * @pad: Padding.
++ *
++ * Releases the handle to an mm object.
++ */
+ struct drm_gem_close {
+-	/** Handle of the object to be closed. */
+ 	__u32 handle;
+ 	__u32 pad;
+ };
+ 
+-/* DRM_IOCTL_GEM_FLINK ioctl argument type */
++/**
++ * struct drm_gem_flink - Argument for &DRM_IOCTL_GEM_FLINK ioctl.
++ * @handle: Handle for the object being named.
++ * @name: Returned global name.
++ *
++ * Create a global name for an object, returning the name.
++ *
++ * Note that the name does not hold a reference; when the object
++ * is freed, the name goes away.
++ */
+ struct drm_gem_flink {
+-	/** Handle for the object being named */
+ 	__u32 handle;
+-
+-	/** Returned global name */
+ 	__u32 name;
+ };
+ 
+-/* DRM_IOCTL_GEM_OPEN ioctl argument type */
++/**
++ * struct drm_gem_open - Argument for &DRM_IOCTL_GEM_OPEN ioctl.
++ * @name: Name of object being opened.
++ * @handle: Returned handle for the object.
++ * @size: Returned size of the object
++ *
++ * Open an object using the global name, returning a handle and the size.
++ *
++ * This handle (of course) holds a reference to the object, so the object
++ * will not go away until the handle is deleted.
++ */
+ struct drm_gem_open {
+-	/** Name of object being opened */
+ 	__u32 name;
+-
+-	/** Returned handle for the object */
+ 	__u32 handle;
+-
+-	/** Returned size of the object */
+ 	__u64 size;
+ };
+ 
++/**
++ * struct drm_gem_change_handle - Argument for &DRM_IOCTL_GEM_CHANGE_HANDLE ioctl.
++ * @handle: The handle of a gem object.
++ * @new_handle: An available gem handle.
++ *
++ * This ioctl changes the handle of a GEM object to the specified one.
++ * The new handle must be unused. On success the old handle is closed
++ * and all further IOCTL should refer to the new handle only.
++ * Calls to DRM_IOCTL_PRIME_FD_TO_HANDLE will return the new handle.
++ */
++struct drm_gem_change_handle {
++	__u32 handle;
++	__u32 new_handle;
++};
++
+ /**
+  * DRM_CAP_DUMB_BUFFER
+  *
+@@ -869,6 +900,21 @@ struct drm_get_cap {
+  */
+ #define DRM_CLIENT_CAP_CURSOR_PLANE_HOTSPOT	6
+ 
++/**
++ * DRM_CLIENT_CAP_PLANE_COLOR_PIPELINE
++ *
++ * If set to 1 the DRM core will allow setting the COLOR_PIPELINE
++ * property on a &drm_plane, as well as drm_colorop properties.
++ *
++ * Setting of these plane properties will be rejected when this client
++ * cap is set:
++ * - COLOR_ENCODING
++ * - COLOR_RANGE
++ *
++ * The client must enable &DRM_CLIENT_CAP_ATOMIC first.
++ */
++#define DRM_CLIENT_CAP_PLANE_COLOR_PIPELINE	7
++
+ /* DRM_IOCTL_SET_CLIENT_CAP ioctl argument type */
+ struct drm_set_client_cap {
+ 	__u64 capability;
+@@ -899,13 +945,17 @@ struct drm_syncobj_destroy {
+ };
+ 
+ #define DRM_SYNCOBJ_FD_TO_HANDLE_FLAGS_IMPORT_SYNC_FILE (1 << 0)
++#define DRM_SYNCOBJ_FD_TO_HANDLE_FLAGS_TIMELINE         (1 << 1)
+ #define DRM_SYNCOBJ_HANDLE_TO_FD_FLAGS_EXPORT_SYNC_FILE (1 << 0)
++#define DRM_SYNCOBJ_HANDLE_TO_FD_FLAGS_TIMELINE         (1 << 1)
+ struct drm_syncobj_handle {
+ 	__u32 handle;
+ 	__u32 flags;
+ 
+ 	__s32 fd;
+ 	__u32 pad;
++
++	__u64 point;
+ };
+ 
+ struct drm_syncobj_transfer {
+@@ -1018,6 +1068,13 @@ struct drm_crtc_queue_sequence {
+ 	__u64 user_data;	/* user data passed to event */
+ };
+ 
++#define DRM_CLIENT_NAME_MAX_LEN		64
++struct drm_set_client_name {
++	__u64 name_len;
++	__u64 name;
++};
++
++
+ #if defined(__cplusplus)
+ }
+ #endif
+@@ -1282,6 +1339,24 @@ extern "C" {
+  */
+ #define DRM_IOCTL_MODE_CLOSEFB		DRM_IOWR(0xD0, struct drm_mode_closefb)
+ 
++/**
++ * DRM_IOCTL_SET_CLIENT_NAME - Attach a name to a drm_file
++ *
++ * Having a name allows for easier tracking and debugging.
++ * The length of the name (without null ending char) must be
++ * <= DRM_CLIENT_NAME_MAX_LEN.
++ * The call will fail if the name contains whitespaces or non-printable chars.
++ */
++#define DRM_IOCTL_SET_CLIENT_NAME	DRM_IOWR(0xD1, struct drm_set_client_name)
++
++/**
++ * DRM_IOCTL_GEM_CHANGE_HANDLE - Move an object to a different handle
++ *
++ * Some applications (notably CRIU) need objects to have specific gem handles.
++ * This ioctl changes the object at one gem handle to use a new gem handle.
++ */
++#define DRM_IOCTL_GEM_CHANGE_HANDLE    DRM_IOWR(0xD2, struct drm_gem_change_handle)
++
+ /*
+  * Device specific ioctls should only be in their respective headers
+  * The device specific ioctl range is from 0x40 to 0x9f.
+diff --git a/include/drm/drm_fourcc.h b/include/drm/drm_fourcc.h
+index 8a9c54b..d340ec2 100644
+--- a/include/drm/drm_fourcc.h
++++ b/include/drm/drm_fourcc.h
+@@ -1,24 +1,6 @@
++/* SPDX-License-Identifier: MIT */
+ /*
+  * Copyright 2011 Intel Corporation
+- *
+- * Permission is hereby granted, free of charge, to any person obtaining a
+- * copy of this software and associated documentation files (the "Software"),
+- * to deal in the Software without restriction, including without limitation
+- * the rights to use, copy, modify, merge, publish, distribute, sublicense,
+- * and/or sell copies of the Software, and to permit persons to whom the
+- * Software is furnished to do so, subject to the following conditions:
+- *
+- * The above copyright notice and this permission notice (including the next
+- * paragraph) shall be included in all copies or substantial portions of the
+- * Software.
+- *
+- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
+- * VA LINUX SYSTEMS AND/OR ITS SUPPLIERS BE LIABLE FOR ANY CLAIM, DAMAGES OR
+- * OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
+- * ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+- * OTHER DEALINGS IN THE SOFTWARE.
+  */
+ 
+ #ifndef DRM_FOURCC_H
+@@ -210,6 +192,10 @@ extern "C" {
+ #define DRM_FORMAT_RGBA1010102	fourcc_code('R', 'A', '3', '0') /* [31:0] R:G:B:A 10:10:10:2 little endian */
+ #define DRM_FORMAT_BGRA1010102	fourcc_code('B', 'A', '3', '0') /* [31:0] B:G:R:A 10:10:10:2 little endian */
+ 
++/* 48 bpp RGB */
++#define DRM_FORMAT_RGB161616 fourcc_code('R', 'G', '4', '8') /* [47:0] R:G:B 16:16:16 little endian */
++#define DRM_FORMAT_BGR161616 fourcc_code('B', 'G', '4', '8') /* [47:0] B:G:R 16:16:16 little endian */
++
+ /* 64 bpp RGB */
+ #define DRM_FORMAT_XRGB16161616	fourcc_code('X', 'R', '4', '8') /* [63:0] x:R:G:B 16:16:16:16 little endian */
+ #define DRM_FORMAT_XBGR16161616	fourcc_code('X', 'B', '4', '8') /* [63:0] x:B:G:R 16:16:16:16 little endian */
+@@ -218,7 +204,7 @@ extern "C" {
+ #define DRM_FORMAT_ABGR16161616	fourcc_code('A', 'B', '4', '8') /* [63:0] A:B:G:R 16:16:16:16 little endian */
+ 
+ /*
+- * Floating point 64bpp RGB
++ * Half-Floating point - 16b/component
+  * IEEE 754-2008 binary16 half-precision float
+  * [15:0] sign:exponent:mantissa 1:5:10
+  */
+@@ -228,6 +214,20 @@ extern "C" {
+ #define DRM_FORMAT_ARGB16161616F fourcc_code('A', 'R', '4', 'H') /* [63:0] A:R:G:B 16:16:16:16 little endian */
+ #define DRM_FORMAT_ABGR16161616F fourcc_code('A', 'B', '4', 'H') /* [63:0] A:B:G:R 16:16:16:16 little endian */
+ 
++#define DRM_FORMAT_R16F          fourcc_code('R', ' ', ' ', 'H') /* [15:0] R 16 little endian */
++#define DRM_FORMAT_GR1616F       fourcc_code('G', 'R', ' ', 'H') /* [31:0] G:R 16:16 little endian */
++#define DRM_FORMAT_BGR161616F    fourcc_code('B', 'G', 'R', 'H') /* [47:0] B:G:R 16:16:16 little endian */
++
++/*
++ * Floating point - 32b/component
++ * IEEE 754-2008 binary32 float
++ * [31:0] sign:exponent:mantissa 1:8:23
++ */
++#define DRM_FORMAT_R32F          fourcc_code('R', ' ', ' ', 'F') /* [31:0] R 32 little endian */
++#define DRM_FORMAT_GR3232F       fourcc_code('G', 'R', ' ', 'F') /* [63:0] G:R 32:32 little endian */
++#define DRM_FORMAT_BGR323232F    fourcc_code('B', 'G', 'R', 'F') /* [95:0] B:G:R 32:32:32 little endian */
++#define DRM_FORMAT_ABGR32323232F fourcc_code('A', 'B', '8', 'F') /* [127:0] A:B:G:R 32:32:32:32 little endian */
++
+ /*
+  * RGBA format with 10-bit components packed in 64-bit per pixel, with 6 bits
+  * of unused padding per component:
+@@ -246,6 +246,7 @@ extern "C" {
+ #define DRM_FORMAT_XVUY8888	fourcc_code('X', 'V', 'U', 'Y') /* [31:0] X:Cr:Cb:Y 8:8:8:8 little endian */
+ #define DRM_FORMAT_VUY888	fourcc_code('V', 'U', '2', '4') /* [23:0] Cr:Cb:Y 8:8:8 little endian */
+ #define DRM_FORMAT_VUY101010	fourcc_code('V', 'U', '3', '0') /* Y followed by U then V, 10:10:10. Non-linear modifier only */
++#define DRM_FORMAT_XVUY2101010	fourcc_code('X', 'Y', '3', '0') /* [31:0] x:Cr:Cb:Y 2:10:10:10 little endian */
+ 
+ /*
+  * packed Y2xx indicate for each component, xx valid data occupy msb
+@@ -361,6 +362,14 @@ extern "C" {
+  */
+ #define DRM_FORMAT_P030		fourcc_code('P', '0', '3', '0') /* 2x2 subsampled Cr:Cb plane 10 bits per channel packed */
+ 
++/*
++ * 2 plane YCbCr422.
++ * 3 10 bit components and 2 padding bits packed into 4 bytes.
++ * index 0 = Y plane, [31:0] x:Y2:Y1:Y0 2:10:10:10 little endian
++ * index 1 = Cr:Cb plane, [63:0] x:Cr2:Cb2:Cr1:x:Cb1:Cr0:Cb0 [2:10:10:10:2:10:10:10] little endian
++ */
++#define DRM_FORMAT_P230		fourcc_code('P', '2', '3', '0') /* 2x1 subsampled Cr:Cb plane 10 bits per channel packed */
++
+ /* 3 plane non-subsampled (444) YCbCr
+  * 16 bits per component, but only 10 bits are used and 6 bits are padded
+  * index 0: Y plane, [15:0] Y:x [10:6] little endian
+@@ -377,6 +386,51 @@ extern "C" {
+  */
+ #define DRM_FORMAT_Q401		fourcc_code('Q', '4', '0', '1')
+ 
++/*
++ * 3 plane non-subsampled (444) YCbCr LSB aligned
++ * 10 bpc, 30 bits per sample image data in a single contiguous buffer.
++ * index 0: Y plane,  [31:0] x:Y2:Y1:Y0    [2:10:10:10] little endian
++ * index 1: Cb plane, [31:0] x:Cb2:Cb1:Cb0 [2:10:10:10] little endian
++ * index 2: Cr plane, [31:0] x:Cr2:Cr1:Cr0 [2:10:10:10] little endian
++ */
++#define DRM_FORMAT_T430		fourcc_code('T', '4', '3', '0')
++
++/*
++ * 3 plane YCbCr LSB aligned
++ * In order to use these formats in a similar fashion to MSB aligned ones
++ * implementation can multiply the values by 2^6=64. For that reason the padding
++ * must only contain zeros.
++ * index 0 = Y plane, [15:0] z:Y [6:10] little endian
++ * index 1 = Cb plane, [15:0] z:Cb [6:10] little endian
++ * index 2 = Cr plane, [15:0] z:Cr [6:10] little endian
++ */
++#define DRM_FORMAT_S010	fourcc_code('S', '0', '1', '0') /* 2x2 subsampled Cb (1) and Cr (2) planes 10 bits per channel */
++#define DRM_FORMAT_S210	fourcc_code('S', '2', '1', '0') /* 2x1 subsampled Cb (1) and Cr (2) planes 10 bits per channel */
++#define DRM_FORMAT_S410	fourcc_code('S', '4', '1', '0') /* non-subsampled Cb (1) and Cr (2) planes 10 bits per channel */
++
++/*
++ * 3 plane YCbCr LSB aligned
++ * In order to use these formats in a similar fashion to MSB aligned ones
++ * implementation can multiply the values by 2^4=16. For that reason the padding
++ * must only contain zeros.
++ * index 0 = Y plane, [15:0] z:Y [4:12] little endian
++ * index 1 = Cb plane, [15:0] z:Cb [4:12] little endian
++ * index 2 = Cr plane, [15:0] z:Cr [4:12] little endian
++ */
++#define DRM_FORMAT_S012	fourcc_code('S', '0', '1', '2') /* 2x2 subsampled Cb (1) and Cr (2) planes 12 bits per channel */
++#define DRM_FORMAT_S212	fourcc_code('S', '2', '1', '2') /* 2x1 subsampled Cb (1) and Cr (2) planes 12 bits per channel */
++#define DRM_FORMAT_S412	fourcc_code('S', '4', '1', '2') /* non-subsampled Cb (1) and Cr (2) planes 12 bits per channel */
++
++/*
++ * 3 plane YCbCr
++ * index 0 = Y plane, [15:0] Y little endian
++ * index 1 = Cb plane, [15:0] Cb little endian
++ * index 2 = Cr plane, [15:0] Cr little endian
++ */
++#define DRM_FORMAT_S016	fourcc_code('S', '0', '1', '6') /* 2x2 subsampled Cb (1) and Cr (2) planes 16 bits per channel */
++#define DRM_FORMAT_S216	fourcc_code('S', '2', '1', '6') /* 2x1 subsampled Cb (1) and Cr (2) planes 16 bits per channel */
++#define DRM_FORMAT_S416	fourcc_code('S', '4', '1', '6') /* non-subsampled Cb (1) and Cr (2) planes 16 bits per channel */
++
+ /*
+  * 3 plane YCbCr
+  * index 0: Y plane, [7:0] Y
+@@ -397,6 +451,16 @@ extern "C" {
+ #define DRM_FORMAT_YUV444	fourcc_code('Y', 'U', '2', '4') /* non-subsampled Cb (1) and Cr (2) planes */
+ #define DRM_FORMAT_YVU444	fourcc_code('Y', 'V', '2', '4') /* non-subsampled Cr (1) and Cb (2) planes */
+ 
++/*
++ * Y-only (greyscale) formats
++ *
++ * The Y-only formats are handled similarly to the YCbCr formats in the display
++ * pipeline, with the Cb and Cr implicitly neutral (0.0 in nominal values). This
++ * also means that COLOR_RANGE property applies to the Y-only formats.
++ */
++
++#define DRM_FORMAT_Y8		fourcc_code('G', 'R', 'E', 'Y')  /* 8-bit Y-only */
++#define DRM_FORMAT_XYYY2101010	fourcc_code('Y', 'P', 'A', '4')  /* [31:0] x:Y2:Y1:Y0 2:10:10:10 little endian */
+ 
+ /*
+  * Format Modifiers:
+@@ -421,6 +485,8 @@ extern "C" {
+ #define DRM_FORMAT_MOD_VENDOR_ARM     0x08
+ #define DRM_FORMAT_MOD_VENDOR_ALLWINNER 0x09
+ #define DRM_FORMAT_MOD_VENDOR_AMLOGIC 0x0a
++#define DRM_FORMAT_MOD_VENDOR_MTK     0x0b
++#define DRM_FORMAT_MOD_VENDOR_APPLE   0x0c
+ 
+ /* add more to the end as needed */
+ 
+@@ -702,6 +768,31 @@ extern "C" {
+  */
+ #define I915_FORMAT_MOD_4_TILED_MTL_RC_CCS_CC fourcc_mod_code(INTEL, 15)
+ 
++/*
++ * Intel Color Control Surfaces (CCS) for graphics ver. 20 unified compression
++ * on integrated graphics
++ *
++ * The main surface is Tile 4 and at plane index 0. For semi-planar formats
++ * like NV12, the Y and UV planes are Tile 4 and are located at plane indices
++ * 0 and 1, respectively. The CCS for all planes are stored outside of the
++ * GEM object in a reserved memory area dedicated for the storage of the
++ * CCS data for all compressible GEM objects.
++ */
++#define I915_FORMAT_MOD_4_TILED_LNL_CCS fourcc_mod_code(INTEL, 16)
++
++/*
++ * Intel Color Control Surfaces (CCS) for graphics ver. 20 unified compression
++ * on discrete graphics
++ *
++ * The main surface is Tile 4 and at plane index 0. For semi-planar formats
++ * like NV12, the Y and UV planes are Tile 4 and are located at plane indices
++ * 0 and 1, respectively. The CCS for all planes are stored outside of the
++ * GEM object in a reserved memory area dedicated for the storage of the
++ * CCS data for all compressible GEM objects. The GEM object must be stored in
++ * contiguous memory with a size aligned to 64KB
++ */
++#define I915_FORMAT_MOD_4_TILED_BMG_CCS fourcc_mod_code(INTEL, 17)
++
+ /*
+  * Tiled, NV12MT, grouped in 64 (pixels) x 32 (lines) -sized macroblocks
+  *
+@@ -898,14 +989,20 @@ extern "C" {
+  *               2 = Gob Height 8, Turing+ Page Kind mapping
+  *               3 = Reserved for future use.
+  *
+- * 22:22 s     Sector layout.  On Tegra GPUs prior to Xavier, there is a further
+- *             bit remapping step that occurs at an even lower level than the
+- *             page kind and block linear swizzles.  This causes the layout of
+- *             surfaces mapped in those SOC's GPUs to be incompatible with the
+- *             equivalent mapping on other GPUs in the same system.
+- *
+- *               0 = Tegra K1 - Tegra Parker/TX2 Layout.
+- *               1 = Desktop GPU and Tegra Xavier+ Layout
++ * 22:22 s     Sector layout.  There is a further bit remapping step that occurs
++ * 26:27       at an even lower level than the page kind and block linear
++ *             swizzles.  This causes the bit arrangement of surfaces in memory
++ *             to differ subtly, and prevents direct sharing of surfaces between
++ *             GPUs with different layouts.
++ *
++ *               0 = Tegra K1 - Tegra Parker/TX2 Layout
++ *               1 = Pre-GB20x, GB20x 32+ bpp, GB10, Tegra Xavier-Orin Layout
++ *               2 = GB20x(Blackwell 2)+ 8 bpp surface layout
++ *               3 = GB20x(Blackwell 2)+ 16 bpp surface layout
++ *               4 = Reserved for future use.
++ *               5 = Reserved for future use.
++ *               6 = Reserved for future use.
++ *               7 = Reserved for future use.
+  *
+  * 25:23 c     Lossless Framebuffer Compression type.
+  *
+@@ -920,7 +1017,7 @@ extern "C" {
+  *               6 = Reserved for future use
+  *               7 = Reserved for future use
+  *
+- * 55:25 -     Reserved for future use.  Must be zero.
++ * 55:28 -     Reserved for future use.  Must be zero.
+  */
+ #define DRM_FORMAT_MOD_NVIDIA_BLOCK_LINEAR_2D(c, s, g, k, h) \
+ 	fourcc_mod_code(NVIDIA, (0x10 | \
+@@ -928,6 +1025,7 @@ extern "C" {
+ 				 (((k) & 0xff) << 12) | \
+ 				 (((g) & 0x3) << 20) | \
+ 				 (((s) & 0x1) << 22) | \
++				 (((s) & 0x6) << 25) | \
+ 				 (((c) & 0x7) << 23)))
+ 
+ /* To grandfather in prior block linear format modifiers to the above layout,
+@@ -1334,6 +1432,22 @@ drm_fourcc_canonicalize_nvidia_format_mod(__u64 modifier)
+ #define DRM_FORMAT_MOD_ARM_16X16_BLOCK_U_INTERLEAVED \
+ 	DRM_FORMAT_MOD_ARM_CODE(DRM_FORMAT_MOD_ARM_TYPE_MISC, 1ULL)
+ 
++/*
++ * ARM 64k interleaved modifier
++ *
++ * This is used by ARM Mali v10+ GPUs. With this modifier, the plane is divided
++ * into 64k byte 1:1 or 2:1 -sided tiles. The 64k tiles are laid out linearly.
++ * Each 64k tile is divided into blocks of 16x16 texel blocks, which are
++ * themselves laid out linearly within a 64k tile. Then within each 16x16
++ * block, texel blocks are laid out according to U order, similar to
++ * 16X16_BLOCK_U_INTERLEAVED.
++ *
++ * Note that unlike 16X16_BLOCK_U_INTERLEAVED, the layout does not change
++ * depending on whether a format is compressed or not.
++ */
++#define DRM_FORMAT_MOD_ARM_INTERLEAVED_64K \
++	DRM_FORMAT_MOD_ARM_CODE(DRM_FORMAT_MOD_ARM_TYPE_MISC, 2ULL)
++
+ /*
+  * Allwinner tiled modifier
+  *
+@@ -1428,6 +1542,90 @@ drm_fourcc_canonicalize_nvidia_format_mod(__u64 modifier)
+  */
+ #define AMLOGIC_FBC_OPTION_MEM_SAVING		(1ULL << 0)
+ 
++/* MediaTek modifiers
++ * Bits  Parameter                Notes
++ * ----- ------------------------ ---------------------------------------------
++ *   7: 0 TILE LAYOUT              Values are MTK_FMT_MOD_TILE_*
++ *  15: 8 COMPRESSION              Values are MTK_FMT_MOD_COMPRESS_*
++ *  23:16 10 BIT LAYOUT            Values are MTK_FMT_MOD_10BIT_LAYOUT_*
++ *
++ */
++
++#define DRM_FORMAT_MOD_MTK(__flags)		fourcc_mod_code(MTK, __flags)
++
++/*
++ * MediaTek Tiled Modifier
++ * The lowest 8 bits of the modifier is used to specify the tiling
++ * layout. Only the 16L_32S tiling is used for now, but we define an
++ * "untiled" version and leave room for future expansion.
++ */
++#define MTK_FMT_MOD_TILE_MASK     0xf
++#define MTK_FMT_MOD_TILE_NONE     0x0
++#define MTK_FMT_MOD_TILE_16L32S   0x1
++
++/*
++ * Bits 8-15 specify compression options
++ */
++#define MTK_FMT_MOD_COMPRESS_MASK (0xf << 8)
++#define MTK_FMT_MOD_COMPRESS_NONE (0x0 << 8)
++#define MTK_FMT_MOD_COMPRESS_V1   (0x1 << 8)
++
++/*
++ * Bits 16-23 specify how the bits of 10 bit formats are
++ * stored out in memory
++ */
++#define MTK_FMT_MOD_10BIT_LAYOUT_MASK      (0xf << 16)
++#define MTK_FMT_MOD_10BIT_LAYOUT_PACKED    (0x0 << 16)
++#define MTK_FMT_MOD_10BIT_LAYOUT_LSBTILED  (0x1 << 16)
++#define MTK_FMT_MOD_10BIT_LAYOUT_LSBRASTER (0x2 << 16)
++
++/* alias for the most common tiling format */
++#define DRM_FORMAT_MOD_MTK_16L_32S_TILE  DRM_FORMAT_MOD_MTK(MTK_FMT_MOD_TILE_16L32S)
++
++/*
++ * Apple GPU-tiled layouts.
++ *
++ * Apple GPUs support nonlinear tilings with optional lossless compression.
++ *
++ * GPU-tiled images are divided into 16KiB tiles:
++ *
++ *     Bytes per pixel  Tile size
++ *     ---------------  ---------
++ *                   1  128x128
++ *                   2  128x64
++ *                   4  64x64
++ *                   8  64x32
++ *                  16  32x32
++ *
++ * Tiles are raster-order. Pixels within a tile are interleaved (Morton order).
++ *
++ * Compressed images pad the body to 128-bytes and are immediately followed by a
++ * metadata section. The metadata section rounds the image dimensions to
++ * powers-of-two and contains 8 bytes for each 16x16 compression subtile.
++ * Subtiles are interleaved (Morton order).
++ *
++ * All images are 128-byte aligned.
++ *
++ * These layouts fundamentally do not have meaningful strides. No matter how we
++ * specify strides for these layouts, userspace unaware of Apple image layouts
++ * will be unable to use correctly the specified stride for any purpose.
++ * Userspace aware of the image layouts do not use strides. The most "correct"
++ * convention would be setting the image stride to 0. Unfortunately, some
++ * software assumes the stride is at least (width * bytes per pixel). We
++ * therefore require that stride equals (width * bytes per pixel). Since the
++ * stride is arbitrary here, we pick the simplest convention.
++ *
++ * Although containing two sections, compressed image layouts are treated in
++ * software as a single plane. This is modelled after AFBC, a similar
++ * scheme. Attempting to separate the sections to be "explicit" in DRM would
++ * only generate more confusion, as software does not treat the image this way.
++ *
++ * For detailed information on the hardware image layouts, see
++ * https://docs.mesa3d.org/drivers/asahi.html#image-layouts
++ */
++#define DRM_FORMAT_MOD_APPLE_GPU_TILED fourcc_mod_code(APPLE, 1)
++#define DRM_FORMAT_MOD_APPLE_GPU_TILED_COMPRESSED fourcc_mod_code(APPLE, 2)
++
+ /*
+  * AMD modifiers
+  *
+@@ -1491,6 +1689,7 @@ drm_fourcc_canonicalize_nvidia_format_mod(__u64 modifier)
+  * 64K_D_2D on GFX12 is identical to 64K_D on GFX11.
+  */
+ #define AMD_FMT_MOD_TILE_GFX9_64K_D 10
++#define AMD_FMT_MOD_TILE_GFX9_4K_D_X 22
+ #define AMD_FMT_MOD_TILE_GFX9_64K_S_X 25
+ #define AMD_FMT_MOD_TILE_GFX9_64K_D_X 26
+ #define AMD_FMT_MOD_TILE_GFX9_64K_R_X 27
+@@ -1506,6 +1705,8 @@ drm_fourcc_canonicalize_nvidia_format_mod(__u64 modifier)
+  *    6 - 64KB_3D
+  *    7 - 256KB_3D
+  */
++#define AMD_FMT_MOD_TILE_GFX12_256B_2D 1
++#define AMD_FMT_MOD_TILE_GFX12_4K_2D 2
+ #define AMD_FMT_MOD_TILE_GFX12_64K_2D 3
+ #define AMD_FMT_MOD_TILE_GFX12_256K_2D 4
+ 
+@@ -1540,9 +1741,6 @@ drm_fourcc_canonicalize_nvidia_format_mod(__u64 modifier)
+ #define AMD_FMT_MOD_DCC_MAX_COMPRESSED_BLOCK_SHIFT 18
+ #define AMD_FMT_MOD_DCC_MAX_COMPRESSED_BLOCK_MASK 0x3
+ 
+-#define AMD_FMT_MOD_GFX12_DCC_MAX_COMPRESSED_BLOCK_SHIFT     3
+-#define AMD_FMT_MOD_GFX12_DCC_MAX_COMPRESSED_BLOCK_MASK      0x3 /* 0:64B, 1:128B, 2:256B */
+-
+ /*
+  * DCC supports embedding some clear colors directly in the DCC surface.
+  * However, on older GPUs the rendering HW ignores the embedded clear color
+diff --git a/include/drm/drm_mode.h b/include/drm/drm_mode.h
+index d390011..cbbbfc1 100644
+--- a/include/drm/drm_mode.h
++++ b/include/drm/drm_mode.h
+@@ -629,6 +629,7 @@ struct drm_mode_connector_set_property {
+ #define DRM_MODE_OBJECT_FB 0xfbfbfbfb
+ #define DRM_MODE_OBJECT_BLOB 0xbbbbbbbb
+ #define DRM_MODE_OBJECT_PLANE 0xeeeeeeee
++#define DRM_MODE_OBJECT_COLOROP 0xfafafafa
+ #define DRM_MODE_OBJECT_ANY 0
+ 
+ struct drm_mode_obj_get_properties {
+@@ -846,6 +847,20 @@ struct drm_color_ctm {
+ 	__u64 matrix[9];
+ };
+ 
++struct drm_color_ctm_3x4 {
++	/*
++	 * Conversion matrix with 3x4 dimensions in S31.32 sign-magnitude
++	 * (not two's complement!) format.
++	 *
++	 * out   matrix          in
++	 * |R|   |0  1  2  3 |   | R |
++	 * |G| = |4  5  6  7 | x | G |
++	 * |B|   |8  9  10 11|   | B |
++	 *                       |1.0|
++	 */
++	__u64 matrix[12];
++};
++
+ struct drm_color_lut {
+ 	/*
+ 	 * Values are mapped linearly to 0.0 - 1.0 range, with 0x0 == 0.0 and
+@@ -857,8 +872,129 @@ struct drm_color_lut {
+ 	__u16 reserved;
+ };
+ 
++/*
++ * struct drm_color_lut32
++ *
++ * 32-bit per channel color LUT entry, similar to drm_color_lut.
++ */
++struct drm_color_lut32 {
++	__u32 red;
++	__u32 green;
++	__u32 blue;
++	__u32 reserved;
++};
++
++/**
++ * enum drm_colorop_type - Type of color operation
++ *
++ * drm_colorops can be of many different types. Each type behaves differently
++ * and defines a different set of properties. This enum defines all types and
++ * gives a high-level description.
++ */
++enum drm_colorop_type {
++	/**
++	 * @DRM_COLOROP_1D_CURVE:
++	 *
++	 * enum string "1D Curve"
++	 *
++	 * A 1D curve that is being applied to all color channels. The
++	 * curve is specified via the CURVE_1D_TYPE colorop property.
++	 */
++	DRM_COLOROP_1D_CURVE,
++
++	/**
++	 * @DRM_COLOROP_1D_LUT:
++	 *
++	 * enum string "1D LUT"
++	 *
++	 * A simple 1D LUT of uniformly spaced &drm_color_lut32 entries,
++	 * packed into a blob via the DATA property. The driver's
++	 * expected LUT size is advertised via the SIZE property.
++	 *
++	 * The DATA blob is an array of struct drm_color_lut32 with size
++	 * of "size".
++	 */
++	DRM_COLOROP_1D_LUT,
++
++	/**
++	 * @DRM_COLOROP_CTM_3X4:
++	 *
++	 * enum string "3x4 Matrix"
++	 *
++	 * A 3x4 matrix. Its values are specified via the
++	 * &drm_color_ctm_3x4 struct provided via the DATA property.
++	 *
++	 * The DATA blob is a float[12]:
++	 * out   matrix          in
++	 * | R |   | 0  1  2  3  |   | R |
++	 * | G | = | 4  5  6  7  | x | G |
++	 * | B |   | 8  9  10 12 |   | B |
++	 */
++	DRM_COLOROP_CTM_3X4,
++
++	/**
++	 * @DRM_COLOROP_MULTIPLIER:
++	 *
++	 * enum string "Multiplier"
++	 *
++	 * A simple multiplier, applied to all color values. The
++	 * multiplier is specified as a S31.32 via the MULTIPLIER
++	 * property.
++	 */
++	DRM_COLOROP_MULTIPLIER,
++
++	/**
++	 * @DRM_COLOROP_3D_LUT:
++	 *
++	 * enum string "3D LUT"
++	 *
++	 * A 3D LUT of &drm_color_lut32 entries,
++	 * packed into a blob via the DATA property. The driver's expected
++	 * LUT size is advertised via the SIZE property, i.e., a 3D LUT with
++	 * 17x17x17 entries will have SIZE set to 17.
++	 *
++	 * The DATA blob is a 3D array of struct drm_color_lut32 with dimension
++	 * length of "size".
++	 * The LUT elements are traversed like so:
++	 *
++	 *   for B in range 0..n
++	 *     for G in range 0..n
++	 *       for R in range 0..n
++	 *        index = R + n * (G + n * B)
++	 *         color = lut3d[index]
++	 */
++	DRM_COLOROP_3D_LUT,
++};
++
++/**
++ * enum drm_colorop_lut3d_interpolation_type - type of 3DLUT interpolation
++ */
++enum drm_colorop_lut3d_interpolation_type {
++	/**
++	 * @DRM_COLOROP_LUT3D_INTERPOLATION_TETRAHEDRAL:
++	 *
++	 * Tetrahedral 3DLUT interpolation
++	 */
++	DRM_COLOROP_LUT3D_INTERPOLATION_TETRAHEDRAL,
++};
++
++/**
++ * enum drm_colorop_lut1d_interpolation_type - type of interpolation for 1D LUTs
++ */
++enum drm_colorop_lut1d_interpolation_type {
++	/**
++	 * @DRM_COLOROP_LUT1D_INTERPOLATION_LINEAR:
++	 *
++	 * Linear interpolation. Values between points of the LUT will be
++	 * linearly interpolated.
++	 */
++	DRM_COLOROP_LUT1D_INTERPOLATION_LINEAR,
++};
++
+ /**
+  * struct drm_plane_size_hint - Plane size hints
++ * @width: The width of the plane in pixel
++ * @height: The height of the plane in pixel
+  *
+  * The plane SIZE_HINTS property blob contains an
+  * array of struct drm_plane_size_hint.
+@@ -960,6 +1096,14 @@ struct hdr_output_metadata {
+  * Request that the kernel sends back a vblank event (see
+  * struct drm_event_vblank) with the &DRM_EVENT_FLIP_COMPLETE type when the
+  * page-flip is done.
++ *
++ * When used with atomic uAPI, one event will be delivered per CRTC included in
++ * the atomic commit. A CRTC is included in an atomic commit if one of its
++ * properties is set, or if a property is set on a connector or plane linked
++ * via the CRTC_ID property to the CRTC. At least one CRTC must be included,
++ * and all pulled in CRTCs must be either previously or newly powered on (in
++ * other words, a powered off CRTC which stays off cannot be included in the
++ * atomic commit).
+  */
+ #define DRM_MODE_PAGE_FLIP_EVENT 0x01
+ /**
+@@ -1056,7 +1200,7 @@ struct drm_mode_crtc_page_flip_target {
+  * struct drm_mode_create_dumb - Create a KMS dumb buffer for scanout.
+  * @height: buffer height in pixels
+  * @width: buffer width in pixels
+- * @bpp: bits per pixel
++ * @bpp: color mode
+  * @flags: must be zero
+  * @handle: buffer object handle
+  * @pitch: number of bytes between two consecutive lines
+@@ -1064,6 +1208,54 @@ struct drm_mode_crtc_page_flip_target {
+  *
+  * User-space fills @height, @width, @bpp and @flags. If the IOCTL succeeds,
+  * the kernel fills @handle, @pitch and @size.
++ *
++ * The value of @bpp is a color-mode number describing a specific format
++ * or a variant thereof. The value often corresponds to the number of bits
++ * per pixel for most modes, although there are exceptions. Each color mode
++ * maps to a DRM format plus a number of modes with similar pixel layout.
++ * Framebuffer layout is always linear.
++ *
++ * Support for all modes and formats is optional. Even if dumb-buffer
++ * creation with a certain color mode succeeds, it is not guaranteed that
++ * the DRM driver supports any of the related formats. Most drivers support
++ * a color mode of 32 with a format of DRM_FORMAT_XRGB8888 on their primary
++ * plane.
++ *
++ * +------------+------------------------+------------------------+
++ * | Color mode | Framebuffer format     | Compatible formats     |
++ * +============+========================+========================+
++ * |     32     |  * DRM_FORMAT_XRGB8888 |  * DRM_FORMAT_BGRX8888 |
++ * |            |                        |  * DRM_FORMAT_RGBX8888 |
++ * |            |                        |  * DRM_FORMAT_XBGR8888 |
++ * +------------+------------------------+------------------------+
++ * |     24     |  * DRM_FORMAT_RGB888   |  * DRM_FORMAT_BGR888   |
++ * +------------+------------------------+------------------------+
++ * |     16     |  * DRM_FORMAT_RGB565   |  * DRM_FORMAT_BGR565   |
++ * +------------+------------------------+------------------------+
++ * |     15     |  * DRM_FORMAT_XRGB1555 |  * DRM_FORMAT_BGRX1555 |
++ * |            |                        |  * DRM_FORMAT_RGBX1555 |
++ * |            |                        |  * DRM_FORMAT_XBGR1555 |
++ * +------------+------------------------+------------------------+
++ * |      8     |  * DRM_FORMAT_C8       |  * DRM_FORMAT_D8       |
++ * |            |                        |  * DRM_FORMAT_R8       |
++ * +------------+------------------------+------------------------+
++ * |      4     |  * DRM_FORMAT_C4       |  * DRM_FORMAT_D4       |
++ * |            |                        |  * DRM_FORMAT_R4       |
++ * +------------+------------------------+------------------------+
++ * |      2     |  * DRM_FORMAT_C2       |  * DRM_FORMAT_D2       |
++ * |            |                        |  * DRM_FORMAT_R2       |
++ * +------------+------------------------+------------------------+
++ * |      1     |  * DRM_FORMAT_C1       |  * DRM_FORMAT_D1       |
++ * |            |                        |  * DRM_FORMAT_R1       |
++ * +------------+------------------------+------------------------+
++ *
++ * Color modes of 10, 12, 15, 30 and 64 are only supported for use by
++ * legacy user space. Please don't use them in new code. Other modes
++ * are not support.
++ *
++ * Do not attempt to allocate anything but linear framebuffer memory
++ * with single-plane RGB data. Allocation of other framebuffer
++ * layouts requires dedicated ioctls in the respective DRM driver.
+  */
+ struct drm_mode_create_dumb {
+ 	__u32 height;
+diff --git a/include/drm/virtgpu_drm.h b/include/drm/virtgpu_drm.h
+index a13e20c..9debb32 100644
+--- a/include/drm/virtgpu_drm.h
++++ b/include/drm/virtgpu_drm.h
+@@ -64,6 +64,17 @@ struct drm_virtgpu_map {
+ 	__u32 pad;
+ };
+ 
++#define VIRTGPU_EXECBUF_SYNCOBJ_RESET		0x01
++#define VIRTGPU_EXECBUF_SYNCOBJ_FLAGS ( \
++		VIRTGPU_EXECBUF_SYNCOBJ_RESET | \
++		0)
++struct drm_virtgpu_execbuffer_syncobj {
++	__u32 handle;
++	__u32 flags;
++	__u64 point;
++};
++
++/* fence_fd is modified on success if VIRTGPU_EXECBUF_FENCE_FD_OUT flag is set. */
+ struct drm_virtgpu_execbuffer {
+ 	__u32 flags;
+ 	__u32 size;
+@@ -72,7 +83,11 @@ struct drm_virtgpu_execbuffer {
+ 	__u32 num_bo_handles;
+ 	__s32 fence_fd; /* in/out fence fd (see VIRTGPU_EXECBUF_FENCE_FD_IN/OUT) */
+ 	__u32 ring_idx; /* command ring index (see VIRTGPU_EXECBUF_RING_IDX) */
+-	__u32 pad;
++	__u32 syncobj_stride; /* size of @drm_virtgpu_execbuffer_syncobj */
++	__u32 num_in_syncobjs;
++	__u32 num_out_syncobjs;
++	__u64 in_syncobjs;
++	__u64 out_syncobjs;
+ };
+ 
+ #define VIRTGPU_PARAM_3D_FEATURES 1 /* do we have 3D features in the hw */
+@@ -82,6 +97,7 @@ struct drm_virtgpu_execbuffer {
+ #define VIRTGPU_PARAM_CROSS_DEVICE 5 /* Cross virtio-device resource sharing  */
+ #define VIRTGPU_PARAM_CONTEXT_INIT 6 /* DRM_VIRTGPU_CONTEXT_INIT */
+ #define VIRTGPU_PARAM_SUPPORTED_CAPSET_IDs 7 /* Bitmask of supported capability set ids */
++#define VIRTGPU_PARAM_EXPLICIT_DEBUG_NAME 8 /* Ability to set debug name from userspace */
+ 
+ struct drm_virtgpu_getparam {
+ 	__u64 param;
+@@ -147,6 +163,12 @@ struct drm_virtgpu_3d_wait {
+ 	__u32 flags;
+ };
+ 
++#define VIRTGPU_DRM_CAPSET_VIRGL 1
++#define VIRTGPU_DRM_CAPSET_VIRGL2 2
++#define VIRTGPU_DRM_CAPSET_GFXSTREAM_VULKAN 3
++#define VIRTGPU_DRM_CAPSET_VENUS 4
++#define VIRTGPU_DRM_CAPSET_CROSS_DOMAIN 5
++#define VIRTGPU_DRM_CAPSET_DRM 6
+ struct drm_virtgpu_get_caps {
+ 	__u32 cap_set_id;
+ 	__u32 cap_set_ver;
+@@ -183,6 +205,7 @@ struct drm_virtgpu_resource_create_blob {
+ #define VIRTGPU_CONTEXT_PARAM_CAPSET_ID       0x0001
+ #define VIRTGPU_CONTEXT_PARAM_NUM_RINGS       0x0002
+ #define VIRTGPU_CONTEXT_PARAM_POLL_RINGS_MASK 0x0003
++#define VIRTGPU_CONTEXT_PARAM_DEBUG_NAME      0x0004
+ struct drm_virtgpu_context_set_param {
+ 	__u64 param;
+ 	__u64 value;
+@@ -196,6 +219,13 @@ struct drm_virtgpu_context_init {
+ 	__u64 ctx_set_params;
+ };
+ 
++/*
++ * Event code that's given when VIRTGPU_CONTEXT_PARAM_POLL_RINGS_MASK is in
++ * effect.  The event size is sizeof(drm_event), since there is no additional
++ * payload.
++ */
++#define VIRTGPU_EVENT_FENCE_SIGNALED 0x90000000
++
+ #define DRM_IOCTL_VIRTGPU_MAP \
+ 	DRM_IOWR(DRM_COMMAND_BASE + DRM_VIRTGPU_MAP, struct drm_virtgpu_map)
+ 
+diff --git a/meson.build b/meson.build
+index 2991c8f..d90b22a 100644
+--- a/meson.build
++++ b/meson.build
+@@ -26,7 +26,7 @@
+ project(
+   'libdrm',
+   ['c'],
+-  version : '2.4.124',
++  version : '2.4.134',
+   license : 'MIT',
+   meson_version : '>= 0.59',
+   default_options : ['buildtype=debugoptimized', 'c_std=c11'],
+diff --git a/omap/omap_drm.c b/omap/omap_drm.c
+index 42d35ef..273e449 100644
+--- a/omap/omap_drm.c
++++ b/omap/omap_drm.c
+@@ -27,7 +27,6 @@
+  */
+ 
+ #include <stdlib.h>
+-#include <linux/types.h>
+ #include <errno.h>
+ #include <sys/mman.h>
+ #include <fcntl.h>
+@@ -41,10 +40,6 @@
+ #include "omap_drm.h"
+ #include "omap_drmif.h"
+ 
+-#define __round_mask(x, y) ((__typeof__(x))((y)-1))
+-#define round_up(x, y) ((((x)-1) | __round_mask(x, y))+1)
+-#define PAGE_SIZE 4096
+-
+ static pthread_mutex_t table_lock = PTHREAD_MUTEX_INITIALIZER;
+ static void * dev_table;
+ 
+@@ -207,12 +202,6 @@ static struct omap_bo * omap_bo_new_impl(struct omap_device *dev,
+ 	bo = bo_from_handle(dev, req.handle);
+ 	pthread_mutex_unlock(&table_lock);
+ 
+-	if (flags & OMAP_BO_TILED) {
+-		bo->size = round_up(size.tiled.width, PAGE_SIZE) * size.tiled.height;
+-	} else {
+-		bo->size = size.bytes;
+-	}
+-
+ 	return bo;
+ 
+ fail:
+@@ -432,7 +421,7 @@ drm_public uint32_t omap_bo_size(struct omap_bo *bo)
+ drm_public void *omap_bo_map(struct omap_bo *bo)
+ {
+ 	if (!bo->map) {
+-		if (!bo->offset) {
++		if (!bo->size || !bo->offset) {
+ 			get_buffer_info(bo);
+ 		}
+ 
+diff --git a/util_math.h b/util_math.h
+index 35bf451..04a0966 100644
+--- a/util_math.h
++++ b/util_math.h
+@@ -24,6 +24,8 @@
+ #ifndef _UTIL_MATH_H_
+ #define _UTIL_MATH_H_
+ 
++#include <stdint.h>
++
+ #define MIN2( A, B )   ( (A)<(B) ? (A) : (B) )
+ #define MAX2( A, B )   ( (A)>(B) ? (A) : (B) )
+ #define MAX3( A, B, C ) ((A) > (B) ? MAX2(A, C) : MAX2(B, C))
+@@ -31,4 +33,25 @@
+ #define __align_mask(value, mask)  (((value) + (mask)) & ~(mask))
+ #define ALIGN(value, alignment)    __align_mask(value, (__typeof__(value))((alignment) - 1))
+ 
++static inline unsigned
++util_last_bit64(uint64_t u)
++{
++#if defined(HAVE___BUILTIN_CLZLL)
++	return u == 0 ? 0 : 64 - __builtin_clzll(u);
++#elif defined(_MSC_VER) && (_M_AMD64 || _M_ARM64 || _M_IA64)
++	unsigned long index;
++	if (_BitScanReverse64(&index, u))
++		return index + 1;
++	else
++		return 0;
++#else
++	unsigned r = 0;
++	while (u) {
++		r++;
++		u >>= 1;
++	}
++	return r;
++#endif
++}
++
+ #endif /*_UTIL_MATH_H_*/
+diff --git a/xf86drm.c b/xf86drm.c
+index 6ca5626..53d1354 100644
+--- a/xf86drm.c
++++ b/xf86drm.c
+@@ -42,6 +42,7 @@
+ #include <stddef.h>
+ #include <fcntl.h>
+ #include <errno.h>
++#include <libgen.h>
+ #include <limits.h>
+ #include <signal.h>
+ #include <time.h>
+@@ -347,9 +348,10 @@ drmGetFormatModifierNameFromNvidia(uint64_t modifier)
+      * testing against TEGRA_TILE */
+     if ((modifier & 0x10) == 0x10) {
+         char *mod_nvidia;
+-        asprintf(&mod_nvidia, "BLOCK_LINEAR_2D,HEIGHT=%"PRIu64",KIND=%"PRIu64","
++        if (asprintf(&mod_nvidia, "BLOCK_LINEAR_2D,HEIGHT=%"PRIu64",KIND=%"PRIu64","
+                  "GEN=%"PRIu64",SECTOR=%"PRIu64",COMPRESSION=%"PRIu64"", height,
+-                 kind, gen, sector, compression);
++                 kind, gen, sector, compression) < 0)
++            mod_nvidia = NULL;
+         return mod_nvidia;
+     }
+ 
+@@ -541,7 +543,8 @@ drmGetFormatModifierNameFromAmlogic(uint64_t modifier)
+     else
+         opts_str = "0";
+ 
+-    asprintf(&mod_amlogic, "FBC,LAYOUT=%s,OPTIONS=%s", layout_str, opts_str);
++    if (asprintf(&mod_amlogic, "FBC,LAYOUT=%s,OPTIONS=%s", layout_str, opts_str) < 0)
++        mod_amlogic = NULL;
+     return mod_amlogic;
+ }
+ 
+@@ -605,7 +608,8 @@ drmGetFormatModifierNameFromVivante(uint64_t modifier)
+ 	break;
+     }
+ 
+-    asprintf(&mod_vivante, "%s%s%s", color_tiling, tile_status, compression);
++    if (asprintf(&mod_vivante, "%s%s%s", color_tiling, tile_status, compression) < 0)
++        mod_vivante = NULL;
+     return mod_vivante;
+ }
+ 
+@@ -978,6 +982,11 @@ static int drmOpenMinor(int minor, int create, int type)
+  *
+  * \return 1 if the DRM driver is loaded, 0 otherwise.
+  *
++ * \deprecated
++ * This function doesn't work when a device goes away (as is often the case
++ * with simpledrm). drmGetDevices2 should be used instead to enumerate DRM
++ * devices.
++ *
+  * \internal
+  * Determine the presence of the kernel driver by attempting to open the 0
+  * minor and get version information.  For backward compatibility with older
+@@ -1343,11 +1352,11 @@ static void drmCopyVersion(drmVersionPtr d, const drm_version_t *s)
+     d->version_minor      = s->version_minor;
+     d->version_patchlevel = s->version_patchlevel;
+     d->name_len           = s->name_len;
+-    d->name               = strdup(s->name);
++    d->name               = s->name ? strdup(s->name) : NULL;
+     d->date_len           = s->date_len;
+-    d->date               = strdup(s->date);
++    d->date               = s->date ? strdup(s->date) : NULL;
+     d->desc_len           = s->desc_len;
+-    d->desc               = strdup(s->desc);
++    d->desc               = s->desc ? strdup(s->desc) : NULL;
+ }
+ 
+ 
+@@ -3587,6 +3596,7 @@ static int get_subsystem_type(const char *device_path)
+         { "/spi", DRM_BUS_PLATFORM },
+         { "/host1x", DRM_BUS_HOST1X },
+         { "/virtio", DRM_BUS_VIRTIO },
++        { "/faux", DRM_BUS_FAUX },
+     };
+ 
+     strncpy(path, device_path, PATH_MAX);
+@@ -3790,6 +3800,9 @@ drm_public int drmDevicesEqual(drmDevicePtr a, drmDevicePtr b)
+     case DRM_BUS_HOST1X:
+         return memcmp(a->businfo.host1x, b->businfo.host1x, sizeof(drmHost1xBusInfo)) == 0;
+ 
++    case DRM_BUS_FAUX:
++        return memcmp(a->businfo.faux, b->businfo.faux, sizeof(drmFauxBusInfo)) == 0;
++
+     default:
+         break;
+     }
+@@ -4452,6 +4465,62 @@ free_device:
+     return ret;
+ }
+ 
++static int drmParseFauxBusInfo(int maj, int min, char *fullname)
++{
++#ifdef __linux__
++    char path[PATH_MAX + 1] = "";
++    char real_path[PATH_MAX + 1] = "";
++    char *name;
++
++    snprintf(path, sizeof(path), "/sys/dev/char/%d:%d/device", maj, min);
++
++    if (!realpath(path, real_path))
++        return -errno;
++
++    name = basename(real_path);
++    if (!name)
++        return -ENOENT;
++
++    strncpy(fullname, name, DRM_FAUX_DEVICE_NAME_LEN - 1);
++    fullname[DRM_FAUX_DEVICE_NAME_LEN - 1] = '\0';
++
++    return 0;
++#else
++#warning "Missing implementation of drmParseFauxBusInfo"
++    return -EINVAL;
++#endif
++}
++
++static int drmProcessFauxDevice(drmDevicePtr *device,
++                                const char *node, int node_type,
++                                int maj, int min, bool fetch_deviceinfo,
++                                uint32_t flags)
++{
++    drmDevicePtr dev;
++    char *ptr;
++    int ret;
++
++    dev = drmDeviceAlloc(node_type, node, sizeof(drmFauxBusInfo), 0, &ptr);
++    if (!dev)
++        return -ENOMEM;
++
++    dev->bustype = DRM_BUS_FAUX;
++
++    dev->businfo.faux = (drmFauxBusInfoPtr)ptr;
++
++    ret = drmParseFauxBusInfo(maj, min, dev->businfo.faux->name);
++    if (ret < 0)
++        goto free_device;
++
++    *device = dev;
++
++    return 0;
++
++free_device:
++    free(dev);
++    return ret;
++}
++
+ static int
+ process_device(drmDevicePtr *device, const char *d_name,
+                int req_subsystem_type,
+@@ -4504,6 +4573,9 @@ process_device(drmDevicePtr *device, const char *d_name,
+     case DRM_BUS_HOST1X:
+         return drmProcessHost1xDevice(device, node, node_type, maj, min,
+                                       fetch_deviceinfo, flags);
++    case DRM_BUS_FAUX:
++        return drmProcessFauxDevice(device, node, node_type, maj, min,
++                                    fetch_deviceinfo, flags);
+     default:
+         return -1;
+    }
+diff --git a/xf86drm.h b/xf86drm.h
+index 6d91dfb..b45337a 100644
+--- a/xf86drm.h
++++ b/xf86drm.h
+@@ -1,10 +1,10 @@
+ /**
+- * \file xf86drm.h 
++ * \file xf86drm.h
+  * OS-independent header for DRM user-level library interface.
+  *
+  * \author Rickard E. (Rik) Faith <faith@valinux.com>
+  */
+- 
++
+ /*
+  * Copyright 1999, 2000 Precision Insight, Inc., Cedar Park, Texas.
+  * Copyright 2000 VA Linux Systems, Inc., Sunnyvale, California.
+@@ -197,9 +197,9 @@ typedef enum {
+ typedef enum {
+     /** \name Flags for DMA buffer dispatch */
+     /*@{*/
+-    DRM_DMA_BLOCK        = 0x01, /**< 
++    DRM_DMA_BLOCK        = 0x01, /**<
+ 				  * Block until buffer dispatched.
+-				  * 
++				  *
+ 				  * \note the buffer may not yet have been
+ 				  * processed by the hardware -- getting a
+ 				  * hardware lock with the hardware quiescent
+@@ -693,7 +693,7 @@ extern int           drmGetLock(int fd,
+ 			        drmLockFlags flags);
+ extern int           drmUnlock(int fd, drm_context_t context);
+ extern int           drmFinish(int fd, int context, drmLockFlags flags);
+-extern int	     drmGetContextPrivateMapping(int fd, drm_context_t ctx_id, 
++extern int	     drmGetContextPrivateMapping(int fd, drm_context_t ctx_id,
+ 						 drm_handle_t * handle);
+ 
+ /* AGP/GART support: X server (root) only */
+@@ -779,7 +779,7 @@ typedef struct _drmEventContext {
+ 	int version;
+ 
+ 	void (*vblank_handler)(int fd,
+-			       unsigned int sequence, 
++			       unsigned int sequence,
+ 			       unsigned int tv_sec,
+ 			       unsigned int tv_usec,
+ 			       void *user_data);
+@@ -843,6 +843,7 @@ extern char *drmGetRenderDeviceNameFromFd(int fd);
+ #define DRM_BUS_USB       1
+ #define DRM_BUS_PLATFORM  2
+ #define DRM_BUS_HOST1X    3
++#define DRM_BUS_FAUX      4
+ 
+ typedef struct _drmPciBusInfo {
+     uint16_t domain;
+@@ -889,6 +890,12 @@ typedef struct _drmHost1xDeviceInfo {
+     char **compatible; /* NULL terminated list of compatible strings */
+ } drmHost1xDeviceInfo, *drmHost1xDeviceInfoPtr;
+ 
++#define DRM_FAUX_DEVICE_NAME_LEN 512
++
++typedef struct _drmFauxBusInfo {
++    char name[DRM_FAUX_DEVICE_NAME_LEN];
++} drmFauxBusInfo, *drmFauxBusInfoPtr;
++
+ typedef struct _drmDevice {
+     char **nodes; /* DRM_NODE_MAX sized array */
+     int available_nodes; /* DRM_NODE_* bitmask */
+@@ -898,6 +905,7 @@ typedef struct _drmDevice {
+         drmUsbBusInfoPtr usb;
+         drmPlatformBusInfoPtr platform;
+         drmHost1xBusInfoPtr host1x;
++        drmFauxBusInfoPtr faux;
+     } businfo;
+     union {
+         drmPciDeviceInfoPtr pci;

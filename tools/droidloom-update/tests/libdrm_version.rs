@@ -7,24 +7,42 @@ fn drm_version_accepts_empty_kernel_strings() {
     let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let source = repo.join(".work/arch/build/aosp-source/external/libdrm");
     let temp = tempfile::tempdir().unwrap();
+    // The checkout's committed tree, upgraded and patched as the build does.
+    let tree = temp.path().join("libdrm");
+    fs::create_dir(&tree).unwrap();
+    let archive = temp.path().join("libdrm.tar");
     let pristine = Command::new("git")
         .current_dir(&source)
-        .args(["show", "HEAD:xf86drm.c"])
+        .args(["archive", "--output"])
+        .arg(&archive)
+        .arg("HEAD")
         .output()
         .unwrap();
     assert!(pristine.status.success());
-    fs::write(temp.path().join("xf86drm.c"), pristine.stdout).unwrap();
-    let apply = Command::new("git")
-        .current_dir(temp.path())
-        .args(["apply", "--include=xf86drm.c"])
-        .arg(repo.join("android/aosp-patches/0015-libdrm-empty-version-strings.patch"))
+    let unpack = Command::new("tar")
+        .arg("-xf")
+        .arg(&archive)
+        .arg("-C")
+        .arg(&tree)
         .output()
         .unwrap();
-    assert!(
-        apply.status.success(),
-        "{}",
-        String::from_utf8_lossy(&apply.stderr)
-    );
+    assert!(unpack.status.success());
+    for patch in [
+        "0036-libdrm-2.4.134.patch",
+        "0015-libdrm-empty-version-strings.patch",
+    ] {
+        let apply = Command::new("git")
+            .current_dir(&tree)
+            .arg("apply")
+            .arg(repo.join("android/aosp-patches").join(patch))
+            .output()
+            .unwrap();
+        assert!(
+            apply.status.success(),
+            "{patch}: {}",
+            String::from_utf8_lossy(&apply.stderr)
+        );
+    }
     let binary = temp.path().join("version-test");
     let compile = Command::new("cc")
         .args([
@@ -36,10 +54,10 @@ fn drm_version_accepts_empty_kernel_strings() {
             "-Wl,--wrap=ioctl",
             "-I",
         ])
-        .arg(&source)
+        .arg(&tree)
         .arg("-I")
-        .arg(source.join("include/drm"))
-        .arg(temp.path().join("xf86drm.c"))
+        .arg(tree.join("include/drm"))
+        .arg(tree.join("xf86drm.c"))
         .arg(repo.join("android/mesa/tests/libdrm_version.c"))
         .arg("-o")
         .arg(&binary)

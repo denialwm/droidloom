@@ -113,6 +113,10 @@ const PATCHES: &[(&str, &str)] = &[
     ),
     (
         "external/libdrm",
+        "android/aosp-patches/0036-libdrm-2.4.134.patch",
+    ),
+    (
+        "external/libdrm",
         "android/aosp-patches/0015-libdrm-empty-version-strings.patch",
     ),
     (
