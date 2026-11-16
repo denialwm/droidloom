@@ -350,6 +350,16 @@ fn execute(args: Args) -> Result<()> {
         android::recover(&work.join("source-projection.json"), &source)?;
     }
     if matches!(args.command, Some(Action::AndroidBuild { .. })) {
+        // A changed Mesa pin or patch must reach this build, not only packages.
+        assemble::prepare_mesa(
+            &repo,
+            &work,
+            &repo.join(if product == "droidloom_arm64" {
+                "android/manifest/source-lock.json"
+            } else {
+                "android/manifest/source-lock-x86_64.json"
+            }),
+        )?;
         if product == "droidloom_arm64" {
             assemble::mesa_tools(&work, jobs, true)?;
         }

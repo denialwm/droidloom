@@ -80,7 +80,6 @@ fn prepare_inputs_from(
     } else {
         format!("android/manifest/source-lock-{arch}.json")
     });
-    let lock = json(&lock_path)?;
     let typed = droidloom_image::load_source_lock(&lock_path)?;
     let base = if reuse_installed {
         work.join("base")
@@ -163,33 +162,7 @@ fn prepare_inputs_from(
         return fail("framework-res differs from pinned base");
     }
     copy(&framework, &work.join("framework-res.apk"))?;
-    let mesa = &lock["mesa"];
-    let version = mesa["version"].as_str().ok_or("Mesa version absent")?;
-    let archive = repo.join(format!(".work/mesa-{version}.tar.xz"));
-    download(
-        mesa["url"].as_str().ok_or("Mesa URL absent")?,
-        &archive,
-        mesa["sha256"].as_str().ok_or("Mesa digest absent")?,
-    )?;
-    let mesa_source = work.join("mesa-source");
-    if let Err(error) = droidloom_mesa::prepare(
-        &lock_path,
-        &archive,
-        &repo.join("android/mesa/patches"),
-        &mesa_source,
-    ) {
-        if !mesa_source.exists() {
-            return Err(error.into());
-        }
-        eprintln!("Regenerating Mesa source cache: {error}");
-        fs::remove_dir_all(&mesa_source)?;
-        droidloom_mesa::prepare(
-            &lock_path,
-            &archive,
-            &repo.join("android/mesa/patches"),
-            &mesa_source,
-        )?;
-    }
+    prepare_mesa(repo, work, &lock_path)?;
     // The APEX is taken from the verified system partition, never from a previous installation.
     let apex = extracted.join("system/apex/com.android.virt.apex");
     let compressed = extracted.join("system/apex/com.android.virt.capex");
@@ -236,6 +209,39 @@ fn extract_package_base(archive: &Path, base: &Path) -> Result<()> {
     fs::remove_file(sparse)?;
     fs::remove_file(raw)?;
     fs::rename(temporary.path(), base)?;
+    Ok(())
+}
+/// Download the locked Mesa release and prepare its patched source in
+/// `work/mesa-source`, replacing a source prepared from other inputs.
+pub fn prepare_mesa(repo: &Path, work: &Path, lock_path: &Path) -> Result<()> {
+    let lock = json(lock_path)?;
+    let mesa = &lock["mesa"];
+    let version = mesa["version"].as_str().ok_or("Mesa version absent")?;
+    let archive = repo.join(format!(".work/mesa-{version}.tar.xz"));
+    download(
+        mesa["url"].as_str().ok_or("Mesa URL absent")?,
+        &archive,
+        mesa["sha256"].as_str().ok_or("Mesa digest absent")?,
+    )?;
+    let mesa_source = work.join("mesa-source");
+    if let Err(error) = droidloom_mesa::prepare(
+        lock_path,
+        &archive,
+        &repo.join("android/mesa/patches"),
+        &mesa_source,
+    ) {
+        if !mesa_source.exists() {
+            return Err(error.into());
+        }
+        eprintln!("Regenerating Mesa source cache: {error}");
+        fs::remove_dir_all(&mesa_source)?;
+        droidloom_mesa::prepare(
+            lock_path,
+            &archive,
+            &repo.join("android/mesa/patches"),
+            &mesa_source,
+        )?;
+    }
     Ok(())
 }
 pub fn mesa_tools(work: &Path, jobs: usize, panfrost: bool) -> Result<()> {
