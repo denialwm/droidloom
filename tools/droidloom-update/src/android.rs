@@ -154,7 +154,7 @@ const PATCHES: &[(&str, &str)] = &[
     ),
     (
         "system/connectivity/wificond",
-        "android/aosp-patches/0036-wificond-parcelable-library.patch",
+        "android/aosp-patches/0038-wificond-parcelable-library.patch",
     ),
     (
         "frameworks/native",
