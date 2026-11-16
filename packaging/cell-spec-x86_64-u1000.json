@@ -38,6 +38,10 @@
       "target": "/system_ext/priv-app/SystemUI/SystemUI.apk"
     },
     {
+      "source": "/usr/lib/droidloom/current/bin/droidloom-wificond",
+      "target": "/system_ext/bin/wificond"
+    },
+    {
       "source": "/usr/lib/droidloom/current/framework/services.jar",
       "target": "/system/framework/services.jar"
     },

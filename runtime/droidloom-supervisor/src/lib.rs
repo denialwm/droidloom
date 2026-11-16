@@ -14,6 +14,7 @@ pub mod control;
 mod cpu_placement;
 pub mod development;
 mod development_network;
+mod dhcp_responder;
 mod filesystem_guard;
 pub mod gapps;
 pub mod host_gpu;

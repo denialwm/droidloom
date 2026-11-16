@@ -17,6 +17,7 @@ public class SystemUIService extends Service {
     private StatusBarCallbacks callbacks;
     private com.android.systemui.notifications.NotificationBridge notifications;
     private com.android.systemui.clipboard.ClipboardBridge clipboard;
+    private com.android.systemui.wifi.WifiProvisioning wifi;
     @Override public void onCreate() {
         super.onCreate();
         if (UserHandle.myUserId() != 0) return;
@@ -31,6 +32,8 @@ public class SystemUIService extends Service {
         clipboard.start();
         notifications = new com.android.systemui.notifications.NotificationBridge(this);
         notifications.start();
+        wifi = new com.android.systemui.wifi.WifiProvisioning(this);
+        wifi.start();
         Log.i("DroidloomSystemUI", "DROIDLOOM_SYSTEMUI_ABI=1; status bar registered; no windows");
     }
     @Override public int onStartCommand(Intent intent, int flags, int startId) {
@@ -39,6 +42,7 @@ public class SystemUIService extends Service {
     @Override public void onDestroy() {
         if (clipboard != null) clipboard.close();
         if (notifications != null) notifications.close();
+        if (wifi != null) wifi.close();
         super.onDestroy();
     }
     @Override public IBinder onBind(Intent intent) { return null; }

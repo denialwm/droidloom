@@ -13,6 +13,7 @@ pub const TARGETS: &[&str] = &[
     "DroidloomIME",
     "DroidloomHome",
     "DroidloomSystemUI",
+    "droidloom-wificond",
     "droidloom-lmkd-compat",
     "droidloom-classpath-wrapper",
     "netbpfload",
@@ -146,6 +147,10 @@ const PATCHES: &[(&str, &str)] = &[
     (
         "external/angle",
         "android/aosp-patches/0035-angle-motion-vector-scale.patch",
+    ),
+    (
+        "system/connectivity/wificond",
+        "android/aosp-patches/0036-wificond-parcelable-library.patch",
     ),
     (
         "frameworks/native",

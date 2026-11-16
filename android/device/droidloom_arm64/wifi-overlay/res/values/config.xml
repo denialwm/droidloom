@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      Droidloom's wificond answers background (PNO) scans. Without them Wi-Fi
+      does not look for a saved network while the screen is off.
+    -->
+    <bool translatable="false" name="config_wifi_background_scan_support">true</bool>
+    <!-- The access point is on 5 GHz channel 36. -->
+    <bool translatable="false" name="config_wifi5ghzSupport">true</bool>
+</resources>

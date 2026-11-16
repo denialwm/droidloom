@@ -313,6 +313,10 @@ address, forwarding, DNS broker, anti-spoofing, and NAT/firewall objects under
 a stable cell tag. Android `netd` may operate only inside the cell namespace.
 Teardown removes every tagged host object even if Android is unresponsive.
 
+Android sees its peer as `wlan0`, a Wi-Fi link: Droidloom's wificond and
+supplicant report one open access point, and the host answers DHCP on the link
+with the cell's single lease. See [Wi-Fi](../architecture.md#wi-fi).
+
 The executable preview starts authenticated `adbd` on the cell's private
 `10.177.0.2:5555` endpoint. Its host input rule permits only established IPv4
 TCP replies from that endpoint before dropping other cell-originated host

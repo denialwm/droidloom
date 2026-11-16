@@ -376,6 +376,10 @@ pub fn assemble_artifacts(
             "system/system_ext/priv-app/DroidloomSystemUI/DroidloomSystemUI.apk",
             "systemui/SystemUI.apk",
         ),
+        (
+            "system/system_ext/bin/droidloom-wificond",
+            "bin/droidloom-wificond",
+        ),
         ("vendor/build.prop", "overrides/vendor/build.prop"),
         (
             "vendor/bin/droidloom-classpath-wrapper",

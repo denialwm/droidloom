@@ -1094,6 +1094,32 @@ shared-memory audio buffers and negotiated formats with control messages on a
 separate channel. Measure the actual copy count and latency; zero-copy is not
 established by choosing shared memory alone.
 
+### Wi-Fi
+
+Android reaches the host over Wi-Fi, as apps expect from a phone or tablet:
+apps that check for Wi-Fi before syncing or downloading see a validated Wi-Fi
+network, and Settings shows it. The cell's link is still one veth peer; inside
+the namespace it is named `wlan0`. No kernel driver or radio is involved, so
+this works on any host kernel.
+
+- `droidloom-wificond` replaces the base image's `/system_ext/bin/wificond`.
+  It serves the framework's wificond interface and reports one access point,
+  `Droidloom`, open, on 5 GHz channel 36, in every scan and in background
+  (PNO) scans.
+- `android.hardware.wifi.supplicant-service.droidloom` is the supplicant AIDL
+  V5 service. It joins that access point with the callbacks wpa_supplicant
+  sends for an open network and reports any other network as not found.
+- The supervisor answers DHCP on the host end of the link with the cell's one
+  lease, 10.177.0.2/30, gateway 10.177.0.1, resolvers 1.1.1.1 and 8.8.8.8. It
+  uses a packet socket, below netfilter, so the cell's input rule stays closed.
+- There is no Wi-Fi vendor HAL. The framework runs without one, as it does on
+  devices whose driver has no vendor extensions.
+- SystemUI saves the `Droidloom` network and turns Wi-Fi on once per cell.
+  After that, turning Wi-Fi off or forgetting the network is the user's choice,
+  as on any phone.
+
+Both services read the access point from `android/wifi/include`.
+
 ### Audio
 
 The Android audio HAL should expose negotiated host outputs/capture to ordinary

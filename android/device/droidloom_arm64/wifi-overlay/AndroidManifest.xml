@@ -1,12 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    package="org.droidloom.connectivity.overlay"
+    package="org.droidloom.wifi.overlay"
     android:versionCode="1"
     android:versionName="1.0">
     <application android:hasCode="false" />
     <overlay
-        android:targetPackage="com.android.connectivity.resources"
-        android:targetName="ServiceConnectivityResourcesConfig"
+        android:targetPackage="com.android.wifi.resources"
+        android:targetName="WifiCustomization"
         android:isStatic="true"
         android:priority="1" />
 </manifest>

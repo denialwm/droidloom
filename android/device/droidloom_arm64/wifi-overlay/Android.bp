@@ -1,0 +1,15 @@
+// Android reaches the host over Wi-Fi: wlan0 is the cell's link, Droidloom's
+// wificond and supplicant stand in for the radio. Background scans let Wi-Fi
+// find the access point again while the screen is off.
+runtime_resource_overlay {
+    name: "DroidloomWifiOverlay",
+    vendor: true,
+    // The Wi-Fi resources come from the pinned CI image's Wi-Fi APEX, not this
+    // vendor-only source build. Auto-add the declared overlay resources while
+    // using the exact staged framework attribute IDs.
+    sdk_version: "core_platform",
+    aaptflags: [
+        "--auto-add-overlay",
+        "-I vendor/droidloom/android/prebuilts/framework-res.apk",
+    ],
+}

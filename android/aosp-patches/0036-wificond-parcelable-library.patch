@@ -1,0 +1,43 @@
+diff --git a/Android.bp b/Android.bp
+index cd67391..dca56bc 100644
+--- a/Android.bp
++++ b/Android.bp
+@@ -218,6 +218,38 @@ cc_library_static {
+     static_libs: ["libnlinterceptor"],
+ }
+ 
++// Droidloom: wificond's IPC types alone, without the daemon's netlink and
++// keystore dependencies. Droidloom's own wificond serves the same interface
++// and must write the same parcel formats as the framework expects.
++cc_library_static {
++    name: "libwificond_parcelables",
++    defaults: ["wificond_defaults"],
++    aidl: {
++        local_include_dirs: ["aidl"],
++        export_aidl_headers: true,
++    },
++    export_shared_lib_headers: ["libbinder"],
++    srcs: [
++        "ipc_constants.cpp",
++        "logging_utils.cpp",
++        ":libwificond_ipc_aidl",
++        "client/native_wifi_client.cpp",
++        "device_wiphy_capabilities.cpp",
++        "scanning/channel_settings.cpp",
++        "scanning/hidden_network.cpp",
++        "scanning/pno_network.cpp",
++        "scanning/pno_settings.cpp",
++        "scanning/radio_chain_info.cpp",
++        "scanning/scan_result.cpp",
++        "scanning/single_scan_settings.cpp",
++    ],
++    shared_libs: [
++        "libbase",
++        "libbinder",
++        "libutils",
++    ],
++}
++
+ filegroup {
+     name: "libwificond_ipc_aidl",
+     srcs: [

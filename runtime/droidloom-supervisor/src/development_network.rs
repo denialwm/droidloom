@@ -1,21 +1,37 @@
 //! Bounded network plumbing for the executable development cell.
 //!
 //! Linux remains the network implementation. This module only creates a veth
-//! pair, assigns the host gateway, and installs narrowly named nftables rules
-//! for outbound forwarding/NAT. Android owns `eth0` and its normal networking
-//! services inside the private namespace. Each side is one `ip -batch` and the
-//! rules are one `nft` transaction, so a cell start spawns three helpers.
+//! pair, assigns the host gateway, answers DHCP on it, and installs narrowly
+//! named nftables rules for outbound forwarding/NAT. Android sees its end as
+//! `wlan0`, the link Droidloom's wificond and supplicant report as one Wi-Fi
+//! access point, and runs its normal networking services on it inside the
+//! private namespace. Each side is one `ip -batch` and the rules are one `nft`
+//! transaction, so a cell start spawns three helpers.
 
 use std::fs;
 use std::io::Write;
+use std::net::Ipv4Addr;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
 use crate::CellSpec;
 use crate::development::DevelopmentError;
+use crate::dhcp_responder::{DhcpResponder, Lease};
 
 const HOST_IPV4_CIDR: &str = "10.177.0.1/30";
 const CELL_IPV4_CIDR: &str = "10.177.0.2/32";
+const CELL_INTERFACE: &str = "wlan0";
+// Locally administered, so it never names real hardware. Android keeps one
+// address for its Wi-Fi interface across cell starts.
+const CELL_MAC: &str = "02:64:6c:00:00:02";
+// The lease DHCP gives the cell: the address above, the host as its gateway,
+// public resolvers so the cell does not depend on the host's resolver.
+const LEASE: Lease = Lease {
+    server: Ipv4Addr::new(10, 177, 0, 1),
+    client: Ipv4Addr::new(10, 177, 0, 2),
+    prefix_len: 30,
+    dns: [Ipv4Addr::new(1, 1, 1, 1), Ipv4Addr::new(8, 8, 8, 8)],
+};
 const IPV4_FORWARD_PATH: &str = "/proc/sys/net/ipv4/ip_forward";
 const IPV4_FORWARD_STATE_FILE: &str = "host-ipv4-forward.before";
 const NETNS_DIR: &str = "/run/netns";
@@ -47,6 +63,7 @@ pub(crate) struct DevelopmentNetwork {
     runtime_dir: PathBuf,
     resources: Vec<NetworkResource>,
     previous_ipv4_forward: Option<String>,
+    dhcp: Option<DhcpResponder>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -66,6 +83,7 @@ impl DevelopmentNetwork {
             runtime_dir: spec.runtime_dir.clone(),
             resources: Vec::new(),
             previous_ipv4_forward: None,
+            dhcp: None,
         };
 
         if let Err(error) = network.setup() {
@@ -85,6 +103,10 @@ impl DevelopmentNetwork {
 
     fn setup(&mut self) -> Result<(), DevelopmentError> {
         self.setup_links()?;
+        self.dhcp = Some(
+            DhcpResponder::start(&self.names.host_interface, LEASE)
+                .map_err(|source| io_error("answer DHCP on the cell link", source))?,
+        );
         self.enable_forwarding()?;
         self.setup_rules()?;
         self.setup_ufw_forwarding()
@@ -107,14 +129,14 @@ impl DevelopmentNetwork {
             host_interface,
             ..
         } = &self.names;
-        // The peer is created inside the namespace as eth0, so it never
+        // The peer is created inside the namespace as wlan0, so it never
         // appears on the host under a temporary name.
         let host = run_script(
             "ip",
             ["-batch", "-"],
             &format!(
                 "netns add {namespace}\n\
-                 link add {host_interface} type veth peer name eth0 netns {namespace}\n\
+                 link add {host_interface} type veth peer name {CELL_INTERFACE} netns {namespace}\n\
                  address add {HOST_IPV4_CIDR} dev {host_interface}\n\
                  link set {host_interface} up\n"
             ),
@@ -130,7 +152,11 @@ impl DevelopmentNetwork {
         run_script(
             "ip",
             ["-n", namespace, "-batch", "-"],
-            "link set lo up\nlink set eth0 up\n",
+            &format!(
+                "link set lo up\n\
+                 link set {CELL_INTERFACE} address {CELL_MAC}\n\
+                 link set {CELL_INTERFACE} up\n"
+            ),
         )
     }
 
@@ -190,6 +216,8 @@ table ip {nat_table} {{
     /// Remove every object created by this instance in reverse ownership order.
     pub(crate) fn teardown(&mut self) -> Result<(), DevelopmentError> {
         let mut first_error = None;
+        // Stop answering before the link goes away.
+        self.dhcp = None;
 
         while let Some(resource) = self.resources.pop() {
             let result = match resource {
@@ -463,5 +491,11 @@ mod tests {
     fn cell_and_gateway_use_the_same_bounded_subnet() {
         assert_eq!(HOST_IPV4_CIDR, "10.177.0.1/30");
         assert_eq!(CELL_IPV4_CIDR, "10.177.0.2/32");
+        // DHCP hands out exactly the address the firewall rules name.
+        assert_eq!(
+            format!("{}/{}", LEASE.server, LEASE.prefix_len),
+            HOST_IPV4_CIDR
+        );
+        assert_eq!(format!("{}/32", LEASE.client), CELL_IPV4_CIDR);
     }
 }

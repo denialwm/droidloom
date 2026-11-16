@@ -33,7 +33,7 @@
       "allocator AIDL V3 service",
       "stable-C mapper V5 provider",
       "Mesa Freedreno EGL/GLES and Turnip Vulkan drivers",
-      "Ethernet feature and static private-veth resource overlay",
+      "Wi-Fi feature, supplicant AIDL service and Wi-Fi resource overlay over the cell link",
       "development-only shared-kernel SELinux compatibility interposer",
       "VINTF manifest and compatibility matrix",
       "Android init configuration"
@@ -50,6 +50,7 @@
       "android.hardware.health-service.example",
       "libdroidloom_power",
       "android.hardware.power-service.droidloom",
+      "android.hardware.wifi.supplicant-service.droidloom",
       "com.android.hardware.audio",
       "android.hardware.graphics.composer3-service.droidloom",
       "android.hardware.graphics.allocator-service.minigbm",

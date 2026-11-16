@@ -43,9 +43,10 @@ PRODUCT_PACKAGES += \
     android.hardware.power-service.droidloom \
     com.android.hardware.audio.droidloom \
     DroidloomFrameworkDisplayOverlay \
-    DroidloomConnectivityOverlay \
+    DroidloomWifiOverlay \
     DroidloomSettingsOverlay \
-    android.hardware.ethernet.prebuilt.xml \
+    android.hardware.wifi.prebuilt.xml \
+    android.hardware.wifi.supplicant-service.droidloom \
     android.hardware.graphics.composer3-service.droidloom \
     droidloom-framework-init \
     droidloom-lmkd-compat \

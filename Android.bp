@@ -278,6 +278,61 @@ rust_binary {
     ],
 }
 
+// Wi-Fi without a radio. wlan0 is the cell's link to the host, which answers
+// DHCP on it; wificond lists one access point and the supplicant joins it, so
+// Android's own Wi-Fi stack reports a Wi-Fi network. Both read the access
+// point from one header.
+cc_library_headers {
+    name: "libdroidloom_wifi_headers",
+    export_include_dirs: ["android/wifi/include"],
+    vendor_available: true,
+}
+
+// Installed over the base image's /system_ext/bin/wificond, whose init script
+// it keeps. It serves the framework's unstable wificond interface, so it is
+// built as a system_ext module like the binary it replaces.
+cc_binary {
+    name: "droidloom-wificond",
+    system_ext_specific: true,
+    srcs: ["android/wifi/droidloom-wificond/wificond.cpp"],
+    include_dirs: ["system/connectivity"],
+    header_libs: ["libdroidloom_wifi_headers"],
+    static_libs: ["libwificond_parcelables"],
+    shared_libs: [
+        "libbase",
+        "libbinder",
+        "liblog",
+        "libutils",
+    ],
+    cflags: [
+        "-Wall",
+        "-Werror",
+    ],
+}
+
+// Supplicant AIDL V5 service. servicemanager starts it when the framework
+// enables Wi-Fi; terminate() ends it when Wi-Fi is turned off.
+cc_binary {
+    name: "android.hardware.wifi.supplicant-service.droidloom",
+    vendor: true,
+    relative_install_path: "hw",
+    init_rc: ["android/device/droidloom_arm64/droidloom-supplicant.rc"],
+    vintf_fragments: ["android/device/droidloom_arm64/droidloom-supplicant.xml"],
+    srcs: ["android/wifi/droidloom-supplicant/supplicant.cpp"],
+    header_libs: ["libdroidloom_wifi_headers"],
+    shared_libs: [
+        "android.hardware.wifi.common-V2-ndk",
+        "android.hardware.wifi.supplicant-V5-ndk",
+        "libbase",
+        "libbinder_ndk",
+        "liblog",
+    ],
+    cflags: [
+        "-Wall",
+        "-Werror",
+    ],
+}
+
 // Safe fixed-record encoder used after Denial has selected one Android task.
 rust_library {
     name: "libdroidloom_input_protocol",

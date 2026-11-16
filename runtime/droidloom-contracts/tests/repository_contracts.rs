@@ -288,8 +288,11 @@ fn android_vendor_build_uses_the_safe_rust_composer_core() {
     assert!(android_bp.contains("crate_root: \"android/gpu/droidloom-vulkan/src/lib.rs\""));
     // Five shared transport/codec crates also build platform variants for WMS
     // and its native input receiver. The haptics, camera and authentication
-    // HALs add the device protocol, their libraries and their services.
-    assert_eq!(android_bp.matches("vendor: true").count(), 24);
+    // HALs add the device protocol, their libraries and their services; Wi-Fi
+    // adds the supplicant.
+    assert_eq!(android_bp.matches("vendor: true").count(), 25);
+    assert!(android_bp.contains("name: \"android.hardware.wifi.supplicant-service.droidloom\""));
+    assert!(android_bp.contains("name: \"droidloom-wificond\""));
 
     let product = fs::read_to_string(
         repository_root().join("android/device/droidloom_arm64/droidloom_arm64.mk"),
@@ -303,8 +306,12 @@ fn android_vendor_build_uses_the_safe_rust_composer_core() {
     assert!(product.contains("android.hardware.power-service.droidloom"));
     assert!(!product.contains("android.hardware.power-service.example"));
     assert!(product.contains("debug.hwui.use_hint_manager=true"));
-    assert!(product.contains("DroidloomConnectivityOverlay"));
-    assert!(product.contains("android.hardware.ethernet.prebuilt.xml"));
+    // Android reaches the host over Wi-Fi, not Ethernet.
+    assert!(product.contains("DroidloomWifiOverlay"));
+    assert!(product.contains("android.hardware.wifi.prebuilt.xml"));
+    assert!(product.contains("android.hardware.wifi.supplicant-service.droidloom"));
+    assert!(!product.contains("DroidloomConnectivityOverlay"));
+    assert!(!product.contains("android.hardware.ethernet.prebuilt.xml"));
     for forbidden in [
         "PRODUCT_BUILD_SYSTEM_IMAGE := true",
         "PRODUCT_BUILD_BOOT_IMAGE := true",
