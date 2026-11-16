@@ -162,7 +162,7 @@ fn prepare_inputs_from(
         return fail("framework-res differs from pinned base");
     }
     copy(&framework, &work.join("framework-res.apk"))?;
-    prepare_mesa(repo, work, &lock_path)?;
+    prepare_mesa(repo, &repo.join(".work"), work, &lock_path)?;
     // The APEX is taken from the verified system partition, never from a previous installation.
     let apex = extracted.join("system/apex/com.android.virt.apex");
     let compressed = extracted.join("system/apex/com.android.virt.capex");
@@ -211,13 +211,13 @@ fn extract_package_base(archive: &Path, base: &Path) -> Result<()> {
     fs::rename(temporary.path(), base)?;
     Ok(())
 }
-/// Download the locked Mesa release and prepare its patched source in
-/// `work/mesa-source`, replacing a source prepared from other inputs.
-pub fn prepare_mesa(repo: &Path, work: &Path, lock_path: &Path) -> Result<()> {
+/// Download the locked Mesa release into `archives` and prepare its patched
+/// source in `work/mesa-source`, replacing a source prepared from other inputs.
+pub fn prepare_mesa(repo: &Path, archives: &Path, work: &Path, lock_path: &Path) -> Result<()> {
     let lock = json(lock_path)?;
     let mesa = &lock["mesa"];
     let version = mesa["version"].as_str().ok_or("Mesa version absent")?;
-    let archive = repo.join(format!(".work/mesa-{version}.tar.xz"));
+    let archive = archives.join(format!("mesa-{version}.tar.xz"));
     download(
         mesa["url"].as_str().ok_or("Mesa URL absent")?,
         &archive,

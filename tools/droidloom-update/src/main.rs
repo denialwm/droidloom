@@ -354,6 +354,7 @@ fn execute(args: Args) -> Result<()> {
         assemble::prepare_mesa(
             &repo,
             &work,
+            &work,
             &repo.join(if product == "droidloom_arm64" {
                 "android/manifest/source-lock.json"
             } else {
