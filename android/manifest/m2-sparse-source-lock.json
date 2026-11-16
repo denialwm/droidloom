@@ -865,7 +865,9 @@
         "camera/device/aidl",
         "camera/metadata/aidl",
         "camera/provider/aidl",
-        "gatekeeper/aidl"
+        "gatekeeper/aidl",
+        "wifi/common/aidl",
+        "wifi/supplicant/aidl"
       ]
     },
     {
@@ -1965,7 +1967,9 @@
       "commit": "fefad78738af9d9753bb0acbafcf458691f8627c",
       "purpose": "Wi-Fi control AIDL interfaces consumed by framework headers",
       "sparse_paths": [
-        "aidl"
+        "aidl",
+        "client",
+        "scanning"
       ]
     },
     {
