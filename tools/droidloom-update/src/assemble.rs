@@ -378,7 +378,7 @@ pub fn assemble_artifacts(
         ),
         (
             "system/system_ext/bin/droidloom-wificond",
-            "bin/droidloom-wificond",
+            "wifi/wificond",
         ),
         ("vendor/build.prop", "overrides/vendor/build.prop"),
         (

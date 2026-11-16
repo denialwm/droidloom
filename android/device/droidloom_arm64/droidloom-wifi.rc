@@ -1,6 +1,6 @@
-# The base image ships /system/bin/wificond without a service for it; the
-# cell's file overrides put Droidloom's wificond there.
-service wificond /system/bin/wificond
+# The base image has no wificond binary or service; Droidloom's runs from the
+# cell's read-only /droidloom projection.
+service wificond /droidloom/wifi/wificond
     class main
     user wifi
     group wifi

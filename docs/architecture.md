@@ -1102,8 +1102,8 @@ network, and Settings shows it. The cell's link is still one veth peer; inside
 the namespace it is named `wlan0`. No kernel driver or radio is involved, so
 this works on any host kernel.
 
-- `droidloom-wificond` replaces the base image's `/system/bin/wificond`.
-  It serves the framework's wificond interface and reports one access point,
+- `droidloom-wificond` runs from the cell's `/droidloom/wifi`; the base image
+  has no wificond. It serves the framework's wificond interface and reports one access point,
   `Droidloom`, open, on 5 GHz channel 36, in every scan and in background
   (PNO) scans.
 - `android.hardware.wifi.supplicant-service.droidloom` is the supplicant AIDL

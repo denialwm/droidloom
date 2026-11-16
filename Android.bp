@@ -288,9 +288,10 @@ cc_library_headers {
     vendor_available: true,
 }
 
-// Installed over the base image's /system/bin/wificond; the supplicant's init
-// script declares its service. It serves the framework's unstable wificond
-// interface, so it is built as a platform module, not a vendor one.
+// The base image has no wificond binary; this one runs from the cell's
+// /droidloom projection, started by the Wi-Fi init script. It serves the
+// framework's unstable wificond interface, so it is built as a platform
+// module, not a vendor one.
 cc_binary {
     name: "droidloom-wificond",
     system_ext_specific: true,
