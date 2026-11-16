@@ -11,6 +11,7 @@ import android.app.WaitResult;
 import android.content.ComponentName;
 import android.content.Intent;
 import android.content.pm.ActivityInfo;
+import android.content.pm.ResolveInfo;
 import android.content.res.Configuration;
 import android.graphics.Rect;
 import android.os.Binder;
@@ -23,6 +24,7 @@ import android.os.SystemClock;
 import android.util.Slog;
 import java.util.ArrayList;
 import java.util.IdentityHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.FutureTask;
 import java.util.concurrent.TimeUnit;
@@ -392,8 +394,31 @@ final class DroidloomTaskBackend {
             throw new IllegalArgumentException("Invalid Droidloom launcher identity");
         }
         Intent intent = new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER);
-        if (component != null) intent.setComponent(component); else intent.setPackage(owner);
+        intent.setComponent(component != null ? component : launcherActivity(owner, user));
         return launch(intent, owner, user, bounds);
+    }
+
+    /**
+     * The package's first launcher activity, as PackageManager.getLaunchIntentForPackage
+     * picks it. A package-only intent would be resolved as implicit, which accepts only
+     * activities that also declare CATEGORY_DEFAULT; ordinary launchers do not.
+     */
+    private ComponentName launcherActivity(String owner, int user) {
+        Intent query = new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+                .setPackage(owner);
+        final long identity = Binder.clearCallingIdentity();
+        final List<ResolveInfo> activities;
+        try {
+            activities = mService.mContext.getPackageManager()
+                    .queryIntentActivitiesAsUser(query, 0, user);
+        } finally {
+            Binder.restoreCallingIdentity(identity);
+        }
+        if (activities.isEmpty()) {
+            throw new IllegalArgumentException(owner + " has no launcher activity");
+        }
+        ActivityInfo info = activities.get(0).activityInfo;
+        return new ComponentName(info.packageName, info.name);
     }
 
     /** Starts `intent` as a new freeform task of `owner` and publishes its window. */
