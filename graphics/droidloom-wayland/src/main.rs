@@ -166,9 +166,13 @@ struct RenderTarget {
 // out-of-order compositor release may satisfy this buffer's release point.
 struct BufferSync {
     timeline: WaylandTimeline,
-    proxy: WpLinuxDrmSyncobjTimelineV1,
+    /// The timeline as the compositor knows it; None when the compositor has
+    /// no `wp_linux_drm_syncobj_manager_v1` and the fences ride on the buffer.
+    proxy: Option<WpLinuxDrmSyncobjTimelineV1>,
     next_point: u64,
     release_wakeup: Option<OwnedFd>,
+    /// Without a proxy: the release point that `wl_buffer.release` completes.
+    release_due: Option<u64>,
 }
 
 impl BufferSync {
@@ -194,9 +198,23 @@ impl BufferSync {
     }
 }
 
+impl BufferSync {
+    /// The compositor released the buffer: its finished reads, as the fences
+    /// they left on the planes, complete the release point.
+    fn released(&mut self, planes: &[OwnedFd]) -> Result<(), PresenterError> {
+        if let Some(point) = self.release_due.take() {
+            let fences = droidloom_syncobj::dmabuf::export_fences(planes)?;
+            self.timeline.import_release_fence(point, fences.as_fd())?;
+        }
+        Ok(())
+    }
+}
+
 impl Drop for BufferSync {
     fn drop(&mut self) {
-        self.proxy.destroy();
+        if let Some(proxy) = self.proxy.take() {
+            proxy.destroy();
+        }
     }
 }
 
@@ -335,7 +353,7 @@ struct App {
     text_input: text_input::TextInput,
     registry_state: RegistryState,
     output_state: OutputState,
-    output_power_manager: ZwlrOutputPowerManagerV1,
+    output_power_manager: Option<ZwlrOutputPowerManagerV1>,
     output_power: Vec<OutputPowerState>,
     idle_inhibit_manager: Option<ZwpIdleInhibitManagerV1>,
     host_display_powered: Option<bool>,
@@ -352,7 +370,7 @@ struct App {
     clock: clock::Clock,
     viewporter: WpViewporter,
     fractional_scale_manager: WpFractionalScaleManagerV1,
-    sync_manager: WpLinuxDrmSyncobjManagerV1,
+    sync_manager: Option<WpLinuxDrmSyncobjManagerV1>,
     syncobj: SyncobjDevice,
     gbm: GbmDevice<File>,
     listener: DenialEndpointListener,
@@ -783,13 +801,16 @@ impl App {
             let fractional_scale =
                 self.fractional_scale_manager
                     .get_fractional_scale(window.wl_surface(), qh, object);
-            let sync_surface = self.sync_manager.get_surface(window.wl_surface(), qh, ());
+            let sync_surface = self
+                .sync_manager
+                .as_ref()
+                .map(|manager| manager.get_surface(window.wl_surface(), qh, ()));
             window.commit();
             (
                 Some(window),
                 Some(viewport),
                 Some(fractional_scale),
-                Some(sync_surface),
+                sync_surface,
             )
         };
         self.tasks.insert(
@@ -1256,10 +1277,12 @@ impl App {
         if target.wayland.is_none() {
             let buffer = self.create_wayland_buffer(qh, &target.metadata, &target.planes)?;
             let timeline = WaylandTimeline::create(&self.syncobj)?;
-            let descriptor = timeline.export_descriptor()?;
-            let proxy = self
-                .sync_manager
-                .import_timeline(descriptor.as_fd(), qh, ());
+            let proxy = match &self.sync_manager {
+                Some(manager) => {
+                    Some(manager.import_timeline(timeline.export_descriptor()?.as_fd(), qh, ()))
+                }
+                None => None,
+            };
             let target = self
                 .tasks
                 .get_mut(&object)
@@ -1278,6 +1301,7 @@ impl App {
                 next_point: 0,
                 // SAFETY: ownership of the successful eventfd transfers once.
                 release_wakeup: Some(unsafe { OwnedFd::from_raw_fd(event) }),
+                release_due: None,
             });
         }
         let task = self
@@ -1356,19 +1380,18 @@ impl App {
         sync.timeline
             .import_acquire_fence(acquire_point, acquire_fence.as_fd())?;
         sync.arm_release_wakeup(release_point)?;
-        if task.sync_surface.is_none() {
-            task.sync_surface = Some(self.sync_manager.get_surface(&surface, qh, ()));
+        if let (Some(manager), Some(proxy)) = (&self.sync_manager, &sync.proxy) {
+            let sync_surface = task
+                .sync_surface
+                .get_or_insert_with(|| manager.get_surface(&surface, qh, ()));
+            let (acquire_hi, acquire_lo) = split_point(acquire_point);
+            let (release_hi, release_lo) = split_point(release_point);
+            sync_surface.set_acquire_point(proxy, acquire_hi, acquire_lo);
+            sync_surface.set_release_point(proxy, release_hi, release_lo);
+        } else {
+            droidloom_syncobj::dmabuf::attach_write_fence(&target.planes, acquire_fence.as_fd())?;
+            sync.release_due = Some(release_point);
         }
-        let sync_surface = task
-            .sync_surface
-            .as_ref()
-            .ok_or(PresenterError::Configuration(
-                "window sync surface is absent",
-            ))?;
-        let (acquire_hi, acquire_lo) = split_point(acquire_point);
-        let (release_hi, release_lo) = split_point(release_point);
-        sync_surface.set_acquire_point(&sync.proxy, acquire_hi, acquire_lo);
-        sync_surface.set_release_point(&sync.proxy, release_hi, release_lo);
         // Timing feedback is optional and can arrive long after the compositor
         // releases a buffer (especially for obscured windows). Bound outstanding
         // callbacks independently of render-target ownership.
@@ -1436,6 +1459,29 @@ impl App {
                 .as_ref()
                 .ok_or(PresenterError::Configuration("endpoint disappeared"))?
                 .send_visibility(object, Visibility::Hidden, focused)?;
+        }
+        Ok(())
+    }
+
+    /// Without explicit sync, `wl_buffer.release` ends the compositor's use
+    /// of a window target or of a layer's buffer.
+    fn buffer_released(&mut self, buffer: &wl_buffer::WlBuffer) -> Result<(), PresenterError> {
+        for task in self.tasks.values_mut() {
+            if let Some(target) = task
+                .targets
+                .values_mut()
+                .find(|target| target.wayland.as_ref() == Some(buffer))
+            {
+                if let Some(sync) = target.sync.as_mut() {
+                    sync.released(&target.planes)?;
+                }
+                return Ok(());
+            }
+            if let Some(layers) = task.layers.as_mut()
+                && layers.buffer_released(buffer)?
+            {
+                return Ok(());
+            }
         }
         Ok(())
     }
@@ -2418,8 +2464,15 @@ impl DmabufHandler for App {
         &mut self,
         _conn: &Connection,
         _qh: &QueueHandle<Self>,
-        _buffer: &wl_buffer::WlBuffer,
+        buffer: &wl_buffer::WlBuffer,
     ) {
+        // With explicit sync the release points carry the same news.
+        if self.sync_manager.is_some() {
+            return;
+        }
+        if let Err(error) = self.buffer_released(buffer) {
+            self.fail(&error);
+        }
     }
 }
 
@@ -2436,10 +2489,11 @@ impl OutputHandler for App {
     ) {
         let control = self
             .output_power_manager
-            .get_output_power(&output, qh, output.clone());
+            .as_ref()
+            .map(|manager| manager.get_output_power(&output, qh, output.clone()));
         self.output_power.push(OutputPowerState {
             output,
-            control: Some(control),
+            control,
             powered: None,
         });
         if let Err(error) = self
@@ -3345,8 +3399,19 @@ fn run() -> Result<(), PresenterError> {
     if !matches!(dmabuf_state.version(), Some(4..)) {
         return Err(PresenterError::DmabufV4Required);
     }
-    let sync_manager: WpLinuxDrmSyncobjManagerV1 = globals.bind(&qh, 1..=1, ())?;
-    let output_power_manager: ZwlrOutputPowerManagerV1 = globals.bind(&qh, 1..=1, ())?;
+    // Compositors such as niri have no explicit sync, KWin and GNOME no
+    // wlroots output power: fences then ride on the buffers, and Android
+    // gets no display power hint.
+    let sync_manager: Option<WpLinuxDrmSyncobjManagerV1> = globals.bind(&qh, 1..=1, ()).ok();
+    let output_power_manager: Option<ZwlrOutputPowerManagerV1> = globals.bind(&qh, 1..=1, ()).ok();
+    if sync_manager.is_none() {
+        eprintln!("Droidloom: the compositor has no explicit sync; fences ride on the DMA-BUFs");
+    }
+    if output_power_manager.is_none() {
+        eprintln!(
+            "Droidloom: the compositor has no output power control; Android gets no display power hint"
+        );
+    }
     let mut app = App {
         activation: activation::Activation::new(&globals, &qh, host_grants),
         layer_globals: layers::Globals {

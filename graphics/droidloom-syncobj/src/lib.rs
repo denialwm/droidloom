@@ -10,6 +10,7 @@
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
+pub mod dmabuf;
 pub mod frame_trace;
 
 use std::fs::File;
@@ -196,6 +197,20 @@ impl WaylandTimeline {
     /// Publish an already completed producer write (a missing Android fence).
     pub fn signal_acquire(&mut self, point: u64) -> Result<(), SyncobjError> {
         self.timeline.signal(point)
+    }
+
+    /// Import the fences of the compositor's finished reads at the release
+    /// point, for a compositor that releases buffers with `wl_buffer.release`.
+    ///
+    /// # Errors
+    ///
+    /// Rejects zero, reused, or regressing points and propagates DRM failures.
+    pub fn import_release_fence(
+        &mut self,
+        point: u64,
+        sync_file: BorrowedFd<'_>,
+    ) -> Result<(), SyncobjError> {
+        self.timeline.attach_sync_file(point, sync_file)
     }
 
     /// Return the greatest signalled point without waiting.

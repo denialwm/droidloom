@@ -33,6 +33,8 @@ struct Source {
     buffer: Option<wl_buffer::WlBuffer>,
     lanes: Vec<Lane>,
     ticket: Option<u64>,
+    /// The DMA-BUF planes, kept only when the fences ride on them.
+    planes: Vec<OwnedFd>,
 }
 
 /// One timeline for reads of an allocation. Its points complete in order, so
@@ -53,19 +55,26 @@ impl Source {
         (0..self.lanes.len()).find(|&lane| !reads.iter().any(|r| r.buffer == id && r.lane == lane))
     }
 
-    fn spare_timeline(&self, id: u64, reads: &[Read]) -> bool {
-        self.lanes.len() < MAX_LANES || self.free_lane(id, reads).is_some()
+    /// Without explicit sync one `wl_buffer.release` ends every read of the
+    /// buffer, so a buffer has one read at a time: a second, attached before
+    /// a release in flight arrives, would end with the first.
+    fn spare_timeline(&self, id: u64, reads: &[Read], explicit: bool) -> bool {
+        (explicit && self.lanes.len() < MAX_LANES) || self.free_lane(id, reads).is_some()
     }
 }
 
 fn new_lane(
     syncobj: &SyncobjDevice,
-    sync_manager: &WpLinuxDrmSyncobjManagerV1,
+    sync_manager: Option<&WpLinuxDrmSyncobjManagerV1>,
     qh: &QueueHandle<App>,
 ) -> Result<Lane, PresenterError> {
     let timeline = WaylandTimeline::create(syncobj)?;
-    let fd = timeline.export_descriptor()?;
-    let proxy = sync_manager.import_timeline(fd.as_fd(), qh, ());
+    let proxy = match sync_manager {
+        Some(manager) => {
+            Some(manager.import_timeline(timeline.export_descriptor()?.as_fd(), qh, ()))
+        }
+        None => None,
+    };
     // SAFETY: eventfd returns a new owned descriptor without pointers.
     let event = unsafe { libc::eventfd(0, libc::EFD_CLOEXEC | libc::EFD_NONBLOCK) };
     if event < 0 {
@@ -78,6 +87,7 @@ fn new_lane(
             next_point: 0,
             // SAFETY: ownership of the successful eventfd transfers once.
             release_wakeup: Some(unsafe { OwnedFd::from_raw_fd(event) }),
+            release_due: None,
         },
         availability_wakeup: crate::fence_wakeup::FenceWakeup::default(),
     })
@@ -456,6 +466,24 @@ impl Stream {
         }
         self.active = false;
         true
+    }
+    /// `wl_buffer.release` without explicit sync: every read of the buffer
+    /// ended. False when the buffer is not one of this stream's.
+    pub(super) fn buffer_released(
+        &mut self,
+        buffer: &wl_buffer::WlBuffer,
+    ) -> Result<bool, PresenterError> {
+        let Some(source) = self
+            .buffers
+            .values_mut()
+            .find(|source| source.buffer.as_ref() == Some(buffer))
+        else {
+            return Ok(false);
+        };
+        for lane in &mut source.lanes {
+            lane.sync.released(&source.planes)?;
+        }
+        Ok(true)
     }
     fn release(&mut self) -> Result<(), PresenterError> {
         // Poll drains only signalled eventfds. Readiness selects the task;
@@ -950,7 +978,7 @@ impl App {
                 for (i, (p, fd)) in metadata.planes.iter().zip(&fds).enumerate() {
                     params.add(fd.as_fd(), i as u32, p.offset, p.stride, metadata.modifier);
                 }
-                let lane = new_lane(&self.syncobj, &self.sync_manager, qh)?;
+                let lane = new_lane(&self.syncobj, self.sync_manager.as_ref(), qh)?;
                 let id = metadata.id;
                 let params = params.create(
                     metadata.width as i32,
@@ -965,6 +993,11 @@ impl App {
                         buffer: None,
                         lanes: vec![lane],
                         ticket: None,
+                        planes: if self.sync_manager.is_none() {
+                            fds
+                        } else {
+                            Vec::new()
+                        },
                     },
                 );
                 assert!(stream.imports.insert(imports::Pending {
@@ -1093,7 +1126,11 @@ impl App {
                         buffer: &b.metadata,
                         imported: b.buffer.is_some(),
                         ticket: b.ticket,
-                        spare_timeline: b.spare_timeline(id, &stream.reads),
+                        spare_timeline: b.spare_timeline(
+                            id,
+                            &stream.reads,
+                            self.sync_manager.is_some(),
+                        ),
                     })
                 },
                 |id| stream.views.get(&id).and_then(View::source),
@@ -1362,8 +1399,11 @@ impl App {
                         let lane = match b.free_lane(l.buffer, &stream.reads) {
                             Some(lane) => lane,
                             None => {
-                                b.lanes
-                                    .push(new_lane(&self.syncobj, &self.sync_manager, qh)?);
+                                b.lanes.push(new_lane(
+                                    &self.syncobj,
+                                    self.sync_manager.as_ref(),
+                                    qh,
+                                )?);
                                 b.lanes.len() - 1
                             }
                         };
@@ -1376,7 +1416,7 @@ impl App {
                         let release = acquire_point
                             .checked_add(1)
                             .ok_or(PresenterError::Configuration("layer timeline exhausted"))?;
-                        if let Some(fd) = acquire {
+                        if let Some(fd) = &acquire {
                             s.sync
                                 .timeline
                                 .import_acquire_fence(acquire_point, fd.as_fd())?;
@@ -1388,13 +1428,23 @@ impl App {
                         // Fence availability unblocks Android callbacks. Completion
                         // separately permits this allocation/timeline to be reused.
                         s.availability_wakeup.arm(&s.sync.timeline, release)?;
-                        let sync = v.sync.get_or_insert_with(|| {
-                            self.sync_manager.get_surface(&v.surface, qh, ())
-                        });
-                        let (hi, lo) = split_point(acquire_point);
-                        sync.set_acquire_point(&s.sync.proxy, hi, lo);
-                        let (hi, lo) = split_point(release);
-                        sync.set_release_point(&s.sync.proxy, hi, lo);
+                        if let (Some(manager), Some(proxy)) = (&self.sync_manager, &s.sync.proxy) {
+                            let sync = v
+                                .sync
+                                .get_or_insert_with(|| manager.get_surface(&v.surface, qh, ()));
+                            let (hi, lo) = split_point(acquire_point);
+                            sync.set_acquire_point(proxy, hi, lo);
+                            let (hi, lo) = split_point(release);
+                            sync.set_release_point(proxy, hi, lo);
+                        } else {
+                            if let Some(fd) = acquire {
+                                droidloom_syncobj::dmabuf::attach_write_fence(
+                                    &b.planes,
+                                    fd.as_fd(),
+                                )?;
+                            }
+                            s.sync.release_due = Some(release);
+                        }
                         v.surface.attach(b.buffer.as_ref(), 0, 0);
                         b.ticket = Some(l.ticket);
                         stream.last_ticket = stream.last_ticket.max(l.ticket);
