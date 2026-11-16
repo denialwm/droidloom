@@ -14,7 +14,7 @@ use std::os::unix::fs::FileTypeExt as _;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use droidloom_contracts::{ImageManifest, MIN_SUBORDINATE_IDS, TARGET_ARCHITECTURE};
+use droidloom_contracts::{ImageManifest, TARGET_ARCHITECTURE};
 use flate2::read::GzDecoder;
 use serde::{Deserialize, Serialize};
 
@@ -65,7 +65,7 @@ pub struct HostInfo {
     pub kernel_release: String,
     /// Architecture being inspected.
     pub architecture: String,
-    /// User whose subordinate ID allocations were inspected.
+    /// User running the probe.
     pub user: String,
     /// Root prefix used for all probe reads.
     pub probe_root: PathBuf,
@@ -129,8 +129,6 @@ impl Report {
 pub struct ProbeOptions {
     /// Prefix corresponding to `/` on the inspected host.
     pub root: PathBuf,
-    /// Optional username override.
-    pub user: Option<String>,
     /// Optional architecture override for offline inspection.
     pub architecture: Option<String>,
     /// Optional Droidloom image manifest to validate with host checks.
@@ -141,7 +139,6 @@ impl Default for ProbeOptions {
     fn default() -> Self {
         Self {
             root: PathBuf::from("/"),
-            user: None,
             architecture: None,
             image_manifest: None,
         }
@@ -161,7 +158,7 @@ pub fn probe(options: &ProbeOptions) -> Report {
         .architecture
         .clone()
         .unwrap_or_else(|| std::env::consts::ARCH.to_owned());
-    let identity = resolve_identity(&view, options.user.as_deref());
+    let user = resolve_user(&view);
     let kernel = KernelConfig::discover(&view, &release);
 
     let mut checks = vec![
@@ -172,7 +169,6 @@ pub fn probe(options: &ProbeOptions) -> Report {
     ];
     checks.extend(check_cgroups(&view));
     checks.push(check_seccomp(&view, &kernel));
-    checks.push(check_subordinate_ids(&view, &identity));
     checks.push(check_network_isolation(&view, &kernel));
     checks.extend(check_graphics(&view, &kernel));
     checks.push(check_mount_filesystems(&view));
@@ -197,7 +193,7 @@ pub fn probe(options: &ProbeOptions) -> Report {
             os,
             kernel_release: release,
             architecture,
-            user: identity.name,
+            user,
             probe_root: options.root.clone(),
         },
         ready: blocker_count == 0,
@@ -239,29 +235,15 @@ impl HostView {
     }
 }
 
-#[derive(Clone, Debug)]
-struct Identity {
-    name: String,
-    uid: Option<u64>,
-}
-
-fn resolve_identity(view: &HostView, override_name: Option<&str>) -> Identity {
+fn resolve_user(view: &HostView) -> String {
     let uid = view.read("/proc/self/status").and_then(|status| {
         parse_status_value(&status, "Uid")?
             .split_whitespace()
             .next()?
-            .parse()
+            .parse::<u64>()
             .ok()
     });
-
-    if let Some(name) = override_name {
-        return Identity {
-            name: name.to_owned(),
-            uid,
-        };
-    }
-
-    let passwd_name = uid.and_then(|wanted| {
+    uid.and_then(|wanted| {
         view.read("/etc/passwd")?.lines().find_map(|line| {
             let mut fields = line.split(':');
             let name = fields.next()?;
@@ -269,12 +251,8 @@ fn resolve_identity(view: &HostView, override_name: Option<&str>) -> Identity {
             let candidate = fields.next()?.parse::<u64>().ok()?;
             (candidate == wanted).then(|| name.to_owned())
         })
-    });
-
-    Identity {
-        name: passwd_name.unwrap_or_else(|| "unknown".to_owned()),
-        uid,
-    }
+    })
+    .unwrap_or_else(|| "unknown".to_owned())
 }
 
 fn parse_status_value<'a>(status: &'a str, key: &str) -> Option<&'a str> {
@@ -537,64 +515,6 @@ fn check_seccomp(view: &HostView, kernel: &KernelConfig) -> Check {
         evidence,
         (!pass).then(|| "Enable CONFIG_SECCOMP and CONFIG_SECCOMP_FILTER.".to_owned()),
     )
-}
-
-fn check_subordinate_ids(view: &HostView, identity: &Identity) -> Check {
-    let uid_ranges = subordinate_ranges(view.read("/etc/subuid").as_deref(), identity);
-    let gid_ranges = subordinate_ranges(view.read("/etc/subgid").as_deref(), identity);
-    let uid_max = uid_ranges
-        .iter()
-        .map(|range| range.count)
-        .max()
-        .unwrap_or(0);
-    let gid_max = gid_ranges
-        .iter()
-        .map(|range| range.count)
-        .max()
-        .unwrap_or(0);
-    let pass = uid_max >= MIN_SUBORDINATE_IDS && gid_max >= MIN_SUBORDINATE_IDS;
-    let evidence = vec![
-        format!("largest subordinate UID range: {uid_max} IDs"),
-        format!("largest subordinate GID range: {gid_max} IDs"),
-        format!("contract requires one contiguous range of {MIN_SUBORDINATE_IDS} IDs"),
-    ];
-    check(
-        "identity.subordinate_ids",
-        "Dedicated Android UID/GID mapping range",
-        if pass { CheckStatus::Pass } else { CheckStatus::Fail },
-        true,
-        evidence,
-        (!pass).then(|| {
-            format!(
-                "Allocate at least {MIN_SUBORDINATE_IDS} contiguous subordinate UIDs and GIDs to {} without overlapping another allocation.",
-                identity.name
-            )
-        }),
-    )
-}
-
-#[derive(Clone, Copy, Debug)]
-struct SubordinateRange {
-    count: u64,
-}
-
-fn subordinate_ranges(contents: Option<&str>, identity: &Identity) -> Vec<SubordinateRange> {
-    contents
-        .into_iter()
-        .flat_map(str::lines)
-        .filter_map(|line| {
-            let mut fields = line.split(':');
-            let owner = fields.next()?;
-            let _start = fields.next()?.parse::<u64>().ok()?;
-            let count = fields.next()?.parse::<u64>().ok()?;
-            if fields.next().is_some() {
-                return None;
-            }
-            let owner_matches =
-                owner == identity.name || identity.uid.is_some_and(|uid| owner == uid.to_string());
-            owner_matches.then_some(SubordinateRange { count })
-        })
-        .collect()
 }
 
 fn check_network_isolation(view: &HostView, kernel: &KernelConfig) -> Check {
@@ -968,8 +888,6 @@ mod tests {
             "/etc/passwd",
             "tester:x:1000:1000::/home/tester:/bin/sh\n",
         );
-        put(root.path(), "/etc/subuid", "tester:200000:100000\n");
-        put(root.path(), "/etc/subgid", "tester:300000:100000\n");
         put(
             root.path(),
             "/sys/fs/cgroup/cgroup.controllers",
@@ -1031,24 +949,6 @@ mod tests {
                 check.id == "kernel.binderfs" && check.status == CheckStatus::Fail
             })
         );
-    }
-
-    #[test]
-    fn numeric_subordinate_owner_is_accepted() {
-        let root = ready_fixture();
-        put(root.path(), "/etc/subuid", "1000:200000:100000\n");
-        put(root.path(), "/etc/subgid", "1000:300000:100000\n");
-        let report = probe(&ProbeOptions {
-            root: root.path().to_path_buf(),
-            architecture: Some(TARGET_ARCHITECTURE.as_str().to_owned()),
-            ..ProbeOptions::default()
-        });
-        let subids = report
-            .checks
-            .iter()
-            .find(|check| check.id == "identity.subordinate_ids")
-            .unwrap();
-        assert_eq!(subids.status, CheckStatus::Pass);
     }
 
     #[test]

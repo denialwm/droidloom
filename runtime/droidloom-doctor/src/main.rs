@@ -37,10 +37,6 @@ struct Cli {
     #[arg(long, default_value = "/", value_name = "PATH")]
     root: PathBuf,
 
-    /// Username whose subordinate ID ranges should be checked.
-    #[arg(long, value_name = "NAME")]
-    user: Option<String>,
-
     /// Architecture override for offline root inspection.
     #[arg(long, value_name = "ARCH")]
     architecture: Option<String>,
@@ -50,7 +46,6 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
     let report = probe(&ProbeOptions {
         root: cli.root,
-        user: cli.user,
         architecture: cli.architecture,
         image_manifest: cli.image_manifest,
     });
