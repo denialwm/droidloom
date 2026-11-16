@@ -892,6 +892,7 @@ pub fn build_targets(
         "android/haptics",
         "android/camera",
         "android/authentication",
+        "android/wifi",
         "android/lmkd-compat",
         "android/runtime",
         "android/native-bridge",
