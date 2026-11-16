@@ -14,6 +14,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <android-base/file.h>
@@ -34,6 +35,7 @@
 
 #include "droidloom/wifi_access_point.h"
 #include "droidloom/wifi_dispatcher.h"
+#include "droidloom/wifi_link.h"
 #include "wificond/device_wiphy_capabilities.h"
 #include "wificond/ipc_constants.h"
 #include "wificond/scanning/pno_settings.h"
@@ -70,33 +72,26 @@ constexpr auto kScanDuration = std::chrono::milliseconds(50);
 constexpr auto kPnoMatchDelay = std::chrono::milliseconds(500);
 constexpr uint16_t kCapabilityEss = 0x0001;
 
-std::string InterfacePath(const std::string& name, const std::string& leaf) {
-    return "/sys/class/net/" + name + "/" + leaf;
-}
-
-bool InterfaceExists(const std::string& name) {
-    return access(InterfacePath(name, "ifindex").c_str(), F_OK) == 0;
-}
-
-std::vector<uint8_t> InterfaceMac(const std::string& name) {
+// The cell shows no /sys/class/net. Transmit packets and errors come from
+// /proc/net/dev, whose line for a link holds eight receive counters, then
+// tx_bytes, tx_packets and tx_errs.
+std::pair<int32_t, int32_t> InterfaceTxCounters(const std::string& name) {
     std::string text;
-    std::vector<uint8_t> mac;
-    if (!android::base::ReadFileToString(InterfacePath(name, "address"), &text)) return mac;
-    for (const auto& part : android::base::Split(android::base::Trim(text), ":")) {
-        uint8_t byte;
-        if (!android::base::ParseUint("0x" + part, &byte)) return {};
-        mac.push_back(byte);
+    android::base::ReadFileToString("/proc/net/dev", &text);
+    for (const auto& line : android::base::Split(text, "\n")) {
+        auto colon = line.find(':');
+        if (colon == std::string::npos || android::base::Trim(line.substr(0, colon)) != name) {
+            continue;
+        }
+        auto fields = android::base::Tokenize(line.substr(colon + 1), " ");
+        int64_t packets = 0, errors = 0;
+        if (fields.size() < 11 || !android::base::ParseInt(fields[9], &packets) ||
+            !android::base::ParseInt(fields[10], &errors)) {
+            break;
+        }
+        return {static_cast<int32_t>(packets), static_cast<int32_t>(errors)};
     }
-    return mac;
-}
-
-int32_t InterfaceCounter(const std::string& name, const char* counter) {
-    std::string text;
-    int64_t value = 0;
-    android::base::ReadFileToString(InterfacePath(name, std::string("statistics/") + counter),
-                                    &text);
-    android::base::ParseInt(android::base::Trim(text), &value);
-    return static_cast<int32_t>(value);
+    return {0, 0};
 }
 
 uint64_t BoottimeMicros() {
@@ -223,7 +218,8 @@ class ClientInterface : public BnClientInterface {
     explicit ClientInterface(std::string name) : name_(std::move(name)) {}
 
     Status getPacketCounters(std::vector<int32_t>* out) override {
-        *out = {InterfaceCounter(name_, "tx_packets"), InterfaceCounter(name_, "tx_errors")};
+        auto [packets, errors] = InterfaceTxCounters(name_);
+        *out = {packets, errors};
         return Status::ok();
     }
     // RSSI, transmit rate, frequency and receive rate, as wificond reports them.
@@ -232,7 +228,7 @@ class ClientInterface : public BnClientInterface {
         return Status::ok();
     }
     Status getMacAddress(std::vector<uint8_t>* out) override {
-        *out = InterfaceMac(name_);
+        *out = ap::InterfaceMac(name_);
         return Status::ok();
     }
     Status getInterfaceName(std::string* out) override {
@@ -263,7 +259,7 @@ class Wificond : public BnWificond {
     }
     Status createClientInterface(const std::string& name, sp<IClientInterface>* out) override {
         *out = nullptr;
-        if (name != ap::kInterface || !InterfaceExists(name)) {
+        if (name != ap::kInterface || !ap::InterfaceExists(name)) {
             LOG(ERROR) << "No client interface " << name;
             return Status::ok();
         }

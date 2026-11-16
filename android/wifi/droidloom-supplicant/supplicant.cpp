@@ -21,15 +21,13 @@
 #include <aidl/android/hardware/wifi/supplicant/BnSupplicantStaIface.h>
 #include <aidl/android/hardware/wifi/supplicant/BnSupplicantStaNetwork.h>
 #include <aidl/android/hardware/wifi/supplicant/SupplicantStatusCode.h>
-#include <android-base/file.h>
 #include <android-base/logging.h>
-#include <android-base/parseint.h>
-#include <android-base/strings.h>
 #include <android/binder_manager.h>
 #include <android/binder_process.h>
 
 #include "droidloom/wifi_access_point.h"
 #include "droidloom/wifi_dispatcher.h"
+#include "droidloom/wifi_link.h"
 
 namespace {
 
@@ -64,19 +62,6 @@ std::vector<uint8_t> AccessPointSsid() {
 
 std::vector<uint8_t> AccessPointBssid() {
     return {ap::kBssid.begin(), ap::kBssid.end()};
-}
-
-std::vector<uint8_t> InterfaceMac() {
-    std::string text;
-    std::vector<uint8_t> mac;
-    const std::string path = std::string("/sys/class/net/") + ap::kInterface + "/address";
-    if (!android::base::ReadFileToString(path, &text)) return mac;
-    for (const auto& part : android::base::Split(android::base::Trim(text), ":")) {
-        uint8_t byte;
-        if (!android::base::ParseUint("0x" + part, &byte)) return {};
-        mac.push_back(byte);
-    }
-    return mac;
 }
 
 // Calls the framework makes as settings for a radio: power save, coexistence,
@@ -308,7 +293,7 @@ class StaIface : public BnSupplicantStaIface {
         return ScopedAStatus::ok();
     }
     ScopedAStatus getMacAddress(std::vector<uint8_t>* out) override {
-        *out = InterfaceMac();
+        *out = ap::InterfaceMac(ap::kInterface);
         if (out->size() != 6) return Fail(SupplicantStatusCode::FAILURE_UNKNOWN);
         return ScopedAStatus::ok();
     }
