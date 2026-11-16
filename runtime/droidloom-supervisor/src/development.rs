@@ -445,6 +445,8 @@ pub fn start_development_cell(
     crate::user_folders::prepare(spec)
         .map_err(|source| io_error("prepare the user's folders for Android", source))?;
     validate_development_inputs(spec)?;
+    crate::host_storage::open_metadata(&spec.data_dir)
+        .map_err(|source| io_error("open Android metadata storage", source))?;
     prepare_host_directories(spec)?;
     let mut network = match DevelopmentNetwork::create(spec) {
         Ok(network) => network,

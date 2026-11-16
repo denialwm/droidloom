@@ -91,6 +91,23 @@ pub fn prepare(parent: &Path) -> io::Result<()> {
     fs::File::open(parent)?.sync_all()
 }
 
+/// Let Android's system services into `metadata` when it was made private,
+/// as storage made before [`prepare`] created it 0755, or by other packaging,
+/// still is. Android init never adjusts that root (it does set `/data` to
+/// 0771), so aconfigd could not create the flag storage and `system_server`
+/// aborted on its missing flags. The private parent keeps host users out.
+///
+/// # Errors
+///
+/// Fails when `metadata` cannot be read or its mode changed.
+pub fn open_metadata(parent: &Path) -> io::Result<()> {
+    let path = parent.join("metadata");
+    if fs::symlink_metadata(&path)?.mode() & 0o001 == 0 {
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755))?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -104,5 +121,21 @@ mod tests {
             fs::read(root.path().join("data.img")).unwrap(),
             b"existing user data"
         );
+    }
+
+    #[test]
+    fn private_metadata_opens_to_android_services() {
+        let root = tempfile::tempdir().unwrap();
+        let metadata = root.path().join("metadata");
+        fs::create_dir(&metadata).unwrap();
+        let mode = |path: &Path| fs::metadata(path).unwrap().mode() & 0o777;
+
+        fs::set_permissions(&metadata, fs::Permissions::from_mode(0o700)).unwrap();
+        open_metadata(root.path()).unwrap();
+        assert_eq!(mode(&metadata), 0o755);
+
+        fs::set_permissions(&metadata, fs::Permissions::from_mode(0o711)).unwrap();
+        open_metadata(root.path()).unwrap();
+        assert_eq!(mode(&metadata), 0o711);
     }
 }
