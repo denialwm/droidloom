@@ -23,7 +23,7 @@ and `droidloomd` remain trusted computing base.
 | Android APK and native libraries | Untrusted | Android app UID, granted Android permissions |
 | Android framework/cell | Partially trusted | Private namespaces, Binder contexts, delegated cgroup |
 | Per-user presenter and catalog | User-trusted | Lifecycle requests and narrow host portals for that user |
-| Per-user audio broker | User-trusted | PipeWire graph access and explicitly granted cell capture |
+| Per-user audio broker | User-trusted | PipeWire graph access and cell capture, unless the user turns it off |
 | `droidloomd` | Host-trusted, minimal | Namespace/mount/device/cgroup/network construction only |
 | Host compositor | Host-trusted | Display, input, shell, task, capture, and power policy |
 | Image/package manager | Host-trusted | Signed immutable system content and explicit activation |

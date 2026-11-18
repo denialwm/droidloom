@@ -594,11 +594,12 @@ index ac0d302..2b823f9 100644
  ndk::ScopedAStatus StreamPrimary::setConnectedDevices(const ConnectedDevices& devices) {
      LOG(DEBUG) << __func__ << ": " << ::android::internal::ToString(devices);
      if (devices.size() > 1) {
-@@ -203,9 +319,11 @@ bool StreamPrimary::useStubStream(
+@@ -203,9 +319,12 @@ bool StreamPrimary::useStubStream(
      if (isInput) {
          return kSimulateInput || device.type.type == AudioDeviceType::IN_TELEPHONY_RX ||
                 device.type.type == AudioDeviceType::IN_FM_TUNER ||
 +               device.type.type == AudioDeviceType::IN_BUS ||
++               device.type.type == AudioDeviceType::IN_MICROPHONE ||
                 device.type.connection == AudioDeviceDescription::CONNECTION_BUS /*deprecated */;
      }
      return kSimulateOutput || device.type.type == AudioDeviceType::OUT_TELEPHONY_TX ||

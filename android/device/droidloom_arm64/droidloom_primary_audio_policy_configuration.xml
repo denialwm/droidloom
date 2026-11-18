@@ -6,7 +6,9 @@
 -->
 <!--
   Android requires a primary module while bootstrapping AudioFlinger. Both
-  endpoints use BUS devices to select the private host PipeWire bridge.
+  endpoints go to the private host PipeWire bridge. The input is a built-in
+  microphone: Android's policy engine records only from microphone types, and
+  finds no device for any recording source on a BUS input.
   Missing host endpoints and denied capture retain the timed silence fallback.
 -->
 <module name="default" halVersion="3.0">
@@ -29,7 +31,7 @@
     <devicePorts>
         <devicePort tagName="Droidloom Host Output" type="AUDIO_DEVICE_OUT_BUS"
             role="sink" address="droidloom-host-output"/>
-        <devicePort tagName="Droidloom Host Input" type="AUDIO_DEVICE_IN_BUS"
+        <devicePort tagName="Droidloom Host Input" type="AUDIO_DEVICE_IN_BUILTIN_MIC"
             role="source" address="droidloom-host-input"/>
     </devicePorts>
     <routes>

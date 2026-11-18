@@ -20,9 +20,10 @@ struct Arguments {
     /// Host-mapped Android audioserver UID (preview: 1041).
     #[arg(long, default_value_t = 1041)]
     peer_uid: u32,
-    /// Explicit microphone grant; also accepted as DROIDLOOM_AUDIO_CAPTURE=1.
+    /// Keep Android off the host microphone; also DROIDLOOM_AUDIO_CAPTURE=0.
+    /// Otherwise Android's own per-app microphone permission decides.
     #[arg(long)]
-    allow_capture: bool,
+    deny_capture: bool,
     /// Stable PipeWire target name; otherwise use session routing policy.
     #[arg(long)]
     target: Option<String>,
@@ -89,8 +90,8 @@ fn run(arguments: Arguments) -> io::Result<()> {
     }
     let options = Options {
         peer_uid: arguments.peer_uid,
-        allow_capture: arguments.allow_capture
-            || std::env::var("DROIDLOOM_AUDIO_CAPTURE").as_deref() == Ok("1"),
+        allow_capture: !arguments.deny_capture
+            && std::env::var("DROIDLOOM_AUDIO_CAPTURE").as_deref() != Ok("0"),
         target: arguments.target,
         remote: arguments.remote,
         capture_sink: arguments.capture_sink,

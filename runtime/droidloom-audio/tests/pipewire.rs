@@ -858,7 +858,14 @@ fn broker_accepts_systemd_socket_activation() {
     // The helper sets systemd's LISTEN_PID/FDS and execs the broker with FD 3.
     // No user units or desktop services are started.
     let mut child = Command::new("systemd-socket-activate")
-        .args(["--seqpacket", "--now", "--listen"])
+        // The user's opt-out from audio.env: capture is otherwise allowed.
+        .args([
+            "--seqpacket",
+            "--now",
+            "-E",
+            "DROIDLOOM_AUDIO_CAPTURE=0",
+            "--listen",
+        ])
         .arg(&path)
         .arg(env!("CARGO_BIN_EXE_droidloom-audio"))
         .arg("--socket")
