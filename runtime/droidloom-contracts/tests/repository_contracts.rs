@@ -222,6 +222,10 @@ fn host_presentation_is_ordinary_wayland_without_plugin_artifacts() {
     let cell_service = fs::read_to_string(root.join("packaging/systemd/system/droidloomd.service"))
         .expect("read cell service");
     assert!(cell_service.contains("OOMPolicy=continue"));
+    // netd's cgroup BPF attaches fail on a group the host has programs on
+    // (droidloom#15).
+    assert!(cell_service.contains("Delegate=memory pids"));
+    assert!(cell_service.contains("DelegateSubgroup=supervisor"));
 
     let catalog_service =
         fs::read_to_string(root.join("packaging/systemd/user/droidloom-applications.service"))

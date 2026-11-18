@@ -8,6 +8,7 @@
 
 mod adb;
 mod authentication;
+pub mod cgroup_delegation;
 mod app_properties;
 pub mod boot_notice;
 pub mod control;

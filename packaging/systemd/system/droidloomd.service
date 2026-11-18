@@ -10,6 +10,13 @@ KillMode=mixed
 # A kernel OOM kill of one Android process is Android's to handle. The default
 # (stop) would tear down the whole cell and every Droidloom window with it.
 OOMPolicy=continue
+# The cell's cgroup root is the group droidloomd runs in, and Android's netd
+# attaches its BPF programs there. Hosts that put their own programs on the
+# unit's group (IP accounting, NixOS's default) make those attaches fail, so
+# droidloomd runs in an empty subgroup of its own. Only the controllers the
+# cell already had are delegated.
+Delegate=memory pids
+DelegateSubgroup=supervisor
 Restart=on-failure
 RestartSec=1s
 RuntimeDirectory=droidloom

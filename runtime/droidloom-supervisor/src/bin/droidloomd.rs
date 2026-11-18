@@ -53,6 +53,7 @@ fn main() {
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     eprintln!("{}", droidloom_supervisor::control::FRAMEWORK_CONTROL_ABI);
     droidloom_cpu_placement::initialize(droidloom_cpu_placement::Role::Background);
+    droidloom_supervisor::cgroup_delegation::enable_delegated_controllers();
     let shutdown = Shutdown::new()?;
     SHUTDOWN_FD.store(shutdown.as_raw_fd(), Ordering::Relaxed);
     install_signal_handlers()?;
