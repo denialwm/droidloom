@@ -18,6 +18,10 @@ Compositor sizes take precedence; restart preserves the mode. `window-mode`
 supports per-app preferences. Android's privileged task-resize API updates task
 configuration and crop. See [insets and resizing](contracts/navigation-insets.md).
 
+Windows ask the compositor for its titlebar through xdg-decoration; a compositor
+without it leaves them undecorated. The title is the app's launcher name and the
+app id its package, which window rules and `StartupWMClass` match.
+
 ## Clipboard
 
 The presenter exchanges clipboard changes with an adapter in Android SystemUI.

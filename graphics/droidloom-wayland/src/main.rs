@@ -833,9 +833,12 @@ impl App {
             (None, None, None, None)
         } else {
             let surface = self.compositor.create_surface(qh);
-            let window = self
-                .xdg_shell
-                .create_window(surface, WindowDecorations::None, qh);
+            // The compositor draws the titlebar that moves the window: the
+            // whole surface belongs to the Android app. One without
+            // xdg-decoration leaves the window undecorated.
+            let window =
+                self.xdg_shell
+                    .create_window(surface, WindowDecorations::RequestServer, qh);
             window.set_title(self.titles.title(package));
             window.set_app_id(package.to_owned());
             window.set_min_size(Some((1, 1)));
