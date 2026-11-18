@@ -485,32 +485,54 @@ fn check_binderfs(view: &HostView, kernel: &KernelConfig) -> Check {
     )
 }
 
+/// The cell runs in droidloomd.service's cgroup. While the service runs its
+/// `cgroup.controllers` says what the cell gets; otherwise system.slice's
+/// `cgroup.subtree_control` says what the service will get.
+const CELL_CGROUP: &str = "/sys/fs/cgroup/system.slice/droidloomd.service";
+const CELL_PARENT_CGROUP: &str = "/sys/fs/cgroup/system.slice";
+/// Controllers whose files the runtime reads in the cell's cgroup: memory and
+/// pids for the cell statistics. Android's cpuset and blkio profiles come
+/// from cgroup v1 mounts inside the cell, which droidloomd reports when it
+/// starts the cell.
+const CELL_CONTROLLERS: [&str; 2] = ["memory", "pids"];
+
 fn check_cgroups(view: &HostView) -> Vec<Check> {
-    let controllers = view.read_trimmed("/sys/fs/cgroup/cgroup.controllers");
-    let required = ["cpu", "cpuset", "memory", "pids"];
-    let present: Vec<&str> = controllers
-        .as_deref()
-        .map_or_else(Vec::new, |line| line.split_whitespace().collect());
-    let missing: Vec<_> = required
+    let v2 = view.exists("/sys/fs/cgroup/cgroup.controllers");
+    let cell = [
+        format!("{CELL_CGROUP}/cgroup.controllers"),
+        format!("{CELL_PARENT_CGROUP}/cgroup.subtree_control"),
+    ]
+    .into_iter()
+    .find_map(|path| Some((view.read(&path)?.trim().to_owned(), path)));
+    let present: Vec<&str> = cell
+        .as_ref()
+        .map_or_else(Vec::new, |(line, _)| line.split_whitespace().collect());
+    let missing: Vec<_> = CELL_CONTROLLERS
         .iter()
         .filter(|controller| !present.contains(controller))
         .copied()
         .collect();
-    let v2_pass = controllers.is_some() && missing.is_empty();
+    let v2_pass = v2 && cell.is_some() && missing.is_empty();
+    let mut evidence = vec![match &cell {
+        _ if !v2 => "cgroup.controllers is absent; cgroup v2 was not observed".to_owned(),
+        Some((line, path)) => format!(
+            "{path}: {}",
+            if line.is_empty() { "no controllers" } else { line }
+        ),
+        None => format!("neither {CELL_CGROUP} nor {CELL_PARENT_CGROUP} is readable"),
+    }];
+    evidence.push(format!(
+        "controllers the cell needs missing: {}",
+        if missing.is_empty() { "none".to_owned() } else { missing.join(", ") }
+    ));
     let v2 = check(
         "kernel.cgroup_v2",
-        "Delegated cgroup v2 resource control",
+        "Cgroup v2 resource control for the cell",
         if v2_pass { CheckStatus::Pass } else { CheckStatus::Fail },
         true,
-        vec![match controllers {
-            Some(line) => format!("available controllers: {line}"),
-            None => "cgroup.controllers is absent; cgroup v2 was not observed".to_owned(),
-        }, format!(
-            "required controllers missing: {}",
-            if missing.is_empty() { "none".to_owned() } else { missing.join(", ") }
-        )],
+        evidence,
         (!v2_pass).then(|| {
-            "Mount cgroup v2 and enable cpu, cpuset, memory, and pids controllers for the Droidloom service subtree."
+            "Mount cgroup v2 and enable the memory and pids controllers for system.slice, where droidloomd.service runs the cell (systemd's DefaultMemoryAccounting and DefaultTasksAccounting, on by default)."
                 .to_owned()
         }),
     );
@@ -943,6 +965,11 @@ mod tests {
         );
         put(
             root.path(),
+            "/sys/fs/cgroup/system.slice/cgroup.subtree_control",
+            "memory pids\n",
+        );
+        put(
+            root.path(),
             "/sys/fs/cgroup/user.slice/cgroup.freeze",
             "0\n",
         );
@@ -997,6 +1024,42 @@ mod tests {
                 check.id == "kernel.binderfs" && check.status == CheckStatus::Fail
             })
         );
+    }
+
+    #[test]
+    fn cgroup_check_reads_the_cell_cgroup_not_the_root() {
+        let root = ready_fixture();
+        let cgroup = |root: &tempfile::TempDir| {
+            let report = probe(&ProbeOptions {
+                root: root.path().to_path_buf(),
+                architecture: Some(TARGET_ARCHITECTURE.as_str().to_owned()),
+                ..ProbeOptions::default()
+            });
+            report
+                .checks
+                .into_iter()
+                .find(|check| check.id == "kernel.cgroup_v2")
+                .unwrap()
+        };
+        // The root offers every controller, the service subtree only memory.
+        put(
+            root.path(),
+            "/sys/fs/cgroup/system.slice/cgroup.subtree_control",
+            "memory\n",
+        );
+        let check = cgroup(&root);
+        assert_eq!(check.status, CheckStatus::Fail);
+        assert!(check.evidence[0].starts_with("/sys/fs/cgroup/system.slice/cgroup.subtree_control"));
+        assert!(check.evidence[1].ends_with("missing: pids"));
+        // A running service's own cgroup is what the cell has.
+        put(
+            root.path(),
+            "/sys/fs/cgroup/system.slice/droidloomd.service/cgroup.controllers",
+            "memory pids\n",
+        );
+        let check = cgroup(&root);
+        assert_eq!(check.status, CheckStatus::Pass);
+        assert!(check.evidence[0].contains("droidloomd.service"));
     }
 
     #[cfg(target_arch = "x86_64")]
