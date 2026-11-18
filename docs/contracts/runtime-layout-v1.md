@@ -230,9 +230,13 @@ GNSS clients start and stop location. While started, the broker holds
 dmail's `org.dmail.Location1.Start` on a private system-bus connection, so
 the modem's engine runs only while Android navigates and stops when the
 client, the broker or its connection goes. It sends the engine's state and
-satellite counts on each change and every final fix: latitude, longitude,
-horizontal accuracy, ellipsoid altitude, speed and heading where known, the
-fix's Unix time and the satellites used. The host user needs dmail's group;
+satellite counts on each change; every final fix: latitude, longitude,
+horizontal accuracy (68%), ellipsoid altitude, speed and heading, and the
+vertical, speed and heading accuracies where known, the fix's Unix time and
+the satellites used; and the satellite list on each change, one entry for
+each satellite and band, at most 128: system, number, band, carrier
+frequency, C/N0, elevation, azimuth, and whether it is tracked, used and has
+ephemeris and almanac. The host user needs dmail's group;
 without dmail, or without access, the broker reports the engine unavailable.
 
 The broker only runs the reader: the authentication service counts a match

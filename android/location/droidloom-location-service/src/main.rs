@@ -4,8 +4,9 @@
 //! `org.dmail.Location1` on the host while Android navigates: `start` opens a
 //! session on the broker's location socket and `stop` ends it, so the
 //! modem's engine runs only while Android asks. Each final fix goes to
-//! Android as `gnssLocationCb`. The engine's satellite counts come without
-//! per-satellite records, so no satellite status is reported. Every extension
+//! Android as `gnssLocationCb` with the accuracies the engine gives, and each
+//! satellite list as `gnssSvStatusCb`, one entry for each satellite and band
+//! with its signal type. Every extension
 //! is unsupported, also the nullable ones: Android's GNSS code takes a null
 //! extension for a real one and crashes system_server on it. The service
 //! registers even without a host engine, because Android waits for a HAL its
@@ -18,7 +19,9 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use android_hardware_gnss::aidl::android::hardware::gnss::{
+    GnssConstellationType::GnssConstellationType,
     GnssLocation::{self, GnssLocation as Location},
+    GnssSignalType::GnssSignalType,
     IAGnss::IAGnss,
     IAGnssRil::IAGnssRil,
     IGnss::{
@@ -27,7 +30,8 @@ use android_hardware_gnss::aidl::android::hardware::gnss::{
     IGnssAntennaInfo::IGnssAntennaInfo,
     IGnssBatching::IGnssBatching,
     IGnssCallback::{
-        GnssStatusValue::GnssStatusValue, GnssSystemInfo::GnssSystemInfo, IGnssCallback,
+        GnssStatusValue::GnssStatusValue, GnssSvFlags::GnssSvFlags, GnssSvInfo::GnssSvInfo,
+        GnssSystemInfo::GnssSystemInfo, IGnssCallback,
     },
     IGnssConfiguration::IGnssConfiguration,
     IGnssDebug::IGnssDebug,
@@ -42,7 +46,7 @@ use android_hardware_gnss::aidl::android::hardware::gnss::{
 };
 use binder::{BinderFeatures, ExceptionCode, Interface, ProcessState, Status, Strong};
 use droidloom_denial_ipc::{IpcError, SeqPacket};
-use droidloom_device_protocol::{Engine, Fix, MAX_RECORD, Message};
+use droidloom_device_protocol::{Constellation, Engine, Fix, MAX_RECORD, Message, Satellite};
 
 const SERVICE_NAME: &str = "android.hardware.gnss.IGnss/default";
 /// The supervisor binds the broker's location socket here.
@@ -68,6 +72,9 @@ fn location(fix: &Fix) -> Location {
     let altitude = known(fix.altitude, GnssLocation::HAS_ALTITUDE);
     let speed = known(fix.speed, GnssLocation::HAS_SPEED);
     let bearing = known(fix.heading, GnssLocation::HAS_BEARING);
+    let vertical = known(fix.vertical_accuracy, GnssLocation::HAS_VERTICAL_ACCURACY);
+    let speed_accuracy = known(fix.speed_accuracy, GnssLocation::HAS_SPEED_ACCURACY);
+    let bearing_accuracy = known(fix.heading_accuracy, GnssLocation::HAS_BEARING_ACCURACY);
     Location {
         gnssLocationFlags: flags,
         latitudeDegrees: fix.latitude,
@@ -76,10 +83,90 @@ fn location(fix: &Fix) -> Location {
         speedMetersPerSec: speed,
         bearingDegrees: bearing,
         horizontalAccuracyMeters: fix.accuracy,
+        verticalAccuracyMeters: vertical,
+        speedAccuracyMetersPerSecond: speed_accuracy,
+        bearingAccuracyDegrees: bearing_accuracy,
         timestampMillis: fix.time_ms,
         // No elapsed-realtime stamp: Android stamps the fix as it arrives,
         // which is when the engine reported it.
         ..Location::default()
+    }
+}
+
+fn constellation(constellation: Constellation) -> GnssConstellationType {
+    match constellation {
+        Constellation::Gps => GnssConstellationType::GPS,
+        Constellation::Glonass => GnssConstellationType::GLONASS,
+        Constellation::Galileo => GnssConstellationType::GALILEO,
+        Constellation::Beidou => GnssConstellationType::BEIDOU,
+        Constellation::Qzss => GnssConstellationType::QZSS,
+        Constellation::Sbas => GnssConstellationType::SBAS,
+        Constellation::Navic => GnssConstellationType::IRNSS,
+    }
+}
+
+/// The RINEX code a phone receiver tracks on the band, as Android names it.
+fn code(band: &str) -> Option<&'static str> {
+    Some(match band {
+        "L1 C/A" | "L1" | "G1" | "G2" | "E1" => "C",
+        "L1C" | "B1C" | "B2a" => "X",
+        "L2C" => "L",
+        "L5" | "E5a" | "E5b" => "Q",
+        "L1S" => "Z",
+        "B1I" | "B2I" => "I",
+        _ => return None,
+    })
+}
+
+/// NavIC broadcasts its L5 SPS signal as code A.
+fn signal_code(satellite: &Satellite) -> Option<&'static str> {
+    if satellite.constellation == Constellation::Navic && satellite.band == "L5" {
+        return Some("A");
+    }
+    code(&satellite.band)
+}
+
+// Android 12 and later read the constellation and carrier frequency from
+// signalType, older readers from the deprecated fields: both are filled.
+#[allow(deprecated)]
+fn satellite(satellite: &Satellite) -> GnssSvInfo {
+    let constellation = constellation(satellite.constellation);
+    let mut flags = 0;
+    for (has, flag) in [
+        (satellite.ephemeris, GnssSvFlags::HAS_EPHEMERIS_DATA),
+        (satellite.almanac, GnssSvFlags::HAS_ALMANAC_DATA),
+        (satellite.used, GnssSvFlags::USED_IN_FIX),
+        (
+            satellite.frequency.is_some(),
+            GnssSvFlags::HAS_CARRIER_FREQUENCY,
+        ),
+    ] {
+        if has {
+            flags |= flag.0;
+        }
+    }
+    let signal = satellite
+        .frequency
+        .zip(signal_code(satellite))
+        .map(|(frequency, code)| GnssSignalType {
+            constellation,
+            carrierFrequencyHz: frequency,
+            codeType: code.into(),
+        });
+    GnssSvInfo {
+        svid: i32::from(satellite.number),
+        constellation,
+        // 0 dB-Hz: not heard.
+        cN0Dbhz: satellite.cn0.unwrap_or(0.0),
+        basebandCN0DbHz: 0.0,
+        elevationDegrees: satellite.elevation.unwrap_or(0.0),
+        azimuthDegrees: satellite.azimuth.unwrap_or(0.0),
+        // Hz of a GNSS carrier: below 2e9, exact in i64.
+        #[allow(clippy::cast_possible_truncation)]
+        carrierFrequencyHz: satellite.frequency.map_or(0, |hz| hz.round() as i64),
+        svFlag: flags,
+        signalType: signal,
+        elapsedRealtime: None,
     }
 }
 
@@ -143,6 +230,12 @@ fn read(state: &Arc<Mutex<State>>, session: u64, socket: &SeqPacket) {
             Ok(Message::LocationFix(fix)) => {
                 report(state, session, |callback| {
                     let _ = callback.gnssLocationCb(&location(&fix));
+                });
+            }
+            Ok(Message::LocationSatellites(satellites)) => {
+                let list: Vec<GnssSvInfo> = satellites.iter().map(satellite).collect();
+                report(state, session, |callback| {
+                    let _ = callback.gnssSvStatusCb(&list);
                 });
             }
             Ok(Message::LocationState {

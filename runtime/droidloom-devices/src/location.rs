@@ -3,8 +3,10 @@
 //! while any client holds `Start`, so a session holds it from
 //! [`Message::LocationStart`] to [`Message::LocationStop`] on a private bus
 //! connection: when the broker or the connection goes, dmail drops the hold
-//! by itself. The session passes on the engine's state on each change and
-//! every new fix, and starts again when dmail does. Without dmail, or
+//! by itself. The session passes on the engine's state on each change, every
+//! new fix with the accuracies dmail announced just before it, and the
+//! satellite list on each change; it starts again when dmail does. A dmail
+//! without `Accuracies` or `Satellites` gives fixes without them. Without dmail, or
 //! without access to it (group `dmail`), Android hears the engine is
 //! unavailable.
 
@@ -15,7 +17,9 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 
 use droidloom_denial_ipc::{IpcError, SeqPacket};
-use droidloom_device_protocol::{Engine, Fix, MAX_RECORD, Message};
+use droidloom_device_protocol::{
+    Constellation, Engine, Fix, MAX_RECORD, MAX_SATELLITES, Message, Satellite,
+};
 use futures_lite::{StreamExt, future};
 use zbus::zvariant::{OwnedValue, Value};
 
@@ -28,12 +32,45 @@ const CALL_TIMEOUT: Duration = Duration::from_secs(5);
 /// heading, fix time in Unix ms; NaN for what the fix lacks.
 type Position = (f64, f64, f64, f64, f64, f64, i64);
 
+/// Location1's accuracies: vertical (m), speed (m/s), heading (degrees).
+type Accuracies = (f64, f64, f64);
+
+/// One Location1 satellite entry: constellation, number, band, frequency,
+/// C/N0, elevation, azimuth, tracked, used, ephemeris, almanac.
+type SatelliteEntry = (
+    String,
+    u16,
+    String,
+    f64,
+    f64,
+    f64,
+    f64,
+    bool,
+    bool,
+    bool,
+    bool,
+);
+
 /// What Location1 says, as far as it is known.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Status {
     engine: Engine,
     used: u32,
     tracked: u32,
+}
+
+/// The session's view of Location1.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Known {
+    status: Status,
+    accuracies: Accuracies,
+}
+
+/// What a change brings besides the status.
+#[derive(Debug, Default, PartialEq)]
+struct News {
+    fix: Option<Fix>,
+    satellites: Option<Vec<Satellite>>,
 }
 
 impl Status {
@@ -55,10 +92,71 @@ fn engine(state: &str) -> Engine {
     }
 }
 
+fn known(value: f64) -> Option<f64> {
+    value.is_finite().then_some(value)
+}
+
+fn known_f32(value: f64) -> Option<f32> {
+    // Degrees and dB-Hz: well within f32.
+    #[allow(clippy::cast_possible_truncation)]
+    value.is_finite().then_some(value as f32)
+}
+
+fn constellation(name: &str) -> Option<Constellation> {
+    Some(match name {
+        "gps" => Constellation::Gps,
+        "glonass" => Constellation::Glonass,
+        "galileo" => Constellation::Galileo,
+        "beidou" => Constellation::Beidou,
+        "qzss" => Constellation::Qzss,
+        "sbas" => Constellation::Sbas,
+        "navic" => Constellation::Navic,
+        _ => return None,
+    })
+}
+
+/// The satellites in Location1's list, leaving out systems Android has no
+/// name for.
+fn satellites(entries: Vec<SatelliteEntry>) -> Vec<Satellite> {
+    entries
+        .into_iter()
+        .filter_map(
+            |(
+                system,
+                number,
+                band,
+                frequency,
+                cn0,
+                elevation,
+                azimuth,
+                tracked,
+                used,
+                ephemeris,
+                almanac,
+            )| {
+                Some(Satellite {
+                    constellation: constellation(&system)?,
+                    number,
+                    band,
+                    frequency: known(frequency),
+                    cn0: known_f32(cn0),
+                    elevation: known_f32(elevation),
+                    azimuth: known_f32(azimuth),
+                    tracked,
+                    used,
+                    ephemeris,
+                    almanac,
+                })
+            },
+        )
+        .take(MAX_SATELLITES)
+        .collect()
+}
+
 /// The fix in a Location1 position, none before the first of a session.
-fn fix(position: Position, used: u32) -> Option<Fix> {
+fn fix(position: Position, used: u32, accuracies: Accuracies) -> Option<Fix> {
     let (latitude, longitude, accuracy, altitude, speed, heading, time_ms) = position;
-    let known = |value: f64| value.is_finite().then_some(value);
+    let (vertical, speed_accuracy, heading_accuracy) = accuracies;
     (time_ms != 0
         && (-90.0..=90.0).contains(&latitude)
         && (-180.0..=180.0).contains(&longitude)
@@ -71,14 +169,18 @@ fn fix(position: Position, used: u32) -> Option<Fix> {
             altitude: known(altitude),
             speed: known(speed),
             heading: known(heading),
+            vertical_accuracy: known(vertical),
+            speed_accuracy: known(speed_accuracy),
+            heading_accuracy: known(heading_accuracy),
             time_ms,
             satellites: used,
         })
 }
 
 /// Applies changed Location1 properties; returns a new fix when Position
-/// changed to one.
-fn apply(status: &mut Status, changed: &HashMap<&str, Value<'_>>) -> Option<Fix> {
+/// changed to one, and the satellites when they changed.
+fn apply(known: &mut Known, changed: &HashMap<&str, Value<'_>>) -> News {
+    let status = &mut known.status;
     if let Some(state) = changed
         .get("State")
         .and_then(|value| <&str>::try_from(value).ok())
@@ -97,15 +199,27 @@ fn apply(status: &mut Status, changed: &HashMap<&str, Value<'_>>) -> Option<Fix>
     {
         status.tracked = tracked;
     }
-    changed
-        .get("Position")
-        .and_then(|value| Position::try_from(value.try_clone().ok()?).ok())
-        .and_then(|position| fix(position, status.used))
+    if let Some(accuracies) = changed
+        .get("Accuracies")
+        .and_then(|value| Accuracies::try_from(value.try_clone().ok()?).ok())
+    {
+        known.accuracies = accuracies;
+    }
+    News {
+        fix: changed
+            .get("Position")
+            .and_then(|value| Position::try_from(value.try_clone().ok()?).ok())
+            .and_then(|position| fix(position, known.status.used, known.accuracies)),
+        satellites: changed
+            .get("Satellites")
+            .and_then(|value| Vec::<SatelliteEntry>::try_from(value.try_clone().ok()?).ok())
+            .map(satellites),
+    }
 }
 
-async fn read_all(
-    properties: &zbus::fdo::PropertiesProxy<'_>,
-) -> zbus::Result<(Status, Option<Fix>)> {
+const NONE: Accuracies = (f64::NAN, f64::NAN, f64::NAN);
+
+async fn read_all(properties: &zbus::fdo::PropertiesProxy<'_>) -> zbus::Result<(Known, News)> {
     let all: HashMap<String, OwnedValue> = properties
         .get_all(zbus::names::InterfaceName::from_static_str_unchecked(
             INTERFACE,
@@ -115,14 +229,29 @@ async fn read_all(
         .iter()
         .map(|(name, value)| (name.as_str(), Value::from(value.clone())))
         .collect();
-    let mut status = Status {
-        engine: Engine::Unavailable,
-        used: 0,
-        tracked: 0,
+    let mut known = Known {
+        status: Status {
+            engine: Engine::Unavailable,
+            used: 0,
+            tracked: 0,
+        },
+        accuracies: NONE,
     };
-    let fix = apply(&mut status, &changed);
+    let mut news = apply(&mut known, &changed);
     // A fix left from before this session is not current until dmail says so.
-    Ok((status, fix.filter(|_| status.engine == Engine::Fixed)))
+    if known.status.engine != Engine::Fixed {
+        news.fix = None;
+    }
+    Ok((known, news))
+}
+
+/// Reports a change; false once the other side is gone.
+fn tell(report: &dyn Fn(&Message) -> bool, news: News) -> bool {
+    news.satellites
+        .is_none_or(|satellites| report(&Message::LocationSatellites(satellites)))
+        && news
+            .fix
+            .is_none_or(|fix| report(&Message::LocationFix(fix)))
 }
 
 enum Event {
@@ -147,8 +276,8 @@ async fn hold(
     let mut changes = properties.receive_properties_changed().await?;
     let mut owners = location.receive_owner_changed().await?;
     location.call_method("Start", &()).await?;
-    let (mut status, first) = read_all(&properties).await?;
-    if !report(&status.message()) || first.is_some_and(|fix| !report(&Message::LocationFix(fix))) {
+    let (mut known, first) = read_all(&properties).await?;
+    if !report(&known.status.message()) || !tell(report, first) {
         return Ok(());
     }
     loop {
@@ -162,37 +291,35 @@ async fn hold(
             },
         )
         .await;
-        let before = status;
-        let fix = match event {
+        let before = known.status;
+        let news = match event {
             Event::Changed(Some(signal)) => {
                 let Ok(args) = signal.args() else { continue };
                 if args.interface_name.as_str() != INTERFACE {
                     continue;
                 }
-                apply(&mut status, args.changed_properties())
+                apply(&mut known, args.changed_properties())
             }
             // dmail came back without the hold: take it again.
             Event::Owner(Some(Some(_))) => {
                 location.call_method("Start", &()).await?;
-                let (now, fix) = read_all(&properties).await?;
-                status = now;
-                fix
+                let (now, news) = read_all(&properties).await?;
+                known = now;
+                news
             }
             Event::Owner(Some(None)) => {
-                status.engine = Engine::Unavailable;
-                None
+                known.status.engine = Engine::Unavailable;
+                News::default()
             }
             Event::Changed(None) | Event::Owner(None) => {
                 return Err(zbus::Error::Failure("system bus connection ended".into()));
             }
             Event::Cancel => break,
         };
-        if status != before && !report(&status.message()) {
+        if known.status != before && !report(&known.status.message()) {
             break;
         }
-        if let Some(fix) = fix
-            && !report(&Message::LocationFix(fix))
-        {
+        if !tell(report, news) {
             break;
         }
     }
@@ -282,12 +409,47 @@ mod tests {
 
     #[test]
     fn location1_changes_become_records() {
-        let mut status = Status {
-            engine: Engine::Off,
-            used: 0,
-            tracked: 0,
+        let mut known = Known {
+            status: Status {
+                engine: Engine::Off,
+                used: 0,
+                tracked: 0,
+            },
+            accuracies: NONE,
         };
         let mut changed = HashMap::new();
+        changed.insert("Accuracies", Value::from((7.0, 0.47, f64::NAN)));
+        changed.insert(
+            "Satellites",
+            Value::from(vec![
+                (
+                    "glonass".to_owned(),
+                    18u16,
+                    "G1".to_owned(),
+                    1_600_312_500.0,
+                    19.6,
+                    38.5,
+                    f64::NAN,
+                    true,
+                    true,
+                    true,
+                    false,
+                ),
+                (
+                    "elsewhere".to_owned(),
+                    1u16,
+                    String::new(),
+                    f64::NAN,
+                    f64::NAN,
+                    f64::NAN,
+                    f64::NAN,
+                    false,
+                    false,
+                    false,
+                    false,
+                ),
+            ]),
+        );
         changed.insert("State", Value::from("fixed"));
         changed.insert("SatellitesUsed", Value::from(9u32));
         changed.insert("SatellitesTracked", Value::from(21u32));
@@ -304,20 +466,38 @@ mod tests {
             )),
         );
         assert_eq!(
-            apply(&mut status, &changed),
-            Some(Fix {
-                latitude: 45.46,
-                longitude: 9.19,
-                accuracy: 10.0,
-                altitude: None,
-                speed: Some(0.4),
-                heading: None,
-                time_ms: 1_795_000_000_000,
-                satellites: 9,
-            })
+            apply(&mut known, &changed),
+            News {
+                fix: Some(Fix {
+                    latitude: 45.46,
+                    longitude: 9.19,
+                    accuracy: 10.0,
+                    altitude: None,
+                    speed: Some(0.4),
+                    heading: None,
+                    vertical_accuracy: Some(7.0),
+                    speed_accuracy: Some(0.47),
+                    heading_accuracy: None,
+                    time_ms: 1_795_000_000_000,
+                    satellites: 9,
+                }),
+                satellites: Some(vec![Satellite {
+                    constellation: Constellation::Glonass,
+                    number: 18,
+                    band: "G1".into(),
+                    frequency: Some(1_600_312_500.0),
+                    cn0: Some(19.6),
+                    elevation: Some(38.5),
+                    azimuth: None,
+                    tracked: true,
+                    used: true,
+                    ephemeris: true,
+                    almanac: false,
+                }]),
+            }
         );
         assert_eq!(
-            status,
+            known.status,
             Status {
                 engine: Engine::Fixed,
                 used: 9,
@@ -329,7 +509,7 @@ mod tests {
     #[test]
     fn no_fix_before_the_first() {
         let nan = f64::NAN;
-        assert_eq!(fix((nan, nan, nan, nan, nan, nan, 0), 0), None);
+        assert_eq!(fix((nan, nan, nan, nan, nan, nan, 0), 0, NONE), None);
         assert_eq!(engine("searching"), Engine::Searching);
         assert_eq!(engine("something new"), Engine::Unavailable);
     }
