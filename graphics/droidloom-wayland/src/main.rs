@@ -50,6 +50,7 @@ use droidloom_window_policy::{LogicalSize, SessionMode, WindowPolicyPaths, Windo
 use gbm::{BufferObject, Device as GbmDevice, Modifier};
 use smithay_client_toolkit::compositor::{CompositorHandler, CompositorState, Region};
 use smithay_client_toolkit::dmabuf::{DmabufFeedback, DmabufHandler, DmabufState};
+use smithay_client_toolkit::globals::ProvidesBoundGlobal;
 use smithay_client_toolkit::output::{OutputHandler, OutputState};
 use smithay_client_toolkit::presentation_time::{
     PresentTime, PresentationTimeHandler, PresentationTimeState,
@@ -96,6 +97,10 @@ use wayland_protocols::wp::presentation_time::client::wp_presentation_feedback::
 };
 use wayland_protocols::wp::viewporter::client::{
     wp_viewport::WpViewport, wp_viewporter::WpViewporter,
+};
+use wayland_protocols::xdg::decoration::zv1::client::{
+    zxdg_decoration_manager_v1::ZxdgDecorationManagerV1,
+    zxdg_toplevel_decoration_v1::{self, ZxdgToplevelDecorationV1},
 };
 use wayland_protocols_wlr::output_power_management::v1::client::{
     zwlr_output_power_manager_v1::ZwlrOutputPowerManagerV1,
@@ -257,6 +262,9 @@ struct TaskWindow {
     android_task: Option<u64>,
     input_route: Option<input::Route>,
     window: Option<Window>,
+    /// Asks Denial to draw the titlebar. Held here, not by SCTK, so it can be
+    /// destroyed before the toplevel as xdg-decoration requires.
+    decoration: Option<ZxdgToplevelDecorationV1>,
     viewport: Option<WpViewport>,
     fractional_scale: Option<WpFractionalScaleV1>,
     sync_surface: Option<WpLinuxDrmSyncobjSurfaceV1>,
@@ -830,16 +838,27 @@ impl App {
         if !headless && let Err(error) = self.window_policy.reload_policy() {
             eprintln!("Droidloom kept the last valid window policy: {error}");
         }
-        let (window, viewport, fractional_scale, sync_surface) = if headless {
-            (None, None, None, None)
+        let (window, decoration, viewport, fractional_scale, sync_surface) = if headless {
+            (None, None, None, None, None)
         } else {
             let surface = self.compositor.create_surface(qh);
             // The compositor draws the titlebar that moves the window: the
             // whole surface belongs to the Android app. One without
-            // xdg-decoration leaves the window undecorated.
-            let window =
-                self.xdg_shell
-                    .create_window(surface, WindowDecorations::RequestServer, qh);
+            // xdg-decoration leaves the window undecorated. The decoration is
+            // ours rather than SCTK's: SCTK destroys it only when its last
+            // Window clone drops, after we have destroyed the toplevel.
+            let window = self
+                .xdg_shell
+                .create_window(surface, WindowDecorations::None, qh);
+            let decoration =
+                ProvidesBoundGlobal::<ZxdgDecorationManagerV1, 1>::bound_global(&self.xdg_shell)
+                    .ok()
+                    .map(|manager| {
+                        let decoration =
+                            manager.get_toplevel_decoration(window.xdg_toplevel(), qh, ());
+                        decoration.set_mode(zxdg_toplevel_decoration_v1::Mode::ServerSide);
+                        decoration
+                    });
             window.set_title(self.titles.title(package));
             window.set_app_id(package.to_owned());
             window.set_min_size(Some((1, 1)));
@@ -861,6 +880,7 @@ impl App {
             window.commit();
             (
                 Some(window),
+                decoration,
                 Some(viewport),
                 Some(fractional_scale),
                 sync_surface,
@@ -879,6 +899,7 @@ impl App {
                 android_task: None,
                 input_route: None,
                 window,
+                decoration,
                 viewport,
                 fractional_scale,
                 sync_surface,
@@ -1646,6 +1667,10 @@ impl App {
         self.activation.remove(object);
         if let Some(mut task) = self.tasks.remove(&object) {
             task.timeline.stop();
+            // Before the Window drops and SCTK destroys the toplevel.
+            if let Some(decoration) = task.decoration.take() {
+                decoration.destroy();
+            }
             if let Some(fractional_scale) = task.fractional_scale.take() {
                 fractional_scale.destroy();
             }
@@ -1714,7 +1739,11 @@ impl App {
         // can leave the compositor-side toplevel mapped until some unrelated
         // callback releases the final clone. The close request is terminal:
         // destroy the role explicitly and let the remaining surface/buffer
-        // objects drain independently.
+        // objects drain independently. xdg-decoration requires the
+        // decoration to go first; Smithay disconnects us otherwise.
+        if let Some(decoration) = task.decoration.take() {
+            decoration.destroy();
+        }
         if let Some(window) = task.window.as_ref() {
             window.xdg_toplevel().destroy();
         }
@@ -3427,6 +3456,7 @@ wayland_client::delegate_noop!(App: ignore WpViewport);
 wayland_client::delegate_noop!(App: ignore ZwlrOutputPowerManagerV1);
 wayland_client::delegate_noop!(App: ignore ZwpIdleInhibitManagerV1);
 wayland_client::delegate_noop!(App: ignore ZwpIdleInhibitorV1);
+wayland_client::delegate_noop!(App: ignore ZxdgToplevelDecorationV1);
 
 fn main() {
     eprintln!("DROIDLOOM_DIRECT_INPUT_ABI=1;");
