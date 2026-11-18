@@ -1,0 +1,8 @@
+# Positions reach the host user's device broker, which reads dmail's
+# Location1, through the socket the supervisor binds into the cell.
+service vendor.gnss-droidloom /vendor/bin/hw/android.hardware.gnss-service.droidloom
+    class hal
+    user gps
+    group gps system
+    interface aidl android.hardware.gnss.IGnss/default
+    stdio_to_kmsg

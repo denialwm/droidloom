@@ -45,6 +45,7 @@ PRODUCT_PACKAGES += \
     android.hardware.health-service.example \
     android.hardware.power-service.droidloom \
     android.hardware.vibrator-service.droidloom \
+    android.hardware.gnss-service.droidloom \
     android.hardware.camera.provider-service.droidloom \
     droidloom-authentication-service \
     com.android.hardware.audio.droidloom \

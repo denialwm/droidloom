@@ -310,9 +310,11 @@ fn android_vendor_build_uses_the_safe_rust_composer_core() {
     assert!(android_bp.contains("crate_root: \"android/gpu/droidloom-vulkan/src/lib.rs\""));
     // Five shared transport/codec crates also build platform variants for WMS
     // and its native input receiver. The haptics, camera and authentication
-    // HALs add the device protocol, their libraries and their services; Wi-Fi
-    // adds the supplicant.
-    assert_eq!(android_bp.matches("vendor: true").count(), 25);
+    // HALs add the device protocol, their libraries and their services; the
+    // GNSS HAL its service; Wi-Fi adds the supplicant.
+    assert_eq!(android_bp.matches("vendor: true").count(), 26);
+    assert!(android_bp.contains("name: \"android.hardware.gnss-service.droidloom\""));
+    assert!(android_bp.contains("\"android.hardware.gnss-V7-rust\""));
     assert!(android_bp.contains("name: \"android.hardware.wifi.supplicant-service.droidloom\""));
     assert!(android_bp.contains("name: \"droidloom-wificond\""));
 
@@ -326,6 +328,8 @@ fn android_vendor_build_uses_the_safe_rust_composer_core() {
     assert!(product.contains("droidloom-classpath-wrapper"));
     // Hint sessions only help when HWUI opens them and the HAL acts on them.
     assert!(product.contains("android.hardware.power-service.droidloom"));
+    // The GPS feature the cell declares needs a GNSS HAL behind it.
+    assert!(product.contains("android.hardware.gnss-service.droidloom"));
     assert!(!product.contains("android.hardware.power-service.example"));
     assert!(product.contains("debug.hwui.use_hint_manager=true"));
     // Android reaches the host over Wi-Fi, not Ethernet.

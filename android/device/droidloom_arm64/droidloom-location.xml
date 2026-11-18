@@ -1,0 +1,7 @@
+<manifest version="1.0" type="device">
+    <hal format="aidl">
+        <name>android.hardware.gnss</name>
+        <version>7</version>
+        <fqname>IGnss/default</fqname>
+    </hal>
+</manifest>

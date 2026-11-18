@@ -2029,7 +2029,7 @@ fn create_private_dev(spec: &CellSpec, root: &Path) -> Result<(), DevelopmentErr
         bind_mount(&text_socket, &target, false)?;
     }
     // Audio, the GPU server and the device broker (haptics, camera,
-    // fingerprint) are separate user brokers. Their systemd-owned sockets
+    // fingerprint, location) are separate user brokers. Their systemd-owned sockets
     // survive broker restarts, preserving the inodes bind-mounted into the
     // Android cell.
     for name in [
@@ -2040,6 +2040,7 @@ fn create_private_dev(spec: &CellSpec, root: &Path) -> Result<(), DevelopmentErr
         "haptics",
         "camera",
         "fingerprint",
+        "location",
     ] {
         let socket = spec.denial_socket.with_file_name(format!("{name}.sock"));
         if socket.exists() {
@@ -2052,7 +2053,10 @@ fn create_private_dev(spec: &CellSpec, root: &Path) -> Result<(), DevelopmentErr
                     "{name} endpoint is not a socket"
                 )));
             }
-            let target = if matches!(name, "audio" | "gpu" | "haptics" | "camera" | "fingerprint") {
+            let target = if matches!(
+                name,
+                "audio" | "gpu" | "haptics" | "camera" | "fingerprint" | "location"
+            ) {
                 root.join("dev/socket/droidloom").join(name)
             } else {
                 framework_host.join(name)

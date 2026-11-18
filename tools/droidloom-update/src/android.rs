@@ -893,6 +893,7 @@ pub fn build_targets(
         "android/gpu",
         "android/power",
         "android/haptics",
+        "android/location",
         "android/camera",
         "android/authentication",
         "android/wifi",

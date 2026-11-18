@@ -166,8 +166,8 @@ rust_binary {
     ],
 }
 
-// Records between the vibrator, camera and fingerprint HALs and the host
-// user's device broker, which reaches hapticd, braun and fprintd.
+// Records between the vibrator, camera, fingerprint and GNSS HALs and the
+// host user's device broker, which reaches hapticd, braun, fprintd and dmail.
 rust_library {
     name: "libdroidloom_device_protocol",
     crate_name: "droidloom_device_protocol",
@@ -201,6 +201,24 @@ rust_binary {
         "libdroidloom_denial_ipc",
         "libdroidloom_device_protocol",
         "libdroidloom_haptics",
+    ],
+}
+
+// GNSS AIDL V7 service: dmail's positions from the host's modem engine.
+rust_binary {
+    name: "android.hardware.gnss-service.droidloom",
+    crate_name: "droidloom_location_service",
+    crate_root: "android/location/droidloom-location-service/src/main.rs",
+    edition: "2024",
+    vendor: true,
+    relative_install_path: "hw",
+    init_rc: ["android/device/droidloom_arm64/droidloom-location.rc"],
+    vintf_fragments: ["android/device/droidloom_arm64/droidloom-location.xml"],
+    rustlibs: [
+        "android.hardware.gnss-V7-rust",
+        "libbinder_rs",
+        "libdroidloom_denial_ipc",
+        "libdroidloom_device_protocol",
     ],
 }
 

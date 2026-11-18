@@ -200,16 +200,17 @@ disabled. These projections may contain executable compatibility helpers, but
 they are not Android-writable storage and cannot target `/system`, `/vendor`,
 `/data`, or another Android namespace.
 
-## Private haptics, camera and fingerprint endpoints (DLDEV001)
+## Private haptics, camera, fingerprint and location endpoints (DLDEV001)
 
 The user `droidloom-devices.socket` unit owns `%t/droidloom/haptics.sock`,
-`%t/droidloom/camera.sock` and `%t/droidloom/fingerprint.sock` under the same
-mode-0700 runtime directory. The supervisor may bind only those inodes at
-`/dev/socket/droidloom/haptics`, `/dev/socket/droidloom/camera` and
-`/dev/socket/droidloom/fingerprint`. One broker, `droidloom-devices`, runs as
-the host user and serves all three; it authenticates the kernel-mapped UID of
-the vibrator HAL (system, 1000), the camera provider (cameraserver, 1047) and
-the authentication service (root, 0) on each.
+`%t/droidloom/camera.sock`, `%t/droidloom/fingerprint.sock` and
+`%t/droidloom/location.sock` under the same mode-0700 runtime directory. The
+supervisor may bind only those inodes at `/dev/socket/droidloom/haptics`,
+`/dev/socket/droidloom/camera`, `/dev/socket/droidloom/fingerprint` and
+`/dev/socket/droidloom/location`. One broker, `droidloom-devices`, runs as
+the host user and serves all four; it authenticates the kernel-mapped UID of
+the vibrator HAL (system, 1000), the camera provider (cameraserver, 1047),
+the authentication service (root, 0) and the GNSS HAL (gps, 1021) on each.
 
 Records carry `DLDEV001`, a kind and bounded fields. Haptics clients send
 patterns of at most 64 steps and 30 seconds, which the broker plays through
@@ -224,6 +225,15 @@ verification waits while the session is locked. Elsewhere the broker claims
 fprintd's reader for each verification only, listens again after a no-match,
 and stops and releases the reader however it ends. Without hapticd, braun or
 fprintd the broker reports no vibrator, no cameras and no reader.
+
+GNSS clients start and stop location. While started, the broker holds
+dmail's `org.dmail.Location1.Start` on a private system-bus connection, so
+the modem's engine runs only while Android navigates and stops when the
+client, the broker or its connection goes. It sends the engine's state and
+satellite counts on each change and every final fix: latitude, longitude,
+horizontal accuracy, ellipsoid altitude, speed and heading where known, the
+fix's Unix time and the satellites used. The host user needs dmail's group;
+without dmail, or without access, the broker reports the engine unavailable.
 
 The broker only runs the reader: the authentication service counts a match
 once the supervisor, as root, has seen fprintd announce it on the system bus,
