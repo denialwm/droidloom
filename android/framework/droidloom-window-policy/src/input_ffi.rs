@@ -728,7 +728,7 @@ mod tests {
     #[test]
     #[allow(clippy::too_many_lines)] // Exercise the full reconnect/retire/shutdown lifecycle.
     fn inherited_socket_dispatches_cancels_and_replaces_without_an_idle_poll() {
-        assert_eq!(std::mem::size_of::<Event>(), 576);
+        assert_eq!(std::mem::size_of::<Event>(), 584);
         let dir = tempfile::tempdir().unwrap();
         let listener = SeqPacketListener::bind(dir.path().join("input")).unwrap();
         let (sender, received) = mpsc::channel::<Event>();

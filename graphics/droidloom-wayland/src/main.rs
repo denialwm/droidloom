@@ -18,6 +18,7 @@ mod notifications;
 mod presentation_audit;
 mod readiness;
 mod resize;
+mod scroll;
 mod text_input;
 mod titles;
 
@@ -2094,6 +2095,46 @@ impl App {
         Ok(self.motion_times.received(monotonic_timestamp_nanos()?))
     }
 
+    /// Send one frame's wheel or touchpad scroll as Android's mouse scroll.
+    fn scroll(
+        &mut self,
+        object: TaskObjectId,
+        position: (f64, f64),
+        vertical: scroll::Axis,
+        horizontal: scroll::Axis,
+        millis: u32,
+    ) {
+        let Some(task) = self.tasks.get(&object) else {
+            return;
+        };
+        let scale = f64::from(task.applied_scale_120) / 120.0;
+        let dpi = task
+            .density_dpi
+            .filter(|dpi| *dpi != 0)
+            .map_or(density::DEFAULT_DPI_PER_SCALE * scale, f64::from);
+        let notch = scroll::notch_logical(dpi, task.applied_scale_120);
+        let (up, right) = scroll::android_notches(vertical, horizontal, notch);
+        let (vertical_fixed, horizontal_fixed) = (fixed_16_16(up), fixed_16_16(right));
+        if vertical_fixed == 0 && horizontal_fixed == 0 {
+            return;
+        }
+        let (x_fixed, y_fixed) = self.fixed_position(object, position);
+        let event = InputEvent::Scroll {
+            x_fixed,
+            y_fixed,
+            vertical_fixed,
+            horizontal_fixed,
+        };
+        let time = if millis == 0 {
+            self.synthesized_time()
+        } else {
+            self.input_time(input_time::Device::Pointer, millis)
+        };
+        if let Err(error) = time.and_then(|time| self.send_input(object, event, time)) {
+            self.fail(&error);
+        }
+    }
+
     /// Send one event stamped with its hardware time on the shared monotonic clock.
     fn send_input(
         &mut self,
@@ -3120,6 +3161,10 @@ impl PointerHandler for App {
         if self.pointer.as_ref() != Some(_pointer) {
             return;
         }
+        // A frame's axis events are one scroll: its fields repeat one motion.
+        let mut scrolled = None;
+        let (mut vertical, mut horizontal) = (scroll::Axis::default(), scroll::Axis::default());
+        let mut scroll_time = 0;
         for event in events {
             if let PointerEventKind::Press { serial, .. } = event.kind
                 && let Some(data) =
@@ -3201,8 +3246,24 @@ impl PointerHandler for App {
                         self.fail(&error);
                     }
                 }
+                PointerEventKind::Axis {
+                    time,
+                    horizontal: across,
+                    vertical: down,
+                    ..
+                } => {
+                    let Some(object) = object else { continue };
+                    vertical.add(&down);
+                    horizontal.add(&across);
+                    // Value120 and discrete steps arrive with time 0.
+                    scroll_time = scroll_time.max(time);
+                    scrolled = Some((object, event.position));
+                }
                 _ => {}
             }
+        }
+        if let Some((object, position)) = scrolled {
+            self.scroll(object, position, vertical, horizontal, scroll_time);
         }
     }
 }

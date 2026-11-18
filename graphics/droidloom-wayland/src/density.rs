@@ -25,7 +25,7 @@ const SCALE_DENOMINATOR: f64 = 120.0;
 /// The density per unit of scale when nothing is chosen: 460 dpi at scale 2,
 /// which draws apps the size a stock Android phone does side by side.
 /// Android's own 160 per scale drew them smaller than the host's.
-const DEFAULT_DPI_PER_SCALE: f64 = 230.0;
+pub(crate) const DEFAULT_DPI_PER_SCALE: f64 = 230.0;
 
 #[derive(Default, Deserialize, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]

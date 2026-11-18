@@ -5,6 +5,13 @@ use droidloom_input_protocol::{Payload, Sample};
 use std::collections::{BTreeMap, BTreeSet};
 
 const FLAG_CANCELED: i32 = 0x20;
+/// Event kinds the Android adapter builds: a touchscreen motion, a key and a
+/// mouse scroll.
+pub const KIND_TOUCH: i32 = 1;
+pub const KIND_KEY: i32 = 2;
+pub const KIND_SCROLL: i32 = 7;
+/// `AMOTION_EVENT_ACTION_SCROLL`.
+const ACTION_SCROLL: i32 = 8;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Target {
@@ -49,6 +56,9 @@ pub struct Event {
     pub event_time: u64,
     pub serial: u64,
     pub pointers: [Pointer; 32],
+    /// Scroll notches, positive up (`AXIS_VSCROLL`) and right (`AXIS_HSCROLL`).
+    pub vertical_scroll: f32,
+    pub horizontal_scroll: f32,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -135,6 +145,12 @@ impl Engine {
                 }
                 self.touch(sample, target, x, y, pressure)?
             }
+            Payload::Scroll {
+                x,
+                y,
+                vertical,
+                horizontal,
+            } => Self::scroll(sample, target, x, y, vertical, horizontal),
             Payload::Key { repeat, serial } => self.key(sample, repeat, serial)?,
         };
         Ok(Some(RoutedEvent { target, event }))
@@ -168,9 +184,9 @@ impl Engine {
     /// Commit only the retirement Android accepted. Failed cancellations keep
     /// their original pointer set/token available for a later reset attempt.
     pub fn acknowledge_cancel(&mut self, event: &RoutedEvent) {
-        if event.event.kind == 1 {
+        if event.event.kind == KIND_TOUCH {
             self.gestures.remove(&event.target.task);
-        } else if event.event.kind == 2 {
+        } else if event.event.kind == KIND_KEY {
             if let Ok(scan_code) = u32::try_from(event.event.scan_code) {
                 self.keys.remove(&(event.target.task, scan_code));
             }
@@ -243,11 +259,41 @@ impl Engine {
         Ok(event)
     }
 
+    /// A mouse scroll is one event with no contact: nothing to hold or cancel.
+    #[allow(clippy::cast_precision_loss)] // Native MotionEvent coordinates are f32.
+    fn scroll(
+        sample: Sample,
+        target: Target,
+        x: f32,
+        y: f32,
+        vertical: f32,
+        horizontal: f32,
+    ) -> Event {
+        let mut event = Event {
+            kind: KIND_SCROLL,
+            display: target.display,
+            action: ACTION_SCROLL,
+            count: 1,
+            down_time: sample.timestamp,
+            event_time: sample.timestamp,
+            vertical_scroll: vertical,
+            horizontal_scroll: horizontal,
+            ..Event::default()
+        };
+        event.pointers[0] = Pointer {
+            id: 0,
+            x: x + target.left as f32,
+            y: y + target.top as f32,
+            pressure: 0.0,
+        };
+        event
+    }
+
     #[allow(clippy::cast_precision_loss)] // Native MotionEvent coordinates are f32.
     fn motion(target: Target, gesture: &mut Gesture, action: i32, now: u64) -> Event {
         gesture.last_time = now.max(gesture.last_time);
         let mut event = Event {
-            kind: 1,
+            kind: KIND_TOUCH,
             display: target.display,
             action,
             flags: if action == 3 { FLAG_CANCELED } else { 0 },
@@ -302,7 +348,7 @@ impl Engine {
             self.keys.remove(&identity);
         }
         Ok(Event {
-            kind: 2,
+            kind: KIND_KEY,
             display: sample.display,
             action: i32::from(!pressed),
             key_code: code,
@@ -361,7 +407,7 @@ impl Engine {
             cancelled.push(RoutedEvent {
                 target,
                 event: Event {
-                    kind: 2,
+                    kind: KIND_KEY,
                     display: target.display,
                     action: 1,
                     key_code: key.code,
@@ -415,6 +461,40 @@ mod tests {
             ..touch(0, 0)
         }
     }
+    #[test]
+    fn a_scroll_is_one_mouse_event_at_the_window_position() {
+        let mut engine = Engine::default();
+        engine.publish(target(), 1);
+        let held = engine.process(touch(7, 0)).unwrap().unwrap().event;
+        let scroll = engine
+            .process(Sample {
+                payload: Payload::Scroll {
+                    x: 2.5,
+                    y: 3.0,
+                    vertical: -1.5,
+                    horizontal: 0.25,
+                },
+                ..touch(0, 0)
+            })
+            .unwrap()
+            .unwrap()
+            .event;
+        assert_eq!(
+            (scroll.kind, scroll.action, scroll.count),
+            (KIND_SCROLL, 8, 1)
+        );
+        assert_eq!((scroll.pointers[0].x, scroll.pointers[0].y), (32.5, 43.0));
+        assert_eq!(
+            (scroll.vertical_scroll, scroll.horizontal_scroll),
+            (-1.5, 0.25)
+        );
+        assert_eq!((scroll.down_time, scroll.event_time), (100, 100));
+        // A scroll holds nothing: the touch still lifts as its own gesture.
+        let lifted = engine.process(touch(7, 2)).unwrap().unwrap().event;
+        assert_eq!((lifted.action, lifted.down_time), (1, held.down_time));
+        assert!(engine.reset(200).is_empty());
+    }
+
     #[test]
     fn multi_touch_indices_and_bounds_follow_the_same_live_task() {
         let mut engine = Engine::default();

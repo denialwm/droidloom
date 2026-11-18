@@ -46,8 +46,9 @@ struct DroidloomInputEvent {
     int32_t kind, display, action, keyCode, scanCode, meta, repeat, flags, count;
     uint64_t downTime, eventTime, serial;
     DroidloomInputPointer pointers[32];
+    float verticalScroll, horizontalScroll;
 };
-static_assert(sizeof(DroidloomInputEvent) == 576);
+static_assert(sizeof(DroidloomInputEvent) == 584);
 static_assert(offsetof(DroidloomInputEvent, downTime) == 40);
 extern "C" void* droidloom_input_create(uintptr_t,
         bool (*)(uintptr_t, const DroidloomInputEvent*, uintptr_t), bool (*)(uintptr_t, bool));
@@ -159,6 +160,24 @@ bool DroidloomInput::inject(uintptr_t context, const DroidloomInputEvent* event,
                 ui::Transform{}, 1.0f, 1.0f, AMOTION_EVENT_INVALID_CURSOR_POSITION,
                 AMOTION_EVENT_INVALID_CURSOR_POSITION, ui::Transform{}, event->downTime,
                 event->eventTime, event->count, properties.data(), coords.data());
+        androidEvent = &motion;
+    } else if (event->kind == 7) {
+        // A wheel or touchpad: Android's own mouse scroll, which views read
+        // through onGenericMotionEvent. It is its own device, so it never
+        // joins or interrupts a touch gesture.
+        PointerProperties properties{};
+        properties.id = 0;
+        properties.toolType = ToolType::MOUSE;
+        PointerCoords coords{};
+        coords.setAxisValue(AMOTION_EVENT_AXIS_X, event->pointers[0].x);
+        coords.setAxisValue(AMOTION_EVENT_AXIS_Y, event->pointers[0].y);
+        coords.setAxisValue(AMOTION_EVENT_AXIS_VSCROLL, event->verticalScroll);
+        coords.setAxisValue(AMOTION_EVENT_AXIS_HSCROLL, event->horizontalScroll);
+        motion.initialize(ids.nextId(), 1, AINPUT_SOURCE_MOUSE, ui::LogicalDisplayId{event->display},
+                {}, AMOTION_EVENT_ACTION_SCROLL, 0, ftl::Flags<MotionFlag>(0), 0, 0, 0,
+                MotionClassification::NONE, ui::Transform{}, 1.0f, 1.0f, event->pointers[0].x,
+                event->pointers[0].y, ui::Transform{}, event->downTime, event->eventTime, 1,
+                &properties, &coords);
         androidEvent = &motion;
     } else return false;
     // The pinned dispatcher validates and updates its injection verifier before

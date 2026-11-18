@@ -613,8 +613,8 @@ authentication tokens or hardware attestation.
 Complete host IME integration with cursor rectangles, selection, supported
 surrounding-text context and editor actions. Preserve sensitive-field policy,
 Unicode boundaries, composition and session generation checks. Deliver real
-mouse buttons, hover, wheel scrolling and pointer shapes when the Android app
-supports them. Preserve compositor shortcuts and Android key semantics rather
+mouse buttons, hover and pointer shapes when the Android app supports them;
+wheel and touchpad scrolling already arrive as Android's mouse scroll. Preserve compositor shortcuts and Android key semantics rather
 than globally rewriting keys such as Escape or Ctrl. The
 [text-input contract](contracts/text-input-v1.md) records the current baseline.
 

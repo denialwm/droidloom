@@ -2,8 +2,8 @@
 use droidloom_denial_ipc::{IpcError, SeqPacket};
 use droidloom_denial_protocol::{InputEvent, TouchAction};
 use droidloom_input_protocol::{
-    MAX_POINTER_ID, PROTOCOL_MAJOR, RECORD_BYTES, encode_display_power, encode_key, encode_touch,
-    scale_fixed,
+    MAX_POINTER_ID, PROTOCOL_MAJOR, RECORD_BYTES, encode_display_power, encode_key, encode_scroll,
+    encode_touch, scale_fixed,
 };
 use std::{
     collections::{BTreeMap, VecDeque},
@@ -212,6 +212,30 @@ impl DirectInput {
                 serial,
                 route.incarnation,
             ),
+            InputEvent::Scroll {
+                x_fixed,
+                y_fixed,
+                vertical_fixed,
+                horizontal_fixed,
+            } => {
+                let (x, y) = match (
+                    scale_fixed(x_fixed, scale.0, scale.1),
+                    scale_fixed(y_fixed, scale.0, scale.1),
+                ) {
+                    (Ok(x), Ok(y)) => (x, y),
+                    _ => return self.fail("invalid scroll scale or coordinates"),
+                };
+                encode_scroll(
+                    route.display,
+                    route.task,
+                    timestamp,
+                    x,
+                    y,
+                    vertical_fixed,
+                    horizontal_fixed,
+                    route.incarnation,
+                )
+            }
             InputEvent::Navigation { .. } => {
                 return Err("navigation injection is not implemented".into());
             }
@@ -382,6 +406,29 @@ mod tests {
         );
         input.disconnect();
         assert!(receiver.receive_record().is_err()); // Native receiver can now cancel held input.
+    }
+
+    #[test]
+    fn scroll_is_scaled_to_buffer_pixels_and_keeps_its_notches() {
+        let (mut input, receiver) = connected();
+        let scroll = InputEvent::Scroll {
+            x_fixed: 10 << 16,
+            y_fixed: 4 << 16,
+            vertical_fixed: -(1 << 15),
+            horizontal_fixed: 1 << 16,
+        };
+        input.send(route(), (3, 2), 1, 100, scroll).unwrap();
+        let sample = sample(&receiver);
+        assert_eq!((sample.task, sample.incarnation), (42, 7));
+        assert_eq!(
+            sample.payload,
+            Payload::Scroll {
+                x: 15.0,
+                y: 6.0,
+                vertical: -0.5,
+                horizontal: 1.0
+            }
+        );
     }
 
     #[test]

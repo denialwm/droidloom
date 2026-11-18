@@ -1,8 +1,8 @@
 //! Fixed-size, descriptor-free records for the Android framework bridge.
 //!
 //! The Wayland compositor remains the physical-input authority. This protocol
-//! carries touch and keyboard events already routed to one authenticated
-//! Android task surface.
+//! carries touch, scroll and keyboard events already routed to one
+//! authenticated Android task surface.
 
 #![no_std]
 #![forbid(unsafe_code)]
@@ -12,7 +12,7 @@ use core::fmt;
 /// Marker at the start of every input record.
 pub const MAGIC: [u8; 4] = *b"DLIN";
 /// Wire protocol major version.
-pub const PROTOCOL_MAJOR: u16 = 7;
+pub const PROTOCOL_MAJOR: u16 = 8;
 
 /// Build metadata retained by the native sender for offline package verification.
 pub const BUILD_COMPATIBILITY: [u8; 26] = compatibility_marker(PROTOCOL_MAJOR);
@@ -45,6 +45,8 @@ pub const KIND_TASK_FOCUS: u8 = 4;
 pub const KIND_TASK_CLOSE: u8 = 5;
 /// Record kind for the aggregate host display-power state.
 pub const KIND_DISPLAY_POWER: u8 = 6;
+/// Record kind for one wheel or touchpad scroll at a task-local position.
+pub const KIND_SCROLL: u8 = 7;
 /// Highest pointer identity accepted by Android `MotionEvent`.
 pub const MAX_POINTER_ID: u32 = 31;
 /// Highest key identity defined by Linux's evdev input ABI.
@@ -158,6 +160,51 @@ pub fn encode_touch(
     record[28..32].copy_from_slice(&y_fixed.to_le_bytes());
     record[32..34].copy_from_slice(&pressure.to_le_bytes());
     // Bytes 34..36 are reserved and remain zero.
+    record[36..40].copy_from_slice(&task_id.to_le_bytes());
+    record[40..48].copy_from_slice(&incarnation.to_le_bytes());
+    Ok(record)
+}
+
+/// Encode one routed scroll: a mouse wheel or touchpad at a task-local
+/// position. The amounts are signed 16.16 fixed-point wheel notches in
+/// Android's directions, positive scrolling up and right, so a high-resolution
+/// wheel or a touchpad sends fractions of a notch.
+///
+/// # Errors
+///
+/// Rejects display and task identities Android cannot represent.
+#[allow(clippy::too_many_arguments)]
+pub fn encode_scroll(
+    android_display: u32,
+    task_id: u64,
+    timestamp_nanos: u64,
+    x_fixed: i32,
+    y_fixed: i32,
+    vertical_fixed: i32,
+    horizontal_fixed: i32,
+    incarnation: u64,
+) -> Result<[u8; RECORD_BYTES], InputProtocolError> {
+    if incarnation == 0 || incarnation > i64::MAX as u64 {
+        return Err(InputProtocolError::Incarnation);
+    }
+    if android_display > i32::MAX as u32 {
+        return Err(InputProtocolError::AndroidDisplay);
+    }
+    let task_id = u32::try_from(task_id).map_err(|_| InputProtocolError::TaskId)?;
+    if task_id == 0 || task_id > i32::MAX as u32 {
+        return Err(InputProtocolError::TaskId);
+    }
+
+    let mut record = [0_u8; RECORD_BYTES];
+    record[0..4].copy_from_slice(&MAGIC);
+    record[4..6].copy_from_slice(&PROTOCOL_MAJOR.to_le_bytes());
+    record[6] = KIND_SCROLL;
+    record[8..12].copy_from_slice(&android_display.to_le_bytes());
+    record[12..16].copy_from_slice(&horizontal_fixed.to_le_bytes());
+    record[16..24].copy_from_slice(&timestamp_nanos.to_le_bytes());
+    record[24..28].copy_from_slice(&x_fixed.to_le_bytes());
+    record[28..32].copy_from_slice(&y_fixed.to_le_bytes());
+    record[32..36].copy_from_slice(&vertical_fixed.to_le_bytes());
     record[36..40].copy_from_slice(&task_id.to_le_bytes());
     record[40..48].copy_from_slice(&incarnation.to_le_bytes());
     Ok(record)
@@ -326,9 +373,9 @@ pub struct Sample {
     pub incarnation: u64,
     /// Monotonic nanoseconds from the host input source.
     pub timestamp: u64,
-    /// Wire touch or key action.
+    /// Wire touch or key action; zero for a scroll.
     pub action: u8,
-    /// Pointer ID or evdev scan code.
+    /// Pointer ID or evdev scan code; zero for a scroll.
     pub code: u32,
     /// Kind-specific validated data.
     pub payload: Payload,
@@ -346,6 +393,18 @@ pub enum Payload {
         /// Normalized contact pressure.
         pressure: f32,
     },
+    /// Task-local physical pixel position and wheel notches, positive
+    /// scrolling up and right.
+    Scroll {
+        /// Horizontal task-local coordinate.
+        x: f32,
+        /// Vertical task-local coordinate.
+        y: f32,
+        /// Vertical notches, positive up.
+        vertical: f32,
+        /// Horizontal notches, positive right.
+        horizontal: f32,
+    },
     /// Keyboard state and end-to-end trace identity.
     Key {
         /// Host-generated repeat count.
@@ -358,7 +417,7 @@ pub enum Payload {
 /// One validated native input receiver record.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Record {
-    /// Task-scoped touch or key sample.
+    /// Task-scoped touch, scroll or key sample.
     Input(Sample),
     /// Whether any physical host output is powered.
     DisplayPower(bool),
@@ -401,11 +460,32 @@ pub fn decode(bytes: &[u8]) -> Result<Record, InputProtocolError> {
     }
     let action = bytes[7];
     let code = word(12);
+    let fixed =
+        |offset| i32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap()) as f32 / 65536.0;
+    if bytes[6] == KIND_SCROLL {
+        if action != 0 {
+            return Err(InputProtocolError::Record);
+        }
+        return Ok(Record::Input(Sample {
+            display,
+            task,
+            incarnation,
+            timestamp,
+            action,
+            code: 0,
+            payload: Payload::Scroll {
+                x: fixed(24),
+                y: fixed(28),
+                vertical: fixed(32),
+                horizontal: fixed(12),
+            },
+        }));
+    }
     let payload = match bytes[6] {
         KIND_TOUCH if action <= 3 && code <= MAX_POINTER_ID && bytes[34..36] == [0, 0] => {
             Payload::Touch {
-                x: i32::from_le_bytes(bytes[24..28].try_into().unwrap()) as f32 / 65536.0,
-                y: i32::from_le_bytes(bytes[28..32].try_into().unwrap()) as f32 / 65536.0,
+                x: fixed(24),
+                y: fixed(28),
                 pressure: f32::from(u16::from_le_bytes(bytes[32..34].try_into().unwrap()))
                     / 65535.0,
             }
@@ -469,6 +549,23 @@ mod tests {
             decode(&encode_display_power(false)),
             Ok(Record::DisplayPower(false))
         );
+        let scroll = encode_scroll(0, 42, 100, 5 << 16, 6 << 16, -(3 << 15), 1 << 16, 7).unwrap();
+        let Record::Input(sample) = decode(&scroll).unwrap() else {
+            panic!("scroll expected")
+        };
+        assert_eq!((sample.action, sample.code, sample.incarnation), (0, 0, 7));
+        assert_eq!(
+            sample.payload,
+            Payload::Scroll {
+                x: 5.0,
+                y: 6.0,
+                vertical: -1.5,
+                horizontal: 1.0
+            }
+        );
+        let mut malformed = scroll;
+        malformed[7] = 1;
+        assert!(decode(&malformed).is_err());
     }
 
     #[test]

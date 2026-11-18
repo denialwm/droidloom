@@ -535,6 +535,17 @@ pub enum InputEvent {
         /// Normalized pressure from zero through 65,535.
         pressure: u16,
     },
+    /// One wheel or touchpad scroll at a pointer position.
+    Scroll {
+        /// Logical x coordinate in signed 16.16 fixed point.
+        x_fixed: i32,
+        /// Logical y coordinate in signed 16.16 fixed point.
+        y_fixed: i32,
+        /// Vertical wheel notches in signed 16.16 fixed point, positive up.
+        vertical_fixed: i32,
+        /// Horizontal wheel notches in signed 16.16 fixed point, positive right.
+        horizontal_fixed: i32,
+    },
     /// Linux input key transition.
     Key {
         /// Press/release operation.
@@ -2540,6 +2551,18 @@ fn encode_input(payload: &mut Writer, event: InputEvent) {
             payload.u8(2);
             payload.u8(action as u8);
         }
+        InputEvent::Scroll {
+            x_fixed,
+            y_fixed,
+            vertical_fixed,
+            horizontal_fixed,
+        } => {
+            payload.u8(3);
+            payload.i32(x_fixed);
+            payload.i32(y_fixed);
+            payload.i32(vertical_fixed);
+            payload.i32(horizontal_fixed);
+        }
     }
 }
 
@@ -2559,6 +2582,12 @@ fn decode_input(payload: &mut Reader<'_>) -> Result<InputEvent, WireError> {
         }),
         2 => Ok(InputEvent::Navigation {
             action: decode_navigation_action(payload.u8()?)?,
+        }),
+        3 => Ok(InputEvent::Scroll {
+            x_fixed: payload.i32()?,
+            y_fixed: payload.i32()?,
+            vertical_fixed: payload.i32()?,
+            horizontal_fixed: payload.i32()?,
         }),
         value => Err(WireError::InvalidEnum {
             field: "input event",
@@ -3116,6 +3145,12 @@ mod tests {
             },
             InputEvent::Navigation {
                 action: NavigationAction::Back,
+            },
+            InputEvent::Scroll {
+                x_fixed: 10 << 16,
+                y_fixed: 20 << 16,
+                vertical_fixed: -(1 << 15),
+                horizontal_fixed: 0,
             },
         ] {
             round_trip_denial(&DenialMessage::Input {

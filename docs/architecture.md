@@ -112,6 +112,12 @@ that retirement. Completed-frame, cross-task and rejected-cancellation paths
 have executable regressions. These contracts do not establish physical device
 or application-level delivery qualification.
 
+A mouse wheel or touchpad reaches Android as its own mouse `ACTION_SCROLL` at
+the pointer, on a separate device, so it holds no contact and never joins a
+touch gesture. A wheel notch, or its high-resolution fraction, is one Android
+notch; a touchpad moves content as far as the fingers move, 64 dp per notch at
+the task's density.
+
 ## Wayland and Denial
 
 The presenter requires `xdg-shell` and `linux-dmabuf` v4 feedback. Without
