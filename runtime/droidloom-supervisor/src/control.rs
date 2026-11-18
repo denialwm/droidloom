@@ -79,7 +79,6 @@ const MAX_RESPONSE_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_SPEC_BYTES: u64 = 1024 * 1024;
 const CLIENT_TIMEOUT: Duration = Duration::from_secs(2);
 const ANDROID_READY_TIMEOUT: Duration = Duration::from_secs(120);
-const MIN_DISPLAY_DPI: u32 = 72;
 const MIN_ICON_SIZE: u32 = 16;
 const MAX_ICON_SIZE: u32 = 512;
 const MAX_APPLICATIONS: usize = 1024;
@@ -2001,11 +2000,15 @@ fn android_operation_timeout(operation: &str) -> ControlError {
     ))
 }
 
+/// The display takes the densities a task may be given: any value Android
+/// accepts above them shrinks the display to nothing and crashes the next app.
 fn validate_display_density(dpi: u32) -> Result<(), ControlError> {
-    if dpi < MIN_DISPLAY_DPI || dpi > i32::MAX as u32 {
+    let range = droidloom_task_control::TASK_DENSITY_DPI;
+    if !range.contains(&dpi) {
         return Err(ControlError::Invalid(format!(
-            "display density must be between {MIN_DISPLAY_DPI} and {} dpi",
-            i32::MAX
+            "display density must be between {} and {} dpi; 160 is Android's baseline",
+            range.start(),
+            range.end()
         )));
     }
     Ok(())
@@ -2220,6 +2223,9 @@ mod tests {
         );
         assert!(validate_display_density(175).is_ok());
         assert!(validate_display_density(71).is_err());
+        assert!(validate_display_density(1280).is_ok());
+        assert!(validate_display_density(1281).is_err());
+        assert!(validate_display_density(999_999_999).is_err());
     }
 
     #[test]
