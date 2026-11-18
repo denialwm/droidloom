@@ -19,6 +19,7 @@ mod presentation_audit;
 mod readiness;
 mod resize;
 mod text_input;
+mod titles;
 
 use std::collections::{BTreeMap, VecDeque};
 use std::env;
@@ -384,6 +385,7 @@ struct App {
     window_policy: WindowPolicyStore,
     /// The density each task gets on the output it is on.
     densities: density::Densities,
+    titles: titles::Titles,
     /// The task last given a density, and the density last sent for new tasks.
     density_task: Option<TaskObjectId>,
     new_task_density: Option<u32>,
@@ -834,7 +836,7 @@ impl App {
             let window = self
                 .xdg_shell
                 .create_window(surface, WindowDecorations::None, qh);
-            window.set_title(package.to_owned());
+            window.set_title(self.titles.title(package));
             window.set_app_id(package.to_owned());
             window.set_min_size(Some((1, 1)));
             if let Some(manager) = &self.insets_manager {
@@ -3503,6 +3505,7 @@ fn run() -> Result<(), PresenterError> {
         listener,
         window_policy,
         densities: density::Densities::load(env::var_os("XDG_CONFIG_HOME"), env::var_os("HOME")),
+        titles: titles::Titles::new(env::var_os("XDG_DATA_HOME"), env::var_os("HOME")),
         density_task: None,
         new_task_density: None,
         endpoint: None,
