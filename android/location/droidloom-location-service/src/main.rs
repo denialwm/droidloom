@@ -5,9 +5,11 @@
 //! session on the broker's location socket and `stop` ends it, so the
 //! modem's engine runs only while Android asks. Each final fix goes to
 //! Android as `gnssLocationCb`. The engine's satellite counts come without
-//! per-satellite records, so no satellite status is reported. Every optional
-//! extension is absent; the service registers even without a host engine,
-//! because Android waits for a HAL its manifest declares.
+//! per-satellite records, so no satellite status is reported. Every extension
+//! is unsupported, also the nullable ones: Android's GNSS code takes a null
+//! extension for a real one and crashes system_server on it. The service
+//! registers even without a host engine, because Android waits for a HAL its
+//! manifest declares.
 
 #![forbid(unsafe_code)]
 
@@ -305,7 +307,7 @@ impl IGnss::IGnss for Gnss {
     }
 
     fn getExtensionPsds(&self) -> binder::Result<Option<Strong<dyn IGnssPsds>>> {
-        Ok(None)
+        unsupported()
     }
 
     fn getExtensionGnssConfiguration(&self) -> binder::Result<Strong<dyn IGnssConfiguration>> {
@@ -321,17 +323,17 @@ impl IGnss::IGnss for Gnss {
     }
 
     fn getExtensionGnssBatching(&self) -> binder::Result<Option<Strong<dyn IGnssBatching>>> {
-        Ok(None)
+        unsupported()
     }
 
     fn getExtensionGnssGeofence(&self) -> binder::Result<Option<Strong<dyn IGnssGeofence>>> {
-        Ok(None)
+        unsupported()
     }
 
     fn getExtensionGnssNavigationMessage(
         &self,
     ) -> binder::Result<Option<Strong<dyn IGnssNavigationMessageInterface>>> {
-        Ok(None)
+        unsupported()
     }
 
     fn getExtensionAGnss(&self) -> binder::Result<Strong<dyn IAGnss>> {
@@ -359,7 +361,7 @@ impl IGnss::IGnss for Gnss {
     fn getExtensionMeasurementCorrections(
         &self,
     ) -> binder::Result<Option<Strong<dyn IMeasurementCorrectionsInterface>>> {
-        Ok(None)
+        unsupported()
     }
 
     fn getExtensionGnssAssistanceInterface(
