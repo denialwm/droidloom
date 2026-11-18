@@ -2,4 +2,5 @@
 <resources>
     <bool name="def_bluetooth_on">false</bool>
     <bool name="def_wifi_on">true</bool>
+    <bool name="def_sound_effects_enabled">false</bool>
 </resources>

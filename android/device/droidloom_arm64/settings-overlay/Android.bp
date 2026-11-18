@@ -1,7 +1,8 @@
 // Defaults for settings Android creates on fresh data. Droidloom declares
 // Bluetooth for application compatibility but has no controller behind it, so
 // the stack must not try to enable one at first boot. Wi-Fi starts on: the
-// cell reaches the host through it.
+// cell reaches the host through it. Touch sounds start off, as on the
+// desktop it shares speakers with.
 runtime_resource_overlay {
     name: "DroidloomSettingsOverlay",
     vendor: true,
