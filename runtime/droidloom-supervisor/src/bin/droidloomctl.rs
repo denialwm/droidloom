@@ -113,6 +113,8 @@ enum Command {
     /// Show recent Android logs, optionally filtered by an installed app's UID.
     Logs {
         /// Android package, including retained logs after its process exits.
+        /// System apps share UID 1000 with system_server and the HALs, so
+        /// their logs include those too.
         package: Option<String>,
         /// Number of recent logcat entries (output is also byte bounded).
         #[arg(short = 'n', long, default_value_t = 200, value_parser = clap::value_parser!(u32).range(1..=2000))]
@@ -123,7 +125,7 @@ enum Command {
     },
     /// Show the global crash buffer and recorded exits for an optional package.
     Crashes {
-        /// Select this package's exit history; crash traces still include all apps.
+        /// Select this installed package's exit history; crash traces still include all apps.
         package: Option<String>,
         /// Number of recent crash logcat entries (output is also byte bounded).
         #[arg(short = 'n', long, default_value_t = 1000, value_parser = clap::value_parser!(u32).range(1..=2000))]

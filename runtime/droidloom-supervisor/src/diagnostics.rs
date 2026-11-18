@@ -56,7 +56,7 @@ fn collect_with(
     .map(str::to_owned)
     .collect();
     args.push(lines.to_string());
-    if !crashes && let Some(package) = package {
+    if let Some(package) = package {
         let listing = run(&[
             "/system/bin/cmd".into(),
             "package".into(),
@@ -66,9 +66,18 @@ fn collect_with(
             "--user".into(),
             user.to_string(),
             package.into(),
-        ])?;
-        let uid = package_uid(&listing, package)?;
-        args.push(format!("--uid={uid}"));
+        ]);
+        if crashes {
+            // A package Android does not know has no crashes to show. When
+            // the package service itself is down, the crash buffer still
+            // holds what explains it.
+            if let Ok(listing) = listing {
+                package_uid(&listing, package)?;
+            }
+        } else {
+            let uid = package_uid(&listing?, package)?;
+            args.push(format!("--uid={uid}"));
+        }
     }
     // Explicit filter avoids inheriting Android's ambient log tag filters.
     args.push("*:V".into());
@@ -231,7 +240,9 @@ mod tests {
     fn crash_report_keeps_native_traces_when_activity_service_is_down() {
         let report = collect_with(Some("com.example.app"), 0, 200, true, |args| {
             assert!(!args.iter().any(|arg| arg.starts_with("--uid")));
-            if args[0] == "/system/bin/logcat" {
+            if args[0] == "/system/bin/cmd" {
+                Err(ControlError::Invalid("package service unavailable".into()))
+            } else if args[0] == "/system/bin/logcat" {
                 Ok("DEBUG: native backtrace from crash_dump64\n".into())
             } else {
                 assert_eq!(args.last().unwrap(), "com.example.app");
@@ -241,6 +252,20 @@ mod tests {
         .unwrap();
         assert!(report.contains("native backtrace"));
         assert!(report.contains("Unavailable: activity service unavailable"));
+    }
+
+    #[test]
+    fn crash_report_refuses_a_package_android_does_not_know() {
+        let mut calls = 0;
+        let error = collect_with(Some("com.android.nonexistent.pkg"), 0, 200, true, |args| {
+            calls += 1;
+            assert_eq!(args[0], "/system/bin/cmd");
+            Ok(String::new())
+        })
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("com.android.nonexistent.pkg is not installed"));
+        assert_eq!(calls, 1);
     }
 
     #[test]
