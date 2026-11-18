@@ -509,6 +509,13 @@ pub fn assemble_artifacts(
         &runtime.join("compat/removed-app/README"),
         "Droidloom leaves this app out of Android.\n",
     )?;
+    // Mounted over /system/xbin, which holds only the debug image's `su` and
+    // its `adb remount` helper: apps that look for `su` refuse to run, and
+    // nothing in the cell uses either.
+    write(
+        &runtime.join("compat/no-su/README"),
+        "Droidloom leaves su out of Android.\n",
+    )?;
     // Preserve both Java classpaths advertised by the base APEX manifest.
     for name in [
         "etc/classpaths/bootclasspath.pb",

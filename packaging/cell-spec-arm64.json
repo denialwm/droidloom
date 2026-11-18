@@ -226,6 +226,10 @@
     {
       "source": "/usr/lib/droidloom/current/compat/removed-app",
       "target": "/system_ext/priv-app/ThreadNetworkDemoApp"
+    },
+    {
+      "source": "/usr/lib/droidloom/current/compat/no-su",
+      "target": "/system/xbin"
     }
   ],
   "data_dir": "/var/lib/droidloom/users/1001/host-storage",

@@ -216,6 +216,10 @@
     {
       "source": "/usr/lib/droidloom/current/compat/removed-app",
       "target": "/system_ext/priv-app/ThreadNetworkDemoApp"
+    },
+    {
+      "source": "/usr/lib/droidloom/current/compat/no-su",
+      "target": "/system/xbin"
     }
   ],
   "android_runtime_directories": [

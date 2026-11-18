@@ -259,6 +259,24 @@ fn shared_kernel_vintf_reports_the_real_kernel_policy_version() {
 }
 
 #[test]
+fn every_cell_hides_su() {
+    // /system/xbin holds only the debug image's su and its adb remount
+    // helper; apps that find su refuse to run (droidloom#33).
+    let root = repository_root();
+    for recipe in ["cell-spec-x86_64-u1000.json", "cell-spec-arm64.json"] {
+        let spec = json(&root.join("packaging").join(recipe));
+        let overrides = spec["android_file_overrides"].as_array().unwrap();
+        assert!(
+            overrides.iter().any(|entry| {
+                entry["source"] == "/usr/lib/droidloom/current/compat/no-su"
+                    && entry["target"] == "/system/xbin"
+            }),
+            "{recipe} leaves /system/xbin/su visible"
+        );
+    }
+}
+
+#[test]
 fn android_vendor_build_uses_the_safe_rust_composer_core() {
     let android_bp =
         fs::read_to_string(repository_root().join("Android.bp")).expect("read Android.bp");
