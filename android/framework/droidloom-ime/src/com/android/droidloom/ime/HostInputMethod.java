@@ -29,6 +29,9 @@ public final class HostInputMethod extends InputMethodService {
     private boolean composing;
     private JSONObject state;
     private final EditorVisibility visibility = new EditorVisibility();
+    // The host's layout, kept until Android has attached this method: a
+    // subtype switch before that is ignored.
+    private String layoutLanguage, layoutType;
 
     @Override public void onCreate() {
         super.onCreate();
@@ -61,6 +64,7 @@ public final class HostInputMethod extends InputMethodService {
         android.util.Log.i("DroidloomIME", "start input restarting=" + restarting
                 + " editable=" + (editor.inputType != InputType.TYPE_NULL));
         super.onStartInput(editor, restarting);
+        followHostLayout();
         session++;
         composing = false;
         visibility.start(editor.inputType != InputType.TYPE_NULL, restarting);
@@ -132,7 +136,11 @@ public final class HostInputMethod extends InputMethodService {
     private void apply(JSONObject edit) {
         JSONObject layout = edit.optJSONObject("keyboard_layout");
         if (layout != null) {
-            followHostLayout(layout.optString("language"), layout.optString("type"));
+            String language = layout.optString("language"), type = layout.optString("type");
+            if (language.isEmpty() || language.length() > 35 || type.length() > 16) return;
+            layoutLanguage = language;
+            layoutType = type;
+            followHostLayout();
             return;
         }
         if (state == null || !state.optBoolean("active")
@@ -184,10 +192,13 @@ public final class HostInputMethod extends InputMethodService {
      * The host's keyboard layout, as a BCP 47 language tag and Android layout
      * type. Android picks the physical keyboard layout of the current input
      * method subtype's hint, so the host keyboard types as configured on the
-     * host and Android never asks. The subtype replaces the last one.
+     * host and Android never asks. The subtype replaces the last one. Until
+     * Android has attached this method, the switch is ignored: each editor
+     * start tries again while the current subtype differs.
      */
-    private void followHostLayout(String language, String type) {
-        if (language.isEmpty() || language.length() > 35 || type.length() > 16) return;
+    private void followHostLayout() {
+        final String language = layoutLanguage, type = layoutType;
+        if (language == null) return;
         InputMethodSubtype current = getSystemService(InputMethodManager.class)
                 .getCurrentInputMethodSubtype();
         ULocale locale = ULocale.forLanguageTag(language);

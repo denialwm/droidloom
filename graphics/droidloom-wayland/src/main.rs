@@ -2062,6 +2062,17 @@ impl App {
                     .with_task_density()
                     .with_task_parents()
                     .with_task_fullscreen();
+                // Only a compositor that reports its keyboard's height lets
+                // Android lay windows out around it.
+                let endpoint = if self
+                    .insets_manager
+                    .as_ref()
+                    .is_some_and(|manager| manager.version() >= 2)
+                {
+                    endpoint.with_task_keyboard_inset()
+                } else {
+                    endpoint
+                };
                 let endpoint = if self.idle_inhibit_manager.is_some() {
                     endpoint.with_keep_screen_on()
                 } else {
