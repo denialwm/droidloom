@@ -22,6 +22,7 @@ import android.os.Process;
 import android.os.SystemProperties;
 import android.os.SystemClock;
 import android.util.Slog;
+import android.view.WindowInsets;
 import java.util.ArrayList;
 import java.util.IdentityHashMap;
 import java.util.List;
@@ -62,7 +63,7 @@ final class DroidloomTaskBackend {
         final int id, user, display, parent;
         final long incarnation;
         final String owner;
-        final boolean ready, focused, hostFocused, keepScreenOn;
+        final boolean ready, focused, hostFocused, keepScreenOn, fullscreen;
         final Rect bounds;
         final IBinder inputToken;
         Snapshot(Task task, long incarnation, boolean hostFocused, boolean keepScreenOn,
@@ -78,6 +79,11 @@ final class DroidloomTaskBackend {
             focused = task.isFocused();
             this.hostFocused = hostFocused;
             this.keepScreenOn = keepScreenOn;
+            // The app hid the status bar, as a game does: the host shows the
+            // task's window fullscreen until the app shows the bar again.
+            // WindowState republishes the task when that request changes.
+            WindowState main = top == null ? null : top.findMainWindow();
+            fullscreen = main != null && !main.isRequestedVisible(WindowInsets.Type.statusBars());
             // As on Android, a task that does not cover the one it opened over,
             // such as a dialog, leaves that task running: the host gets it as
             // the window's parent. Only when that task's app started it, so a
@@ -92,7 +98,7 @@ final class DroidloomTaskBackend {
         }
         long[] publish(boolean activate) {
             return DroidloomTaskNative.registerTask(id, incarnation, user, display, owner, activate,
-                    keepScreenOn, parent);
+                    keepScreenOn, parent, fullscreen);
         }
         boolean sameInput(Snapshot other) {
             return other != null && incarnation == other.incarnation && display == other.display

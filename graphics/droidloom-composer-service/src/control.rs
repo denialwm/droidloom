@@ -448,6 +448,7 @@ impl TaskCoordinator {
                 activate,
                 keep_screen_on,
                 parent,
+                fullscreen,
             } => self.register_direct(
                 request_id,
                 package,
@@ -458,6 +459,7 @@ impl TaskCoordinator {
                 Some(FrameworkState {
                     keep_screen_on,
                     parent: (parent != 0).then_some(TaskId(parent)),
+                    fullscreen,
                 }),
             ),
             ControlRequest::Remove { request_id, object } => {
@@ -731,6 +733,9 @@ impl TaskCoordinator {
             let parent = framework.parent.and_then(|parent| self.direct_task_object(parent));
             self.sink
                 .set_parent(display, parent)
+                .map_err(|error| backend(error.to_string()))?;
+            self.sink
+                .set_fullscreen(display, framework.fullscreen)
                 .map_err(|error| backend(error.to_string()))?;
         }
         if activate {
@@ -1085,6 +1090,8 @@ struct FrameworkState {
     keep_screen_on: bool,
     /// The task it opened over and leaves running.
     parent: Option<TaskId>,
+    /// Its window asked to hide the status bar.
+    fullscreen: bool,
 }
 
 fn control_error(error: impl std::fmt::Display) -> ControlFailure {

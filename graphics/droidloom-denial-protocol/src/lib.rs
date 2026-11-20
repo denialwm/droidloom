@@ -20,7 +20,7 @@ pub const MAGIC: [u8; 4] = *b"DLOM";
 /// Protocol major implemented by this crate.
 pub const PROTOCOL_MAJOR: u16 = 1;
 /// Protocol minor implemented by this crate.
-pub const PROTOCOL_MINOR: u16 = 12;
+pub const PROTOCOL_MINOR: u16 = 13;
 /// Wire version retained by existing records, including initial negotiation.
 pub const BASE_PROTOCOL_MINOR: u16 = 3;
 /// Wire version introducing task activation.
@@ -80,6 +80,8 @@ pub mod capability {
     pub const TASK_DENSITY: u64 = 1 << 15;
     /// Android names the task a dialog-like task opened over.
     pub const TASK_PARENTS: u64 = 1 << 16;
+    /// Android tells the host when a task's window hides the status bar.
+    pub const TASK_FULLSCREEN: u64 = 1 << 17;
 
     /// Capabilities required for every protocol-v1 session.
     pub const REQUIRED_V1: u64 = TASK_WINDOWS
@@ -278,6 +280,15 @@ pub enum AndroidMessage {
         object: TaskObjectId,
         /// Parent task, or `None` when the task has none.
         parent: Option<TaskObjectId>,
+    },
+    /// The task's window hid the status bar, as an immersive game does: the
+    /// host shows the task fullscreen until it shows the bar again.
+    /// Requires negotiated `TASK_FULLSCREEN`.
+    SetFullscreen {
+        /// Owning task.
+        object: TaskObjectId,
+        /// Whether the task asks to be shown fullscreen.
+        fullscreen: bool,
     },
     /// Answer a host liveness probe.
     Pong {
@@ -1253,6 +1264,7 @@ const OP_BIND_INPUT_ROUTE: u16 = 0x0010;
 const OP_REQUEST_RENDER_TARGETS: u16 = 0x0011;
 const OP_SET_KEEP_SCREEN_ON: u16 = 0x0012;
 const OP_SET_PARENT: u16 = 0x0013;
+const OP_SET_FULLSCREEN: u16 = 0x0014;
 
 const OP_SERVER_HELLO: u16 = 0x8001;
 const OP_FORMAT_FEEDBACK: u16 = 0x8002;
@@ -1468,6 +1480,10 @@ pub fn encode_android(message: &AndroidMessage) -> Result<EncodedPacket, WireErr
             };
             payload.u64(parent);
             (OP_SET_PARENT, valid_object(*object)?, Vec::new())
+        }
+        AndroidMessage::SetFullscreen { object, fullscreen } => {
+            payload.u32(u32::from(*fullscreen));
+            (OP_SET_FULLSCREEN, valid_object(*object)?, Vec::new())
         }
         AndroidMessage::Pong { cookie } => {
             payload.u64(*cookie);
@@ -1721,6 +1737,23 @@ pub fn decode_android(
                 }
             };
             (AndroidMessage::SetParent { object, parent }, Vec::new())
+        }
+        OP_SET_FULLSCREEN => {
+            valid_object(object)?;
+            let fullscreen = match payload.u32()? {
+                0 => false,
+                1 => true,
+                value => {
+                    return Err(WireError::InvalidEnum {
+                        field: "fullscreen",
+                        value: u64::from(value),
+                    });
+                }
+            };
+            (
+                AndroidMessage::SetFullscreen { object, fullscreen },
+                Vec::new(),
+            )
         }
         OP_PONG => {
             require_connection(header.object)?;
@@ -2397,6 +2430,7 @@ fn finish_packet(
         OP_SET_KEEP_SCREEN_ON => 10,
         OP_DENSITY => 11,
         OP_SET_PARENT => 12,
+        OP_SET_FULLSCREEN => 13,
         _ => BASE_PROTOCOL_MINOR,
     };
     bytes.extend_from_slice(&minor.to_le_bytes());
@@ -2981,6 +3015,14 @@ mod tests {
             AndroidMessage::SetParent {
                 object: OBJECT,
                 parent: None,
+            },
+            AndroidMessage::SetFullscreen {
+                object: OBJECT,
+                fullscreen: true,
+            },
+            AndroidMessage::SetFullscreen {
+                object: OBJECT,
+                fullscreen: false,
             },
             AndroidMessage::Pong { cookie: 99 },
         ] {

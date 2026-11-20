@@ -2,15 +2,15 @@
 package com.android.server.wm;
 
 final class DroidloomTaskNative {
-    static final String BUILD_ABI = "DROIDLOOM_TASK_BACKEND_ABI=4;";
+    static final String BUILD_ABI = "DROIDLOOM_TASK_BACKEND_ABI=5;";
     static {
         System.loadLibrary("inputflinger");
-        if (version() != 4) throw new LinkageError(BUILD_ABI + " native ABI mismatch");
+        if (version() != 5) throw new LinkageError(BUILD_ABI + " native ABI mismatch");
     }
     private static native int version();
     static native long epoch();
     static native long[] registerTask(int id, long incarnation, int user, int display, String owner,
-            boolean activate, boolean keepScreenOn, int parent);
+            boolean activate, boolean keepScreenOn, int parent, boolean fullscreen);
     static native boolean retireTask(int id, long incarnation);
     // serial, task ID, incarnation, Android display, kind, width, height.
     static native long[] nextCommand();

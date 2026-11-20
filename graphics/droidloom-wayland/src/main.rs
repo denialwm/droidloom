@@ -299,6 +299,9 @@ struct TaskWindow {
     /// Held while a shown Android window has `FLAG_KEEP_SCREEN_ON`. Denial
     /// keeps its displays on only while this window is visible.
     idle_inhibitor: Option<ZwpIdleInhibitorV1>,
+    /// The Android window hid the status bar, and the toplevel asked to be
+    /// fullscreen. The compositor decides; this only avoids repeating.
+    fullscreen: bool,
     unmap_requested: bool,
     closing: bool,
 }
@@ -926,6 +929,7 @@ impl App {
                 suspended: false,
                 hide_due: None,
                 idle_inhibitor: None,
+                fullscreen: false,
                 unmap_requested: false,
                 closing: false,
             },
@@ -1886,6 +1890,25 @@ impl App {
                     window.xdg_toplevel().set_parent(parent.as_ref());
                 }
             }
+            EndpointAction::SetFullscreen { object, fullscreen } => {
+                // An immersive Android app hid its status bar: ask for the
+                // whole output, as a native fullscreen app would, and give it
+                // back when the app shows the bar again.
+                let task = self
+                    .tasks
+                    .get_mut(&object)
+                    .ok_or(PresenterError::UnknownTask(object))?;
+                if task.fullscreen != fullscreen
+                    && let Some(window) = task.window.as_ref().filter(|_| !task.closing)
+                {
+                    if fullscreen {
+                        window.set_fullscreen(None);
+                    } else {
+                        window.unset_fullscreen();
+                    }
+                    task.fullscreen = fullscreen;
+                }
+            }
             EndpointAction::RequestActivation { object } => {
                 if self.focused != Some(object)
                     && let Some(task) = self
@@ -1974,7 +1997,8 @@ impl App {
                     .with_lazy_render_targets()
                     .with_scene_presentation()
                     .with_task_density()
-                    .with_task_parents();
+                    .with_task_parents()
+                    .with_task_fullscreen();
                 let endpoint = if self.idle_inhibit_manager.is_some() {
                     endpoint.with_keep_screen_on()
                 } else {

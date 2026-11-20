@@ -100,3 +100,16 @@
  
              if (mParent != null) {
                  if (mParent instanceof Task) {
+--- a/services/core/java/com/android/server/wm/WindowState.java
++++ b/services/core/java/com/android/server/wm/WindowState.java
+@@ -843,6 +843,10 @@
+         if (mRequestedVisibleTypes != requestedVisibleTypes) {
+             final int changedTypes = mRequestedVisibleTypes ^ requestedVisibleTypes;
+             mRequestedVisibleTypes = requestedVisibleTypes;
++            final DroidloomTaskBackend tasks = mWmService.mAtmService.mDroidloomTasks;
++            if (tasks != null && (changedTypes & WindowInsets.Type.statusBars()) != 0) {
++                tasks.schedule();
++            }
+             return changedTypes;
+         }
+         return 0;

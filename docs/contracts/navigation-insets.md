@@ -38,6 +38,10 @@ current versus maximum metrics, resizing and orientation changes. The existing
 size-compatibility scaling still runs afterward. Android maps mandatory gestures
 into system gestures as well. These sources have no surface or control leash,
 so an immersive app cannot hide the host bars through InsetsController.
+Its request still reaches the host: a task whose main window asks to hide the
+status bar is shown with `xdg_toplevel` fullscreen
+([native app integration](../native-app-integration.md)), and the compositor
+may hide its own bar over it.
 Keyboard and cutout sources retain their own policy. No tappable
 inset or Android system-bar window is created. Drawing the bars and
 handling gestures remain host responsibilities.

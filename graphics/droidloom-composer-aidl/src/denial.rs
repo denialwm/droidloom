@@ -115,6 +115,7 @@ pub struct DenialPresentationSink {
     lazy_render_targets: bool,
     keep_screen_on: bool,
     task_parents: bool,
+    task_fullscreen: bool,
 }
 
 impl DenialPresentationSink {
@@ -129,6 +130,7 @@ impl DenialPresentationSink {
             lazy_render_targets: false,
             keep_screen_on: false,
             task_parents: false,
+            task_fullscreen: false,
         }
     }
 
@@ -158,6 +160,43 @@ impl DenialPresentationSink {
     pub fn with_task_parents(mut self, enabled: bool) -> Self {
         self.task_parents = enabled;
         self
+    }
+
+    /// Record whether this host shows a task fullscreen when it asks.
+    #[must_use]
+    pub fn with_task_fullscreen(mut self, enabled: bool) -> Self {
+        self.task_fullscreen = enabled;
+        self
+    }
+
+    /// Tell the host whether the task's window asked to hide the status bar,
+    /// as an immersive game does. Only changes are sent.
+    ///
+    /// # Errors
+    /// Returns unknown-display or transport errors; older hosts remain usable.
+    pub fn set_fullscreen(
+        &self,
+        display: DisplayId,
+        fullscreen: bool,
+    ) -> Result<(), DenialSinkError> {
+        if !self.task_fullscreen {
+            return Ok(());
+        }
+        let mut tasks = self.lock_tasks()?;
+        let channel = tasks
+            .get_mut(&display)
+            .ok_or(DenialSinkError::UnknownDisplay(display))?;
+        if channel.fullscreen != fullscreen {
+            self.socket.send_android(
+                &AndroidMessage::SetFullscreen {
+                    object: channel.binding.object(),
+                    fullscreen,
+                },
+                &[],
+            )?;
+            channel.fullscreen = fullscreen;
+        }
+        Ok(())
     }
 
     /// Tell the host which task this one opened over and leaves running.
@@ -290,6 +329,7 @@ impl DenialPresentationSink {
                 content_opaque: None,
                 keep_screen_on: false,
                 parent: None,
+                fullscreen: false,
                 surfaceflinger_present_fence: None,
                 headless_completion: None,
                 android_display_extent: None,
@@ -1086,6 +1126,8 @@ struct TaskChannel {
     keep_screen_on: bool,
     /// Last parent task sent to the host for this task.
     parent: Option<TaskObjectId>,
+    /// Last fullscreen request sent to the host for this task.
+    fullscreen: bool,
     /// SurfaceFlinger's GPU completion fence awaiting Composer3 present reply.
     surfaceflinger_present_fence: Option<std::os::fd::OwnedFd>,
     /// Dedicated completion timeline and last point for frames without GPU work.

@@ -68,7 +68,7 @@ coalesces obsolete sizes/focus transitions and retains commands until acknowledg
 Close supersedes its window's pending work; reconnects retry unacknowledged
 commands against their original object identity. Idle subscriptions sleep until
 an event. Host-originated focus changes do not echo activation requests back to
-the compositor. Paired task-backend ABI 4 metadata rejects old/new mixtures.
+the compositor. Paired task-backend ABI 5 metadata rejects old/new mixtures.
 
 Keep screen on follows Android: a shown window with `FLAG_KEEP_SCREEN_ON` keeps
 the screen on, here per task. Surface placement of the default display reports
@@ -91,6 +91,15 @@ can hand its answer back, as Play Protect's confirmation does when it asks
 for the device credential. A task with a parent draws its layers over a clear
 root instead of the dark backing, so a host that draws the parent beneath it
 shows the app through the dialog's dim.
+
+An app that hides the status bar, as an immersive game does with
+`WindowInsetsController.hide(statusBars())` or `FLAG_FULLSCREEN`, asks for the
+whole screen. The task's main window carries that request to system_server,
+which republishes the task when it changes (task-control 3.6). Composer sends
+`SetFullscreen` (protocol 1.13, capability `TASK_FULLSCREEN`), and the
+presenter calls `xdg_toplevel.set_fullscreen`, or `unset_fullscreen` once the
+app shows the bar again. The compositor decides what fullscreen means there,
+such as hiding its own status bar over the window.
 
 Task destruction has two phases: request host window destruction once, retaining
 the binding to route the displayed frame's final buffer release; then remove the

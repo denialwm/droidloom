@@ -161,6 +161,14 @@ pub enum EndpointAction {
         /// Existing parent task, or `None`.
         parent: Option<TaskObjectId>,
     },
+    /// The task's window hid the status bar: show it fullscreen until it
+    /// shows the bar again.
+    SetFullscreen {
+        /// Existing task object.
+        object: TaskObjectId,
+        /// Whether the task asks to be shown fullscreen.
+        fullscreen: bool,
+    },
     /// Android answered a host liveness probe.
     Pong {
         /// Cookie from the corresponding `Ping`.
@@ -346,6 +354,7 @@ pub struct DenialEndpoint {
     keep_screen_on: bool,
     task_density: bool,
     task_parents: bool,
+    task_fullscreen: bool,
     tasks: BTreeMap<TaskObjectId, TaskEndpoint>,
 }
 
@@ -372,6 +381,7 @@ impl DenialEndpoint {
             keep_screen_on: false,
             task_density: false,
             task_parents: false,
+            task_fullscreen: false,
             tasks: BTreeMap::new(),
         }
     }
@@ -576,6 +586,13 @@ impl DenialEndpoint {
                 // A parent that closed meanwhile is no parent.
                 let parent = parent.filter(|parent| self.tasks.contains_key(parent));
                 Ok(EndpointAction::SetParent { object, parent })
+            }
+            AndroidMessage::SetFullscreen { object, fullscreen } => {
+                if !self.task_fullscreen {
+                    return Err(EndpointError::IncompatibleClient);
+                }
+                self.task(object)?;
+                Ok(EndpointAction::SetFullscreen { object, fullscreen })
             }
             AndroidMessage::Pong { cookie } => Ok(EndpointAction::Pong { cookie }),
         }
@@ -902,6 +919,12 @@ impl DenialEndpoint {
         self
     }
 
+    /// Opt in when the host shows a task fullscreen when its window asks.
+    pub fn with_task_fullscreen(mut self) -> Self {
+        self.task_fullscreen = true;
+        self
+    }
+
     /// Opt in when the host gives each task its output's density.
     pub fn with_task_density(mut self) -> Self {
         self.task_density = true;
@@ -1073,10 +1096,13 @@ impl DenialEndpoint {
         self.keep_screen_on &= capabilities & capability::KEEP_SCREEN_ON != 0;
         self.task_density &= capabilities & capability::TASK_DENSITY != 0;
         self.task_parents &= capabilities & capability::TASK_PARENTS != 0;
+        self.task_fullscreen &= capabilities & capability::TASK_FULLSCREEN != 0;
         self.socket.send_denial(&DenialMessage::ServerHello {
             major: PROTOCOL_MAJOR,
-            minor: if self.task_parents {
+            minor: if self.task_fullscreen {
                 PROTOCOL_MINOR
+            } else if self.task_parents {
+                12
             } else if self.task_density {
                 11
             } else if self.keep_screen_on {
@@ -1123,6 +1149,11 @@ impl DenialEndpoint {
                 }
                 | if self.task_parents {
                     capability::TASK_PARENTS
+                } else {
+                    0
+                }
+                | if self.task_fullscreen {
+                    capability::TASK_FULLSCREEN
                 } else {
                     0
                 }
@@ -2012,6 +2043,75 @@ mod tests {
                             panic!("expected a parent");
                         };
                         assert_eq!(actual, expected);
+                    } else {
+                        assert!(matches!(
+                            endpoint.receive_action(),
+                            Err(EndpointError::IncompatibleClient)
+                        ));
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn fullscreen_flows_only_when_negotiated() {
+        for host in [false, true] {
+            for client in [false, true] {
+                let (android, mut endpoint) = pair();
+                if host {
+                    endpoint = endpoint.with_task_fullscreen();
+                }
+                android
+                    .send_android(
+                        &AndroidMessage::ClientHello {
+                            min_major: 1,
+                            max_major: 1,
+                            capabilities: capability::REQUIRED_V1
+                                | if client {
+                                    capability::TASK_FULLSCREEN
+                                } else {
+                                    0
+                                },
+                        },
+                        &[],
+                    )
+                    .unwrap();
+                endpoint.receive_action().unwrap();
+                let DenialMessage::ServerHello {
+                    minor,
+                    capabilities,
+                    ..
+                } = android.receive_denial().unwrap().message
+                else {
+                    panic!("hello");
+                };
+                let supported = host && client;
+                assert_eq!(capabilities & capability::TASK_FULLSCREEN != 0, supported);
+                assert_eq!(minor, if supported { PROTOCOL_MINOR } else { 6 });
+                let object = TaskObjectId(1);
+                android
+                    .send_android(
+                        &AndroidMessage::CreateTask {
+                            object,
+                            display: AndroidDisplayId(1),
+                            package: "org.example.app".into(),
+                        },
+                        &[],
+                    )
+                    .unwrap();
+                endpoint.receive_action().unwrap();
+                for fullscreen in [true, false] {
+                    android
+                        .send_android(&AndroidMessage::SetFullscreen { object, fullscreen }, &[])
+                        .unwrap();
+                    if supported {
+                        assert!(matches!(
+                            endpoint.receive_action().unwrap(),
+                            EndpointAction::SetFullscreen { object: actual, fullscreen: wanted }
+                                if actual == object && wanted == fullscreen
+                        ));
                     } else {
                         assert!(matches!(
                             endpoint.receive_action(),

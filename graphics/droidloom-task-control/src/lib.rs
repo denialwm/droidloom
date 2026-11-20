@@ -18,7 +18,7 @@ pub const MAGIC: [u8; 4] = *b"DLTC";
 /// Supported protocol major.
 pub const PROTOCOL_MAJOR: u16 = 3;
 /// Supported protocol minor.
-pub const PROTOCOL_MINOR: u16 = 5;
+pub const PROTOCOL_MINOR: u16 = 6;
 /// Fixed bytes before the opcode-specific payload.
 pub const HEADER_BYTES: usize = 24;
 /// Maximum complete task-control record.
@@ -67,6 +67,8 @@ pub enum ControlRequest {
         /// The task this one opened over and leaves running, such as the app
         /// behind a dialog; 0 for none (protocol 3.5).
         parent: u64,
+        /// The task's window asked to hide the status bar (protocol 3.6).
+        fullscreen: bool,
     },
     /// Become the framework's host-window command receiver (protocol 3.2).
     Subscribe {
@@ -279,6 +281,7 @@ pub fn encode_request(request: &ControlRequest) -> Result<Vec<u8>, CodecError> {
             activate,
             keep_screen_on,
             parent,
+            fullscreen,
         } => {
             nonzero("request identity", *request_id)?;
             nonzero("task identity", *task)?;
@@ -293,7 +296,11 @@ pub fn encode_request(request: &ControlRequest) -> Result<Vec<u8>, CodecError> {
             payload.u64(*task);
             payload.u32(*android_display);
             payload.u64(*incarnation);
-            payload.u32(u32::from(*activate) | u32::from(*keep_screen_on) << 1);
+            payload.u32(
+                u32::from(*activate)
+                    | u32::from(*keep_screen_on) << 1
+                    | u32::from(*fullscreen) << 2,
+            );
             payload.u64(*parent);
             (OP_PUBLISH_FRAMEWORK, *request_id)
         }
@@ -468,7 +475,7 @@ pub fn decode_request(record: &[u8]) -> Result<ControlRequest, CodecError> {
             };
             // Bit 0 activates; framework publications add bit 1, keep screen on.
             let flags = payload.u32()?;
-            let known = if incarnation.is_some() { 0b11 } else { 0b1 };
+            let known = if incarnation.is_some() { 0b111 } else { 0b1 };
             if flags & !known != 0 {
                 return Err(CodecError::InvalidValue("activation flags"));
             }
@@ -487,6 +494,7 @@ pub fn decode_request(record: &[u8]) -> Result<ControlRequest, CodecError> {
                     activate,
                     keep_screen_on: flags & 0b10 != 0,
                     parent,
+                    fullscreen: flags & 0b100 != 0,
                 }
             } else {
                 ControlRequest::PublishDirect {
@@ -1021,12 +1029,34 @@ mod tests {
                 activate,
                 keep_screen_on,
                 parent: 0,
+                fullscreen: false,
             };
             let mut bytes = super::encode_request(&request).unwrap();
             assert_eq!(super::decode_request(&bytes).unwrap(), request);
             let flags = bytes.len() - 12;
-            bytes[flags..flags + 4].copy_from_slice(&4_u32.to_le_bytes());
+            bytes[flags..flags + 4].copy_from_slice(&8_u32.to_le_bytes());
             assert!(super::decode_request(&bytes).is_err());
+        }
+    }
+
+    #[test]
+    fn framework_publication_carries_fullscreen() {
+        for (keep_screen_on, fullscreen) in
+            [(false, false), (false, true), (true, false), (true, true)]
+        {
+            let request = super::ControlRequest::PublishFramework {
+                request_id: 7,
+                package: "org.example.app".into(),
+                task: 42,
+                android_display: 0,
+                incarnation: 9,
+                activate: false,
+                keep_screen_on,
+                parent: 3,
+                fullscreen,
+            };
+            let bytes = super::encode_request(&request).unwrap();
+            assert_eq!(super::decode_request(&bytes).unwrap(), request);
         }
     }
 
@@ -1041,6 +1071,7 @@ mod tests {
             activate: true,
             keep_screen_on: false,
             parent,
+            fullscreen: false,
         };
         for parent in [0, 7] {
             let bytes = super::encode_request(&request(parent)).unwrap();
@@ -1085,6 +1116,7 @@ mod tests {
                 activate: false,
                 keep_screen_on: true,
                 parent: 7,
+                fullscreen: true,
             },
             ControlRequest::Hello {
                 min_major: 1,

@@ -234,6 +234,10 @@ every shown `FLAG_KEEP_SCREEN_ON` window of the default display to the backend
 during surface placement. The task's publication carries the flag, and the host
 keeps its displays on while that task's window is visible.
 
+Its `WindowState` hunk republishes a task when a window's requested status bar
+visibility changes. The publication says whether the main window of the task's
+top activity hid the status bar, and the host shows that task fullscreen.
+
 The bounded command queue coalesces resize, focus and hide/show updates, preserves the
 existing 80 ms resize debounce and retains each command until acknowledged.
 Close invalidates its window's pending resize/focus operations. Reconnects can
@@ -254,7 +258,7 @@ When testing over an older installation, also build and activate the matching
 required capabilities, including display power; a stale presenter can reject
 the rebuilt Composer before Android boots. Restart Droidloom after selecting
 the matching components.
-Bundle checks require `DROIDLOOM_TASK_BACKEND_ABI=4;` in services, InputFlinger,
+Bundle checks require `DROIDLOOM_TASK_BACKEND_ABI=5;` in services, InputFlinger,
 the launch client and Composer. Runtime acceptance must cover cold/reused
 launches, aliases/trampolines, permission/authentication handoffs, Play Store
 Open, deep links, shares, task removal/reuse and Composer reconnects. Unit and
