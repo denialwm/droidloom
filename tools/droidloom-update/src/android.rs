@@ -762,11 +762,12 @@ pub fn build(
     source: &Path,
     out: &Path,
     work: &Path,
+    inputs: &Path,
     product: &str,
     jobs: usize,
 ) -> Result<()> {
     let targets = full_targets(product);
-    build_targets(repo, source, out, work, product, jobs, &targets)
+    build_targets(repo, source, out, work, inputs, product, jobs, &targets)
 }
 fn full_targets(product: &str) -> Vec<&'static str> {
     TARGETS
@@ -786,11 +787,16 @@ const MESA_PATCHES: &[&str] = &[
     "0024-mesa-ir3-cache-source-identity.patch",
     "0028-mesa-android-app-shader-cache.patch",
 ];
+/// `work` holds what every product shares (the source projection journal,
+/// Mesa's source and Python modules, ccache and the host Mesa tools);
+/// `inputs` holds what the product's own inputs were prepared into.
+#[allow(clippy::too_many_arguments)]
 pub fn build_targets(
     repo: &Path,
     source: &Path,
     out: &Path,
     work: &Path,
+    inputs: &Path,
     product: &str,
     jobs: usize,
     targets: &[&str],
@@ -919,7 +925,7 @@ pub fn build_targets(
     crate::native_bridge::prepare_build(
         source,
         &vendor,
-        work,
+        inputs,
         native_bridge_source.is_some(),
         &mut p,
     )?;
@@ -957,10 +963,10 @@ pub fn build_targets(
     )?;
     p.put(
         &vendor.join("android/prebuilts/framework-res.apk"),
-        fs::read(work.join("framework-res.apk"))?,
+        fs::read(inputs.join("framework-res.apk"))?,
     )?;
     let board = vendor.join(format!("android/device/{product}/BoardConfig.mk"));
-    let native = work.join("mesa-native.ini");
+    let native = inputs.join("mesa-native.ini");
     let mesa_tools = work.join(if product == "droidloom_arm64" {
         "mesa-panfrost-tools"
     } else {
@@ -992,17 +998,22 @@ pub fn build_targets(
             ),
     )?;
     // Generate the init projection from the pinned source with the same checked patch.
-    let init = tempfile::Builder::new().prefix("init-").tempdir_in(work)?;
+    let init = tempfile::Builder::new()
+        .prefix("init-")
+        .tempdir_in(inputs)?;
     copy(
         &source.join("system/core/rootdir/init.rc"),
         &init.path().join("rootdir/init.rc"),
     )?;
     run(Command::new("git")
-        .env("GIT_CEILING_DIRECTORIES", work)
+        .env("GIT_CEILING_DIRECTORIES", inputs)
         .current_dir(init.path())
         .arg("apply")
         .arg(repo.join("android/apex-compat/0001-droidloom-classpath-projection.patch")))?;
-    copy(&init.path().join("rootdir/init.rc"), &work.join("init.rc"))?;
+    copy(
+        &init.path().join("rootdir/init.rc"),
+        &inputs.join("init.rc"),
+    )?;
     p.stabilize_all()?;
     bootstrap(source, out)?;
     copy(

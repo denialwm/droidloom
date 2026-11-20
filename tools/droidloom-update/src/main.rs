@@ -355,16 +355,19 @@ fn execute(args: Args) -> Result<()> {
             &repo,
             &work,
             &work,
-            &repo.join(if product == "droidloom_arm64" {
-                "android/manifest/source-lock.json"
-            } else {
-                "android/manifest/source-lock-x86_64.json"
-            }),
+            &assemble::source_lock(
+                &repo,
+                if product == "droidloom_arm64" {
+                    "aarch64"
+                } else {
+                    "x86_64"
+                },
+            ),
         )?;
         if product == "droidloom_arm64" {
             assemble::mesa_tools(&work, jobs, true)?;
         }
-        return android::build(&repo, &source, &out, &work, product, jobs);
+        return android::build(&repo, &source, &out, &work, &work, product, jobs);
     }
     if matches!(args.command, Some(Action::FrameworkBuild { .. })) {
         let targets: &[&str] = if matches!(
@@ -383,13 +386,14 @@ fn execute(args: Args) -> Result<()> {
         } else {
             &["services", "libinputflinger"]
         };
-        return android::build_targets(&repo, &source, &out, &work, product, jobs, targets);
+        return android::build_targets(&repo, &source, &out, &work, &work, product, jobs, targets);
     }
     if matches!(args.command, Some(Action::AudioBuild { .. })) {
         return android::build_targets(
             &repo,
             &source,
             &out,
+            &work,
             &work,
             product,
             jobs,
@@ -401,6 +405,7 @@ fn execute(args: Args) -> Result<()> {
             &repo,
             &source,
             &out,
+            &work,
             &work,
             product,
             jobs,
@@ -459,9 +464,15 @@ fn execute(args: Args) -> Result<()> {
             .arg(uid.to_string()))?;
     }
     let base = assemble::prepare_inputs(&repo, &work, arch)?;
+    assemble::prepare_mesa(
+        &repo,
+        &repo.join(".work"),
+        &work,
+        &assemble::source_lock(&repo, arch),
+    )?;
     python::prepare(&repo, &work)?;
     assemble::mesa_tools(&work, jobs, false)?;
-    android::build(&repo, &source, &out, &work, product, jobs)?;
+    android::build(&repo, &source, &out, &work, &work, product, jobs)?;
     let staging = tempfile::Builder::new()
         .prefix("bundle-")
         .tempdir_in(&work)?;

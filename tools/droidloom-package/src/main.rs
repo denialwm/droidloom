@@ -384,15 +384,9 @@ fn build(
     }
     let work = build_workspace(&repo)?;
     fs::create_dir_all(&work)?;
-    let lock = fs::OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .write(true)
-        .open(work.join("build.lock"))?;
-    if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
-        return Err("another Droidloom package build is already using this checkout".into());
-    }
-    let snapshot = work.join("source");
+    // One build per architecture; x86_64 and aarch64 may build together.
+    let _lock = lock(&work, architecture, false)?;
+    let snapshot = work.join(format!("source-{}", architecture.name()));
     let baseline = if components.is_empty() {
         None
     } else {
@@ -467,27 +461,31 @@ fn build(
     let timestamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)?
         .as_secs();
-    let log_path = work.join(format!("build-{timestamp}.log"));
+    let log_path = work.join(format!("build-{}-{timestamp}.log", architecture.name()));
     let log = fs::OpenOptions::new()
         .create_new(true)
         .write(true)
         .open(&log_path)?;
     eprintln!("Build log: {}", log_path.display());
-    run_logged(
-        podman(&work)
-            .args([
-                "build",
-                "--tag",
-                "localhost/droidloom-arch-builder",
-                "--file",
-            ])
-            .arg(repo.join("packaging/arch/Containerfile"))
-            .arg(repo.join("packaging/arch")),
-        &log,
-    )?;
-    // This storage belongs only to this checkout's package workflow. Drop
-    // superseded builder layers so dependency fixes do not fill the host disk.
-    run(podman(&work).args(["image", "prune", "--force"]))?;
+    {
+        // The other architecture's build may update the builder too.
+        let _image = wait_for(&work.join("builder-image.lock"))?;
+        run_logged(
+            podman(&work)
+                .args([
+                    "build",
+                    "--tag",
+                    "localhost/droidloom-arch-builder",
+                    "--file",
+                ])
+                .arg(repo.join("packaging/arch/Containerfile"))
+                .arg(repo.join("packaging/arch")),
+            &log,
+        )?;
+        // This storage belongs only to this checkout's package workflow. Drop
+        // superseded builder layers so dependency fixes do not fill the host disk.
+        run(podman(&work).args(["image", "prune", "--force"]))?;
+    }
     let published = format!("published-base-{}.json", architecture.name());
     base::fetch_published(architecture.name(), &cache.join(&published))?;
     let uid = unsafe { libc::getuid() };
@@ -644,23 +642,20 @@ fn candidate(
         .ok_or("payload is not a candidate")?;
     fs::create_dir_all(destination)?;
     let destination = destination.canonicalize()?;
-    // The builder's makepkg folder is the package build's too.
-    let lock = fs::OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .write(true)
-        .open(work.join("build.lock"))?;
-    if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX) } != 0 {
-        return Err(std::io::Error::last_os_error().into());
-    }
+    // The builder's makepkg folder for this architecture is the package
+    // build's too.
+    let _lock = lock(&work, architecture, true)?;
     let image = "localhost/droidloom-arch-builder";
-    match podman(&work).args(["image", "exists", image]).status()?.code() {
-        Some(0) => {}
-        Some(1) => run(podman(&work)
-            .args(["build", "--tag", image, "--file"])
-            .arg(repo.join("packaging/arch/Containerfile"))
-            .arg(repo.join("packaging/arch")))?,
-        _ => return Err("cannot access rootless Podman package storage".into()),
+    {
+        let _image = wait_for(&work.join("builder-image.lock"))?;
+        match podman(&work).args(["image", "exists", image]).status()?.code() {
+            Some(0) => {}
+            Some(1) => run(podman(&work)
+                .args(["build", "--tag", image, "--file"])
+                .arg(repo.join("packaging/arch/Containerfile"))
+                .arg(repo.join("packaging/arch")))?,
+            _ => return Err("cannot access rootless Podman package storage".into()),
+        }
     }
     let published = format!("published-base-{}.json", architecture.name());
     base::fetch_published(architecture.name(), &work.join("build").join(&published))?;
@@ -706,6 +701,42 @@ fn candidate(
         ]))?;
     println!("Candidate packages in {}", destination.display());
     Ok(())
+}
+/// The lock of one architecture's package build in `work`: a build fails
+/// while another of the same architecture runs, a candidate waits for it.
+fn lock(work: &Path, architecture: Architecture, wait: bool) -> Result<fs::File> {
+    let file = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(work.join(format!("build-{}.lock", architecture.name())))?;
+    let mode = if wait {
+        libc::LOCK_EX
+    } else {
+        libc::LOCK_EX | libc::LOCK_NB
+    };
+    if unsafe { libc::flock(file.as_raw_fd(), mode) } != 0 {
+        if wait {
+            return Err(std::io::Error::last_os_error().into());
+        }
+        return Err(format!(
+            "another Droidloom {} package build is already using this checkout",
+            architecture.name()
+        )
+        .into());
+    }
+    Ok(file)
+}
+fn wait_for(path: &Path) -> Result<fs::File> {
+    let file = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(path)?;
+    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } != 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    Ok(file)
 }
 fn quote_path(path: &Path) -> String {
     format!("'{}'", path.to_string_lossy().replace('\'', "'\\''"))
@@ -753,7 +784,8 @@ fn in_container(
     let repo = Path::new("/source");
     let work = Path::new("/build");
     let version = Version::read(repo, architecture)?;
-    let packaging = work.join("makepkg");
+    // The Android build shares /build; makepkg's folder is the architecture's.
+    let packaging = work.join(architecture.name()).join("makepkg");
     fs::create_dir_all(&packaging)?;
     remove_staging(&packaging.join("src/payload"))?;
     remove_staging(&packaging.join("pkg"))?;

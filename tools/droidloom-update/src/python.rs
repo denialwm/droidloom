@@ -29,10 +29,17 @@ fn check_paths(list: &str) -> Result<()> {
     }
     Ok(())
 }
+/// Prepares the locked modules in `work/python`, once per lock: builds of
+/// both architectures read them, and Mesa's makefile names the path.
 pub fn prepare(repo: &Path, work: &Path) -> Result<()> {
-    let lock: LockFile = serde_json::from_slice(&fs::read(
-        repo.join("android/manifest/build-python-lock.json"),
-    )?)?;
+    let bytes = fs::read(repo.join("android/manifest/build-python-lock.json"))?;
+    let marker = work.join("python.lock-sha256");
+    let identity = sha256_hex(&bytes);
+    let destination = work.join("python");
+    if destination.is_dir() && fs::read_to_string(&marker).ok().as_deref() == Some(&identity) {
+        return Ok(());
+    }
+    let lock: LockFile = serde_json::from_slice(&bytes)?;
     if lock.schema != 1 {
         return fail("unsupported Python dependency lock");
     }
@@ -81,10 +88,10 @@ pub fn prepare(repo: &Path, work: &Path) -> Result<()> {
                 .arg(&libraries))?;
         }
     }
-    let destination = work.join("python");
     if destination.exists() {
         fs::remove_dir_all(&destination)?;
     }
     fs::rename(libraries, destination)?;
+    write(&marker, identity)?;
     Ok(())
 }

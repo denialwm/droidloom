@@ -166,6 +166,14 @@ pub struct Lock {
 }
 impl Lock {
     pub fn acquire(path: &Path) -> Result<Self> {
+        Self::take(path, None)
+    }
+    /// Waits for the holder to finish instead of failing, naming `holder`
+    /// once while it waits.
+    pub fn wait(path: &Path, holder: &str) -> Result<Self> {
+        Self::take(path, Some(holder))
+    }
+    fn take(path: &Path, waiting_for: Option<&str>) -> Result<Self> {
         fs::create_dir_all(path.parent().unwrap())?;
         let mut file = fs::OpenOptions::new()
             .create(true)
@@ -176,7 +184,14 @@ impl Lock {
         use std::os::fd::AsRawFd;
         // SAFETY: the owned file descriptor stays open for the lock lifetime.
         if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
-            return fail("another Droidloom update is running");
+            let Some(holder) = waiting_for else {
+                return fail("another Droidloom update is running");
+            };
+            eprintln!("Waiting for {holder}");
+            // SAFETY: as above.
+            if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } != 0 {
+                return Err(std::io::Error::last_os_error().into());
+            }
         }
         // Keep exclusion alive in build children if the updater is killed. Recovery
         // cannot restore source files while an orphaned compiler is reading them.

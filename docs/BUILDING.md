@@ -651,7 +651,10 @@ to record their inputs. Keep that baseline's archives, summary and
 `component-inputs.json` together. Unselected source edits are not included.
 
 Rerun the same build command to reuse caches. Downloads, sparse AOSP sources and
-outputs live under `.work/arch`; build attempts save `build-*.log` there.
+outputs live under `.work/arch`; build attempts save `build-ARCH-*.log` there.
+The x86_64 and aarch64 builds may run at the same time, as shipping runs them:
+each prepares its inputs, host programs and packages on its own, and they take
+turns for the Android compile, which shares one source tree and Soong output.
 `build --clean` removes this workflow's compiler outputs while retaining downloads.
 An existing sparse AOSP source checkout can seed a build with
 `build --source-cache /path/to/checkout`; installed binaries are not build inputs.

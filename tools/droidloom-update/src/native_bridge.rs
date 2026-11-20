@@ -47,7 +47,7 @@ const HOST_API_LIBRARIES: &[&str] = &[
 pub fn prepare_build(
     source: &Path,
     vendor: &Path,
-    work: &Path,
+    inputs: &Path,
     links: bool,
     projection: &mut crate::android::Projection,
 ) -> Result<()> {
@@ -75,17 +75,17 @@ cc_library_headers {
     let mut blueprint =
         String::from("package { default_applicable_licenses: [\"Android-Apache-2.0\"], }\n");
     for name in HOST_API_LIBRARIES {
-        let library = work.join(format!("base-system/system/lib64/{name}.so"));
+        let library = inputs.join(format!("base-system/system/lib64/{name}.so"));
         let apex_name = match *name {
             "libneuralnetworks" => Some("com.android.neuralnetworks"),
             "libnativehelper" => Some("com.android.art"),
             _ => None,
         };
         if let Some(apex_name) = apex_name {
-            let apex = work.join(format!("base-system/system/apex/{apex_name}.apex"));
+            let apex = inputs.join(format!("base-system/system/apex/{apex_name}.apex"));
             let scratch = tempfile::Builder::new()
                 .prefix("native-bridge-apex-")
-                .tempdir_in(work)?;
+                .tempdir_in(inputs)?;
             let payload = scratch.path().join("payload.img");
             let extracted = scratch.path().join(format!("{name}.so"));
             run(Command::new("unzip")

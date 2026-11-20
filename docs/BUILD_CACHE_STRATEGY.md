@@ -5,14 +5,15 @@ Droidloom keeps one persistent compiler workspace per build machine:
 ```text
 .work/arch/
 ├── containers/          rootless Podman storage for the package builder
-├── source/              temporary repository snapshot mounted at /source
+├── source-ARCH/         temporary repository snapshot mounted at /source
 └── build/               the shared compiler workspace mounted at /build
     ├── aosp-source/     one pinned sparse AOSP checkout
     ├── android-out/     one Soong output tree
     ├── cargo/           one Cargo target directory
     ├── ccache/          native compiler cache
-    ├── base-system/     prepared Android image inputs
-    └── mesa-*/          prepared Mesa sources and tools
+    ├── mesa-*/          prepared Mesa sources and tools
+    └── ARCH/            what one architecture prepares for itself: the
+                         extracted base system, init.rc, its makepkg folder
 ```
 
 The package build, standalone full build, and focused native-bridge/cross build
@@ -23,7 +24,9 @@ not a second cache created beside the default one.
 
 Normal and cross builds share the source checkout, Soong intermediates and host
 compiler caches. The workspace lock prevents them from modifying that state at
-the same time. Do not run two build modes concurrently.
+the same time. Do not run two build modes concurrently. The package builds of
+the two architectures are the exception: each holds the workspace lock only
+while it prepares Mesa and compiles Android, and does the rest beside the other.
 
 ## What is persistent
 

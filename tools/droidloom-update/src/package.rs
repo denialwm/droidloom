@@ -57,21 +57,31 @@ pub fn stage(
     {
         return fail("package destination must be a child of its private work directory");
     }
-    let _lock = Lock::acquire(&work.join("package-build.lock"))?;
+    // Each architecture prepares its inputs, host programs and payload in a
+    // folder of its own, so x86_64 and aarch64 build side by side. The
+    // Android source tree, Soong's output and Mesa's source are shared: one
+    // architecture at a time uses them, under the shared lock.
+    let inputs = work.join(arch);
+    let _lock = Lock::acquire(&inputs.join("package-build.lock"))?;
+    let shared_lock = work.join("package-build.lock");
+    let holder = "the other architecture's Android build";
+    // --clean removes shared outputs: nothing builds beside it.
+    let exclusive = if clean {
+        Some(Lock::wait(&shared_lock, holder)?)
+    } else {
+        None
+    };
+    let shared = || -> Result<Option<Lock>> {
+        if exclusive.is_some() {
+            Ok(None)
+        } else {
+            Lock::wait(&shared_lock, holder).map(Some)
+        }
+    };
     let source = work.join("aosp-source");
     let out = work.join("android-out");
     let cargo = work.join("cargo");
-    if work.join("source-projection.json").exists() {
-        android::recover(&work.join("source-projection.json"), &source)?;
-    }
     let source_ready = work.join("package-source-ready");
-    if source.exists() && !source_ready.exists() {
-        normalize_source_cache(&source)?;
-        write(
-            &source_ready,
-            b"Private package source cache initialized.\n",
-        )?;
-    }
     if clean {
         for path in [
             &out,
@@ -101,30 +111,55 @@ pub fn stage(
             cargo.join("release")
         }
     };
-    let base = assemble::prepare_package_inputs(repo, &work, arch)?;
-    python::prepare(repo, &work)?;
+    let base = assemble::prepare_package_inputs(repo, &work, &inputs, arch)?;
+    {
+        // Both architectures pin the same Mesa and Python modules: the first
+        // prepares them, the second finds them prepared.
+        let _shared = shared()?;
+        python::prepare(repo, &work)?;
+        assemble::prepare_mesa(
+            repo,
+            &repo.join(".work"),
+            &work,
+            &assemble::source_lock(repo, arch),
+        )?;
+    }
     // As android-build: the ARM64 product also compiles Panfrost's shaders.
     assemble::mesa_tools(&work, jobs, arch == "aarch64")?;
-    android::build(repo, &source, &out, &work, product, jobs)?;
-    if !source_ready.exists() {
-        write(
-            &source_ready,
-            b"Private package source cache initialized.\n",
-        )?;
+    {
+        let _shared = shared()?;
+        if work.join("source-projection.json").exists() {
+            android::recover(&work.join("source-projection.json"), &source)?;
+        }
+        if source.exists() && !source_ready.exists() {
+            normalize_source_cache(&source)?;
+            write(
+                &source_ready,
+                b"Private package source cache initialized.\n",
+            )?;
+        }
+        android::build(repo, &source, &out, &work, &inputs, product, jobs)?;
+        if !source_ready.exists() {
+            write(
+                &source_ready,
+                b"Private package source cache initialized.\n",
+            )?;
+        }
     }
     let stage = tempfile::Builder::new()
         .prefix("package-stage-")
-        .tempdir_in(&work)?;
+        .tempdir_in(&inputs)?;
     assemble::assemble_artifacts(
         repo,
         &work,
+        &inputs,
         &base,
         &out.join("target/product").join(product),
         &host,
         stage.path(),
     )?;
     package_layout(repo, &host, stage.path(), arch, recipe, None)?;
-    package_notices(repo, &work, stage.path())?;
+    package_notices(repo, &work, &inputs, stage.path())?;
     if destination.exists() {
         fs::remove_dir_all(destination)?;
     }
@@ -165,13 +200,14 @@ pub fn stage_candidate(
     assemble::assemble_artifacts(
         repo,
         &work,
+        &work,
         base,
         &work.join("android-out/target/product").join(product),
         host,
         stage.path(),
     )?;
     package_layout(repo, host, stage.path(), arch, recipe, Some(candidate))?;
-    package_notices(repo, &work, stage.path())?;
+    package_notices(repo, &work, &work, stage.path())?;
     if destination.exists() {
         fs::remove_dir_all(destination)?;
     }
@@ -329,20 +365,22 @@ fn portable_template(template: &mut Value) {
     template["shared_storage_directories"] = json!([]);
 }
 
-fn package_notices(repo: &Path, work: &Path, stage: &Path) -> Result<()> {
+/// Android's notices come from the base extracted in `inputs`, Mesa's from
+/// its source in `work`.
+fn package_notices(repo: &Path, work: &Path, inputs: &Path, stage: &Path) -> Result<()> {
     let runtime_notices = stage.join("runtime/usr/share/licenses/droidloom-runtime");
     licenses::project(repo, &runtime_notices)?;
     licenses::rust(repo, &runtime_notices.join("rust"))?;
     let base_notices = stage.join("base/usr/share/licenses/droidloom-base");
     licenses::project(repo, &base_notices)?;
     copy(
-        &work.join("base-system/system/etc/NOTICE.xml.gz"),
+        &inputs.join("base-system/system/etc/NOTICE.xml.gz"),
         &base_notices.join("Android-NOTICE.xml.gz"),
     )?;
     let notices = stage.join("image/usr/share/licenses/droidloom-image");
     licenses::project(repo, &notices)?;
     copy(
-        &work.join("base-system/system/etc/NOTICE.xml.gz"),
+        &inputs.join("base-system/system/etc/NOTICE.xml.gz"),
         &notices.join("Android-NOTICE.xml.gz"),
     )?;
     copy(

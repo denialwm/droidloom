@@ -33,15 +33,34 @@ jobs:
           persist-credentials: false
       - name: Keep temporary files on the worker disk
         run: echo "TMPDIR=$RUNNER_TEMP" >> "$GITHUB_ENV"
-      - name: Build x86_64 packages using persistent local caches
-        run: cargo run --locked -j 1 -p droidloom-package -- build
-      - name: Cross-build aarch64 packages
-        run: cargo run --locked -j 1 -p droidloom-package -- build --architecture aarch64 --sysroot "$DROIDLOOM_ARM64_SYSROOT"
+      # Both architectures build at once; they take turns only for the
+      # Android compile, which shares one source tree and output folder.
+      - name: Build x86_64 and aarch64 packages using persistent local caches
+        run: |
+          set -o pipefail
+          cargo build --locked -j 1 -p droidloom-package
+          tool=(cargo run --locked -j 1 -p droidloom-package --)
+          { "${tool[@]}" build 2>&1 | sed -u 's/^/[x86_64] /'; } &
+          x86_64=$!
+          { "${tool[@]}" build --architecture aarch64 --sysroot "$DROIDLOOM_ARM64_SYSROOT" 2>&1 | sed -u 's/^/[aarch64] /'; } &
+          aarch64=$!
+          status=0
+          wait "$x86_64" || status=1
+          wait "$aarch64" || status=1
+          exit "$status"
       - name: Check package installation and lifecycle
         run: |
+          set -o pipefail
           version=$(jq -r '.version + "-" + (.release | tostring)' packaging/arch/version.json)
-          cargo run --locked -j 1 -p droidloom-package -- check --packages "dist/arch/$version/x86_64"
-          cargo run --locked -j 1 -p droidloom-package -- check --packages "dist/arch/$version/aarch64"
+          tool=(cargo run --locked -j 1 -p droidloom-package --)
+          { "${tool[@]}" check --packages "dist/arch/$version/x86_64" 2>&1 | sed -u 's/^/[x86_64] /'; } &
+          x86_64=$!
+          { "${tool[@]}" check --packages "dist/arch/$version/aarch64" 2>&1 | sed -u 's/^/[aarch64] /'; } &
+          aarch64=$!
+          status=0
+          wait "$x86_64" || status=1
+          wait "$aarch64" || status=1
+          exit "$status"
       - name: Prepare pacman database and installer
         run: cargo run --locked -j 1 -p droidloom-package -- ship prepare
       - name: Upload packages and matching source

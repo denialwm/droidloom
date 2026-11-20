@@ -62,24 +62,36 @@ fn unzip_file(archive: &Path, name: &str, destination: &Path) -> Result<()> {
         .arg(name)
         .stdout(Stdio::from(output)))
 }
-pub fn prepare_inputs(repo: &Path, work: &Path, arch: &str) -> Result<PathBuf> {
-    prepare_inputs_from(repo, work, arch, true)
+/// The source lock that pins an architecture's Android base and Mesa.
+pub fn source_lock(repo: &Path, arch: &str) -> PathBuf {
+    // ARM64 kept the lock's original name.
+    repo.join(if arch == "aarch64" {
+        "android/manifest/source-lock.json".into()
+    } else {
+        format!("android/manifest/source-lock-{arch}.json")
+    })
 }
-pub fn prepare_package_inputs(repo: &Path, work: &Path, arch: &str) -> Result<PathBuf> {
-    prepare_inputs_from(repo, work, arch, false)
+pub fn prepare_inputs(repo: &Path, work: &Path, arch: &str) -> Result<PathBuf> {
+    prepare_inputs_from(repo, work, work, arch, true)
+}
+/// `work` keeps the downloaded base; `inputs` gets what is extracted from
+/// it, private to the architecture so the other one can build beside it.
+pub fn prepare_package_inputs(
+    repo: &Path,
+    work: &Path,
+    inputs: &Path,
+    arch: &str,
+) -> Result<PathBuf> {
+    prepare_inputs_from(repo, work, inputs, arch, false)
 }
 fn prepare_inputs_from(
     repo: &Path,
     work: &Path,
+    inputs: &Path,
     arch: &str,
     reuse_installed: bool,
 ) -> Result<PathBuf> {
-    // ARM64 kept the lock's original name.
-    let lock_path = repo.join(if arch == "aarch64" {
-        "android/manifest/source-lock.json".into()
-    } else {
-        format!("android/manifest/source-lock-{arch}.json")
-    });
+    let lock_path = source_lock(repo, arch);
     let typed = droidloom_image::load_source_lock(&lock_path)?;
     let base = if reuse_installed {
         work.join("base")
@@ -134,8 +146,9 @@ fn prepare_inputs_from(
         base.join("images")
     };
     // Reuse extraction for this selected base; generated files do not need byte-for-byte policing.
-    let extracted = work.join("base-system");
-    let marker = work.join("base-system.json");
+    fs::create_dir_all(inputs)?;
+    let extracted = inputs.join("base-system");
+    let marker = inputs.join("base-system.json");
     let system_hash = typed
         .aosp_ci_base
         .partitions
@@ -161,21 +174,20 @@ fn prepare_inputs_from(
     if reuse_installed && fs::metadata(&framework)?.len() != typed.aosp_ci_base.framework_res.size {
         return fail("framework-res differs from pinned base");
     }
-    copy(&framework, &work.join("framework-res.apk"))?;
-    prepare_mesa(repo, &repo.join(".work"), work, &lock_path)?;
+    copy(&framework, &inputs.join("framework-res.apk"))?;
     // The APEX is taken from the verified system partition, never from a previous installation.
     let apex = extracted.join("system/apex/com.android.virt.apex");
     let compressed = extracted.join("system/apex/com.android.virt.capex");
     let apex = if apex.exists() {
         apex
     } else {
-        let a = work.join("virt.apex");
+        let a = inputs.join("virt.apex");
         unzip_file(&compressed, "original_apex", &a)?;
         a
     };
-    let payload = work.join("virt-payload.img");
+    let payload = inputs.join("virt-payload.img");
     unzip_file(&apex, "apex_payload.img", &payload)?;
-    let virt = work.join("virt");
+    let virt = inputs.join("virt");
     if virt.exists() {
         fs::remove_dir_all(&virt)?;
     }
@@ -319,7 +331,7 @@ pub fn assemble(
     payload: &Path,
     uid: u32,
 ) -> Result<()> {
-    assemble_artifacts(repo, work, base, product, host, payload)?;
+    assemble_artifacts(repo, work, work, base, product, host, payload)?;
     let notices = payload.join("usr/share/licenses/droidloom");
     crate::licenses::project(repo, &notices)?;
     crate::licenses::rust(repo, &notices.join("rust"))?;
@@ -330,6 +342,7 @@ pub fn assemble(
 pub fn assemble_artifacts(
     repo: &Path,
     work: &Path,
+    inputs: &Path,
     base: &Path,
     product: &Path,
     host: &Path,
@@ -499,7 +512,7 @@ pub fn assemble_artifacts(
         copy(&repo.join(src), &runtime.join(dst))?;
     }
     copy(
-        &work.join("init.rc"),
+        &inputs.join("init.rc"),
         &runtime.join("compat/init-classpath-first-pixels.rc"),
     )?;
     // Mounted over the base image's apps that Denial replaces or the cell
@@ -524,7 +537,7 @@ pub fn assemble_artifacts(
         "javalib/service-virtualization.jar",
     ] {
         copy(
-            &work.join("virt").join(name),
+            &inputs.join("virt").join(name),
             &runtime
                 .join("compat/classpath-compat/apex/com.android.virt")
                 .join(name),
