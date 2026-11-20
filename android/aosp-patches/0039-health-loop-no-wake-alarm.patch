@@ -1,0 +1,41 @@
+From: Droidloom development build
+Subject: [PATCH] health: battery polls never wake the host
+
+The health loop polls the battery from a CLOCK_BOOTTIME_ALARM timer, every
+60 s on a charger and every 600 s on battery. In a Droidloom cell that alarm
+is armed on the host's RTC, so an idle cell woke the phone out of s2idle at
+each poll.
+
+The loop now polls from CLOCK_BOOTTIME. While the host is awake nothing
+changes; a poll that falls due in suspend runs at resume. Power-supply
+uevents still update the battery at once. Without the alarm the service no
+longer needs CAP_WAKE_ALARM.
+
+diff --git a/health/aidl/default/android.hardware.health-service.example.rc b/health/aidl/default/android.hardware.health-service.example.rc
+index e052024..0e99c47 100644
+--- a/health/aidl/default/android.hardware.health-service.example.rc
++++ b/health/aidl/default/android.hardware.health-service.example.rc
+@@ -2,7 +2,7 @@ service vendor.health-default /vendor/bin/hw/android.hardware.health-service.exa
+     class hal
+     user system
+     group system
+-    capabilities WAKE_ALARM BLOCK_SUSPEND
++    capabilities BLOCK_SUSPEND
+     file /dev/kmsg w
+ 
+ service vendor.charger /vendor/bin/hw/android.hardware.health-service.example --charger
+diff --git a/health/utils/libhealthloop/HealthLoop.cpp b/health/utils/libhealthloop/HealthLoop.cpp
+index 8501f33..c99a545 100644
+--- a/health/utils/libhealthloop/HealthLoop.cpp
++++ b/health/utils/libhealthloop/HealthLoop.cpp
+@@ -231,7 +231,9 @@ void HealthLoop::WakeAlarmEvent(uint32_t /*epevents*/) {
+ }
+ 
+ void HealthLoop::WakeAlarmInit(void) {
+-    wakealarm_fd_.reset(timerfd_create(CLOCK_BOOTTIME_ALARM, TFD_NONBLOCK));
++    // Droidloom: the cell shares the host's suspend. A battery poll must never
++    // wake the host; a poll that falls due in suspend runs at resume.
++    wakealarm_fd_.reset(timerfd_create(CLOCK_BOOTTIME, TFD_NONBLOCK));
+     if (wakealarm_fd_ == -1) {
+         KLOG_ERROR(LOG_TAG, "wakealarm_init: timerfd_create failed\n");
+         return;

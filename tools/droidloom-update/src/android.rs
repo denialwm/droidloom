@@ -189,6 +189,10 @@ const PATCHES: &[(&str, &str)] = &[
         "android/aosp-patches/0020-keymint-cell-agreement-key.patch",
     ),
     (
+        "hardware/interfaces",
+        "android/aosp-patches/0039-health-loop-no-wake-alarm.patch",
+    ),
+    (
         "frameworks/av",
         "android/audio/0001-host-buffered-playback.patch",
     ),
