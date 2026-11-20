@@ -57,7 +57,11 @@ a BCP 47 language tag and one of Android's layout types (`qwerty`, `azerty`,
 `undefined`). A layout Android has none for types as US English.
 
 The IME replaces its additional subtype with one whose physical keyboard hint
-is that tag and type, and switches to it. Android's `KeyboardLayoutManager`
+is that tag and type, and switches to it once Android has attached the IME
+(its first editor start). The switch always names a subtype ID other than the
+current one: the layout manager hears of a subtype only when the selection
+changes, and a start restores the saved one without telling it.
+Android's `KeyboardLayoutManager`
 picks the host keyboard's layout from the current subtype's hint, as it does
 for any input method, and key events are injected as that keyboard: apps read
 characters from that layout, and its key map moves keys where the layout does
