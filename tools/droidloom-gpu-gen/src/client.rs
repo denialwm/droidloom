@@ -406,7 +406,9 @@ pub fn emit(api: &Api) -> String {
             Level::Physical => "Physical",
             Level::Device => "Device",
         };
-        writeln!(out, "        b\"{name}\" => (crate::manual::{name} as *const c_void, rt::Level::{level}),").ok();
+        for alias in std::iter::once(name).chain(api.registry.command_aliases.get(name).into_iter().flatten()) {
+            writeln!(out, "        b\"{alias}\" => (crate::manual::{name} as *const c_void, rt::Level::{level}),").ok();
+        }
     }
     out.push_str("        _ => return None,\n    })\n}\n");
     out

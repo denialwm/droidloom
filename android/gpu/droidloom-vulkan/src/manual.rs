@@ -21,20 +21,39 @@ pub use crate::wsi::*;
 const VK_API_VERSION_1_3: u32 = (1 << 22) | (3 << 12);
 const VK_FENCE_CREATE_SIGNALED_BIT: u32 = 1;
 
-/// Only the WSI the client answers alone; the host's instance extensions
+/// Instance extensions Vulkan 1.1 made core. The host instance is always
+/// 1.3, so the client answers them alone and serves their KHR names as the
+/// core commands. Android's loader calls a KHR command through the driver's
+/// own KHR entry only when the driver lists the extension; unlisted, the
+/// entry stays null and the application jumps to address 0.
+/// `VK_KHR_device_group_creation` stays out: forwarded devices offer no
+/// `VK_KHR_device_group`, and Android's loader answers groups itself.
+const CORE_1_1_INSTANCE_EXTENSIONS: [(&CStr, u32); 4] = [
+    (c"VK_KHR_get_physical_device_properties2", 2),
+    (c"VK_KHR_external_memory_capabilities", 1),
+    (c"VK_KHR_external_semaphore_capabilities", 1),
+    (c"VK_KHR_external_fence_capabilities", 1),
+];
+
+/// Instance extensions the client answers alone, never sent to the host.
+fn own_instance_extensions() -> impl Iterator<Item = (&'static CStr, u32)> {
+    INSTANCE_EXTENSIONS.into_iter().chain(CORE_1_1_INSTANCE_EXTENSIONS)
+}
+
+/// Only what the client answers alone; the host's instance extensions
 /// stay the host's.
 pub unsafe extern "system" fn vkEnumerateInstanceExtensionProperties(
     _layer: *const c_char,
     count: *mut u32,
     properties: *mut VkExtensionProperties,
 ) -> VkResult {
-    let all = INSTANCE_EXTENSIONS.map(|(name, specVersion)| {
+    let all: Vec<VkExtensionProperties> = own_instance_extensions().map(|(name, specVersion)| {
         let mut extension = VkExtensionProperties { extensionName: [0; 256], specVersion };
         for (to, &from) in extension.extensionName.iter_mut().zip(name.to_bytes()) {
             *to = from as c_char;
         }
         extension
-    });
+    }).collect();
     if properties.is_null() {
         *count = all.len() as u32;
         return VK_SUCCESS;
@@ -87,11 +106,11 @@ pub unsafe extern "system" fn vkCreateInstance(
         eprintln!("droidloom-vulkan: {error}");
         return VK_ERROR_INITIALIZATION_FAILED;
     }
-    // The host never sees the client's own WSI extensions.
+    // The host never sees the client's own extensions.
     let mut info = *pCreateInfo;
     let names: Vec<*const c_char> = (0..info.enabledExtensionCount as usize)
         .map(|i| *info.ppEnabledExtensionNames.add(i))
-        .filter(|&name| !INSTANCE_EXTENSIONS.iter().any(|(own, _)| CStr::from_ptr(name) == *own))
+        .filter(|&name| !own_instance_extensions().any(|(own, _)| CStr::from_ptr(name) == own))
         .collect();
     info.enabledExtensionCount = names.len() as u32;
     info.ppEnabledExtensionNames = names.as_ptr();
