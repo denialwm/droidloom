@@ -4,7 +4,6 @@ User-facing instructions are maintained in:
 
 - [Installation and APKs](../../docs/INSTALL.md)
 - [Building packages](../../docs/BUILDING.md)
-- [Known issues](../../docs/KNOWN_ISSUES.md)
 
 `version.json` defines the matching package release for both architectures,
 x86_64 and aarch64. `PKGBUILD.in` calls the Rust builder, and `Containerfile`

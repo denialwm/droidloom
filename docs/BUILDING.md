@@ -646,8 +646,7 @@ If staging fails with `No space left on device`, free disposable outputs and rer
 the builder. Do not distribute partial archives from a failed attempt. APKs,
 packages, caches and local test artifacts must stay out of Git.
 
-The fully empty-cache source-download path has not yet been rehearsed; see
-[KNOWN_ISSUES.md](KNOWN_ISSUES.md). Build logs should accompany reports of failures.
+Build logs should accompany reports of failures.
 
 ## Desktop image policy
 
@@ -760,8 +759,7 @@ This is a desktop workaround, not a general default for devices with Wi-Fi.
 Google subsequently updated Play Services to 26.33.32 and Play Store to 53.0.27,
 both targeting API 37. The user confirmed NTE launches successfully after an
 official **Update from Play**, following permission repair and a local catalog
-compatibility experiment; see the
-[app-service limitations](KNOWN_ISSUES.md#application-compatibility).
+compatibility experiment.
 
 The default selects Google Services Framework, Play Services and Play Store.
 `--sync-adapters` also selects Google Contacts and Calendar sync. Configuration

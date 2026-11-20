@@ -4,7 +4,7 @@ Status: architecture proposal with the PhoneWindowManager replacement,
 authoritative task publication, direct host window controls and native input
 reception inside InputFlinger implemented in the checkout. The broader
 integrations below remain proposed work, not preview guarantees. Existing released behavior is documented in
-[desktop integration](desktop-integration.md) and [known issues](KNOWN_ISSUES.md).
+[desktop integration](desktop-integration.md).
 
 ## Implementation status
 

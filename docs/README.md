@@ -2,7 +2,6 @@
 
 - [Install Droidloom and APKs](INSTALL.md): package installation, first start and app management.
 - [Build packages](BUILDING.md): prerequisites, Rust builder and package checks.
-- [Known issues](KNOWN_ISSUES.md): preview limitations and workarounds.
 - [Latency opportunities](latency-opportunities.md): where input and frames lose time, and what to try.
 
 - [GPU forwarding](gpu-forwarding.md): Android's Vulkan on an NVIDIA host driver.

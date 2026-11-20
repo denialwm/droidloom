@@ -2,9 +2,9 @@
 
 This guide covers the preview packages for x86_64 Arch Linux and aarch64 Arch
 Linux ARM. Prebuilt packages for both are in the
-[latest release](https://github.com/denialwm/droidloom/releases/latest). Read
-[known issues](KNOWN_ISSUES.md) before installing. To produce the packages yourself,
-follow [BUILDING.md](BUILDING.md), then return here.
+[latest release](https://github.com/denialwm/droidloom/releases/latest). To
+produce the packages yourself, follow [BUILDING.md](BUILDING.md), then return
+here.
 
 ## 1. Check prerequisites
 
@@ -238,9 +238,7 @@ droidloomctl launch com.halfbrick.fruitninjafree \
 
 These examples assume you installed WhatsApp or the tested Fruit Ninja 2.8.9
 x86_64 APK. APKs are not bundled with Droidloom. Complete app registration and
-first-run prompts yourself. Revision 11 handles Fruit Ninja's launcher and
-age-screen handoffs without requiring an activity-specific retry; earlier
-revisions are affected by the [known launch issue](KNOWN_ISSUES.md).
+first-run prompts yourself.
 
 For games that choose their rendering size only at startup, set the initial
 Android task resolution in pixels:
@@ -372,4 +370,4 @@ journalctl -b -u droidloomd.service -n 200 --no-pager
 ```
 
 These commands do not require sudo. Replace the example package in crash reports
-with the failing app. See [KNOWN_ISSUES.md](KNOWN_ISSUES.md) for current limits.
+with the failing app.

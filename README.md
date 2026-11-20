@@ -1,65 +1,16 @@
 # Droidloom
 
-Droidloom runs Android apps as separate Linux Wayland windows. Android's own
-userspace (ART, Binder, Zygote and system_server) runs on your Linux kernel in
-its own namespaces: no virtual machine, no emulator and no Android desktop in a
-box. Each app gets its own window with GPU acceleration and zero-copy buffers,
-next to your other apps.
+**Android apps, with Linux in charge.**
 
-<p align="center">
-  <img src="assets/screenshots/whatsapp.png" alt="WhatsApp running in a separate Linux desktop window through Droidloom, with its Android process visible in the terminal below" width="640">
-</p>
+Droidloom puts Android 17 apps in real Wayland windows, right next to your Linux
+apps. Tile a game. Paste a screenshot into WhatsApp. Open the file you just saved
+in Downloads. Use your desktop's keyboard, notifications, audio and fingerprint
+reader. Android runs on your Linux kernel, with no virtual machine and no
+emulator, and follows your desktop's rules.
 
-This is an early preview. Prebuilt pacman packages are published for x86_64
-Arch Linux and aarch64 Arch Linux ARM. Download them from the
-[latest release](https://github.com/denialwm/droidloom/releases/latest), or
-install them through the repository as below.
-
-> [!NOTE]
-> NVIDIA GPUs are supported on x86_64 through [GPU forwarding](docs/gpu-forwarding.md):
-> Android's Vulkan and OpenGL ES run on the host's NVIDIA driver. Setup turns it
-> on by itself when it finds an NVIDIA GPU.
-
-## What you get
-
-- **One window per app.** Every Android task is its own `xdg_toplevel`. Tile
-  it, resize it, move it between workspaces or close it from your compositor;
-  Android lays the app out again at the new size.
-- **Real Android, no VM.** Android runs on the host kernel with a private
-  binderfs instance. Its apps show up in `htop` as ordinary processes.
-- **Zero-copy graphics.** App buffers reach the compositor as DMA-BUFs with
-  `linux-drm-syncobj` fences. Eligible layers skip SurfaceFlinger's own
-  composition: the compositor samples the app's buffers directly, with no
-  intermediate render and no copy.
-- **ARM apps on x86_64.** The x86_64 image includes
-  [Teto](https://github.com/denialwm/teto), an open-source ARM64 translator
-  based on Android's Berberis, so ARM-only apps and games run on a desktop PC.
-  On aarch64 machines apps run natively.
-- **In your app launcher.** Installed Android apps become desktop entries with
-  names and icons, updated as you install and remove them.
-- **Clipboard both ways.** Text, links, HTML, images and copied files move
-  between Android and Linux apps.
-- **Desktop notifications.** Android notifications appear as desktop
-  notifications. Clicks and actions open the app; dismissing one on the desktop
-  clears it in Android.
-- **Your folders.** Android's Download, Pictures, Documents, Music and Movies
-  are your own Linux folders. A file you save on Linux shows up in Android's
-  gallery and file pickers within a second.
-- **Your keyboard.** Text fields use the compositor's input method through
-  `zwp_text_input_v3`; Android never draws a keyboard of its own.
-- **Sound through PipeWire.** The microphone stays off until you allow it.
-- **Desktop or mobile windows.** Desktop mode opens phone-sized windows and
-  remembers each app's size; mobile mode fills the screen. Choose per app.
-- **Performance hints honored.** Android's frame threads report their work to
-  Droidloom's power HAL, which raises their CPU utilization floor while they
-  draw, so a burst of drawing does not start on a slow core at its lowest
-  frequency.
-- **Debuggable without sudo.** `droidloomctl logs` and `droidloomctl crashes`
-  work as your user, even while Android is still booting.
-
-Apps run so far include WhatsApp, Telegram, Discord, Firefox, TikTok, Google
-Play, Arknights, Arknights: Endfield, Brawl Stars, Clash of Clans and Neverness
-to Everness.
+GPU acceleration on AMD, Intel and **NVIDIA**. ARM64 games on x86_64 with **Teto
+built in**. Android boots in **about a second on a desktop PC** and **about five
+seconds on mobile**.
 
 <p align="center">
   <img src="assets/screenshots/desktop-teto.webp" alt="Brawl Stars, Neverness to Everness and Clash of Clans in their own windows on an x86_64 Linux desktop" width="720">
@@ -68,14 +19,120 @@ to Everness.
   All three are ARM64 builds, translated by Teto.</em>
 </p>
 
-## Any Wayland compositor
+Available as an **early preview** for x86_64 Arch Linux and aarch64 Arch Linux
+ARM. **[Install it](#install-the-preview)** ·
+**[Latest release](https://github.com/denialwm/droidloom/releases/latest)**
 
-Droidloom needs only standard protocols: `xdg-shell`, `linux-dmabuf` v4 and
-`linux-drm-syncobj`. It has been tested on Hyprland and
-[Denial](https://github.com/denialwm/denial).
+## Yes, NVIDIA too.
 
-A compositor can do more through three optional, product-neutral protocols.
-Denial implements them, and any compositor can:
+Android's Vulkan runs on your host's NVIDIA driver through
+[GPU forwarding](docs/gpu-forwarding.md). OpenGL ES 3.2 runs through ANGLE on
+the same path. Droidloom handles Android's texture formats and video buffers;
+your GPU does the rendering. Setup enables forwarding automatically on x86_64
+when it finds an NVIDIA card. AMD and Intel render natively with Mesa.
+
+Have more than one GPU? `droidloomctl gpu` lists them and lets you choose.
+
+## Boot fast. Get on with it.
+
+Android boots in **about a second on a desktop PC** and **about five seconds on
+mobile devices**, with starts as low as **1.5 seconds on Snapdragon 8 Elite
+Gen 5**. The first start takes longer while Android prepares its data and
+verifies images.
+
+Droidloom runs Android's own userspace—ART, Binder, Zygote and system_server—on
+your Linux kernel, in its own namespaces. Apps show up in `htop` as ordinary
+processes. Start the runtime with `droidloomctl start`, then launch apps from
+your desktop.
+
+## Windows that know how to behave.
+
+Every Android task gets its own Android display, sized to its own Wayland
+window. Your compositor sees the app's actual bounds and owns its decorations.
+Tile it, snap it, resize it, move it between workspaces. Android lays the app
+out at the new size, and input goes to that app's display.
+
+Desktop mode opens phone-sized windows and remembers each app's size. Mobile
+mode fills the screen. Choose per app; density follows the output the window
+is on.
+
+<p align="center">
+  <img src="assets/screenshots/whatsapp.png" alt="WhatsApp running in a separate Linux desktop window through Droidloom, with its Android process visible in the terminal below" width="640">
+</p>
+
+## Your system. All the way through.
+
+- **Your launcher.** Android apps appear with their names and icons, updated
+  as you install and remove them.
+- **Your clipboard.** Text, links, HTML, images and copied files move both ways
+  between Android and Linux apps, where the receiving app supports the format.
+- **Your notifications.** Android notifications use the desktop notification
+  service. Clicks and actions open the app; dismissing one on the desktop
+  clears it in Android.
+- **Your files.** Android's Download, Pictures, Documents, Music and Movies
+  are your Linux folders, shared automatically. Files saved on Linux appear
+  in Android's gallery and file pickers.
+- **Your keyboard.** Text fields use the compositor's input method through
+  `zwp_text_input_v3`. Android never draws a keyboard of its own.
+- **Your audio.** Sound goes through PipeWire, with loudness controlled by the
+  host mixer. The microphone stays off until you allow it.
+- **Your fingerprints.** Android biometric requests use fingers already
+  enrolled with the host's `fprintd`. On Denial, the compositor lights and marks
+  the sensor as it does on the lock screen.
+- **Your lock screen.** Android follows the host session's lock state through
+  logind, locking Keystore keys that require an unlocked device.
+- **Your cameras and haptics.** On phones running Phonewave, Android apps take
+  photos and previews with the phone's cameras through its camera service,
+  `braun`, and vibrate through its haptics service, `hapticd`.
+- **Your tools.** `droidloomctl logs` and `droidloomctl crashes` work without
+  sudo, even during boot. Back up all Android storage to one file with
+  `droidloomctl backup`.
+
+## ARM games. Desktop GPU.
+
+The x86_64 image ships [Teto](https://github.com/denialwm/teto), an open-source
+ARM64 translator based on Android's Berberis. ARM-only apps and games can run
+on your desktop PC with the translator already installed. Android's framework
+and graphics drivers stay native; Teto handles the ARM64 app code. On aarch64,
+apps run natively.
+
+Apps run during development include WhatsApp, Telegram, Discord, Firefox,
+TikTok, Google Play, Arknights, Arknights: Endfield, Brawl Stars, Clash of Clans
+and Neverness to Everness. Google apps are an optional add-on.
+
+## Fast frames. Less wasted work.
+
+- **Shared buffers, explicit sync.** App buffers reach Wayland as DMA-BUFs,
+  with `linux-drm-syncobj` fences. Android gets a buffer back after the
+  compositor has finished reading it.
+- **Skip a render where it counts.** On Denial, eligible layers go straight
+  to the compositor, skipping SurfaceFlinger's intermediate composition.
+  Unsupported scenes keep the normal composition path. NVIDIA forwarding
+  renders in VRAM and copies finished window frames into shared buffers.
+- **Draw on the compositor's clock.** On Denial, frame grants tell Android
+  when to draw for the next refresh. Idle apps stop requesting frames, and
+  minimized apps stop drawing.
+- **Spend CPU time on the right work.** Android's frame hints raise CPU
+  performance floors while drawing; background work uses efficiency cores
+  where the host exposes them.
+- **Keep hardware ownership on Linux.** Android gets the graphics devices
+  its rendering backend needs. The host keeps control of the display and
+  physical input devices. See the [architecture](docs/architecture.md) for
+  the details.
+
+These are some of the reasons Droidloom exists. For the comparison with
+Waydroid, including shared features and where Waydroid is ahead, see
+**[Why not Waydroid?](https://denialwm.org/droidloom.html#waydroid)**.
+
+## Any Wayland compositor.
+
+Droidloom needs only standard protocols: `xdg-shell` and `linux-dmabuf` v4.
+Where the compositor offers `linux-drm-syncobj`, frames carry explicit sync
+fences; where it does not, the fences ride on the DMA-BUFs themselves. It has
+been tested on Hyprland and [Denial](https://github.com/denialwm/denial).
+
+A compositor can do more through optional, product-neutral protocols.
+Denial implements the following, and any compositor can:
 
 - **Insets** (`denial_insets_v1`): the compositor reports its status bar and
   navigation areas, and apps lay out around them through ordinary
@@ -107,8 +164,8 @@ first-time setup and **[installing APKs](docs/INSTALL.md#5-install-an-apk)**.
    less install.sh
    ```
 
-2. Run `sh install.sh` to add the pacman repository and install or update both
-   packages. It picks the x86_64 or aarch64 repository for your machine, asks
+2. Run `sh install.sh` to add the pacman repository and install or update
+   Droidloom's packages. It picks the x86_64 or aarch64 repository for your machine, asks
    for administrator access and keeps pacman's confirmation before a full
    system upgrade. Droidloom packages are currently unsigned over HTTPS; this
    policy is scoped to the Droidloom repository. Later updates arrive through
@@ -123,8 +180,7 @@ first-time setup and **[installing APKs](docs/INSTALL.md#5-install-an-apk)**.
 Startup is manual; launching an app does not start a stopped runtime. Google
 apps are not included; an experimental
 [builder](docs/BUILDING.md#optional-google-apps) can add them from archives you
-supply. Read **[known issues](docs/KNOWN_ISSUES.md)** for compatibility limits
-and workarounds.
+supply.
 
 ## Use Droidloom
 
