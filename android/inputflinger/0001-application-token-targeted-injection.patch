@@ -34,7 +34,7 @@ index 8225dec..49740f3 100644
  
  } // namespace inputdispatcher
 diff --git a/services/inputflinger/dispatcher/InputDispatcher.cpp b/services/inputflinger/dispatcher/InputDispatcher.cpp
-index 0d27a09..0cee0b6 100644
+index 0d27a09..014d301 100644
 --- a/services/inputflinger/dispatcher/InputDispatcher.cpp
 +++ b/services/inputflinger/dispatcher/InputDispatcher.cpp
 @@ -611,16 +611,24 @@ bool isWindowOwnedBy(const sp<WindowInfoHandle>& windowHandle, gui::Pid pid, gui
@@ -212,12 +212,7 @@ index 0d27a09..0cee0b6 100644
              return injectionError(InputEventInjectionResult::TARGET_MISMATCH);
          }
      }
-@@ -4943,11 +4997,19 @@ bool InputDispatcher::shouldRejectInjectedMotionLocked(const MotionEvent& motion
-     return false;
- }
- 
- InputEventInjectionResult InputDispatcher::injectInputEvent(const InputEvent* event,
-                                                             std::optional<gui::Uid> targetUid,
+@@ -4948,6 +5002,14 @@ InputEventInjectionResult InputDispatcher::injectInputEvent(const InputEvent* ev
                                                              InputEventInjectionSync syncMode,
                                                              std::chrono::milliseconds timeout,
                                                              uint32_t policyFlags) {
@@ -232,8 +227,17 @@ index 0d27a09..0cee0b6 100644
      Result<void> eventValidation = validateInputEvent(*event);
      if (!eventValidation.ok()) {
          LOG(INFO) << "Injection failed: invalid event: " << eventValidation.error();
-@@ -4974,7 +5036,8 @@ InputEventInjectionResult InputDispatcher::injectInputEventToApplication(
+@@ -4972,9 +5034,17 @@ InputEventInjectionResult InputDispatcher::injectInputEvent(const InputEvent* ev
+     if (policyFlags & POLICY_FLAG_FILTERED) {
+         resolvedDeviceId = event->getDeviceId();
      }
++    // A Droidloom key names the host keyboard it was typed on. Apps read its
++    // characters from that device's selected layout; the virtual keyboard's
++    // would type US symbols on an AZERTY or QWERTZ host.
++    if (targetApplicationToken != nullptr && event->getType() == InputEventType::KEY &&
++        event->getDeviceId() >= 0) {
++        resolvedDeviceId = event->getDeviceId();
++    }
  
      const bool isAsync = syncMode == InputEventInjectionSync::NONE;
 -    auto injectionState = std::make_shared<InjectionState>(targetUid, isAsync);
@@ -242,7 +246,7 @@ index 0d27a09..0cee0b6 100644
  
      std::queue<std::unique_ptr<EventEntry>> injectedEntries;
      switch (event->getType()) {
-@@ -5593,20 +5656,31 @@ bool InputDispatcher::DispatcherTouchState::canWindowReceiveMotion(
+@@ -5593,20 +5663,31 @@ bool InputDispatcher::DispatcherTouchState::canWindowReceiveMotion(
          return false;
      }
  
@@ -287,21 +291,21 @@ index 0d27a09..0cee0b6 100644
  
      // Drop touch events if requested by input feature
 diff --git a/services/inputflinger/dispatcher/InputDispatcher.h b/services/inputflinger/dispatcher/InputDispatcher.h
-index a53f492..ad4066b 100644
+index a53f492..6be2824 100644
 --- a/services/inputflinger/dispatcher/InputDispatcher.h
 +++ b/services/inputflinger/dispatcher/InputDispatcher.h
-@@ -114,6 +114,11 @@ public:
-     android::os::InputEventInjectionResult injectInputEvent(
-             const InputEvent* event, std::optional<gui::Uid> targetUid,
+@@ -116,6 +116,11 @@ public:
              android::os::InputEventInjectionSync syncMode, std::chrono::milliseconds timeout,
              uint32_t policyFlags) override;
-+
+ 
 +    android::os::InputEventInjectionResult injectInputEventToApplication(
 +            const InputEvent* event, std::optional<gui::Uid> targetUid,
 +            android::os::InputEventInjectionSync syncMode, std::chrono::milliseconds timeout,
 +            uint32_t policyFlags, const sp<IBinder>& targetApplicationToken);
- 
++
      std::unique_ptr<VerifiedInputEvent> verifyInputEvent(const InputEvent& event) override;
+ 
+     void setFocusedApplication(
 @@ -341,7 +346,12 @@ private:
          // Returns the touched window at the given location, excluding the ignoreWindow if provided.
          sp<android::gui::WindowInfoHandle> findTouchedWindowAt(

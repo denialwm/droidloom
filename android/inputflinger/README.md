@@ -39,7 +39,9 @@ Keys are injected as the `Droidloom Host Keyboard` device that
 `0002-droidloom-targeted-injection-binder.patch` registers, so apps read their
 characters from the layout Android selected for it. The device has no
 `VIRTUAL` class, which would keep InputReader from laying that layout over
-its key map. Its character map also
+its key map. InputDispatcher keeps that device on a key injected for an
+application token; other injected keys still become the virtual keyboard,
+whose US characters would replace the layout's symbols. Its character map also
 remaps the scan code where that layout moves keys; otherwise the receiver's
 US-position key code stands.
 
