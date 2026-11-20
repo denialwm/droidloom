@@ -154,9 +154,10 @@ enum Command {
         #[arg(long, default_value_t = 0)]
         user: u32,
     },
-    /// Persist Android's built-in-display density, warming the runtime if needed.
+    /// Persist Android's density, warming the runtime if needed: the
+    /// built-in display's, and every window's per unit of output scale.
     Dpi {
-        /// Android density in dots per inch.
+        /// Android density in dots per inch at output scale 1.
         dpi: u32,
         /// Cell specification used when the runtime is cold.
         #[arg(long, default_value = DEFAULT_CELL_SPEC)]
@@ -244,6 +245,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     if let Command::Backup { file, spec } | Command::Restore { file, spec } = &cli.command {
         return storage(&cli, file, spec, &mut report);
     }
+    let window_dpi = match cli.command {
+        Command::Dpi { dpi, .. } => Some(dpi),
+        _ => None,
+    };
     let wait_after_start = !cli.cell
         && matches!(
             cli.command,
@@ -390,6 +395,18 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     if response.ok && wait_after_start {
         response = request_with_progress(&cli.socket, &ControlRequest::WaitReady, &mut report)?;
     }
+    if response.ok
+        && let Some(dpi) = window_dpi
+    {
+        let file = density_file(env::var_os("XDG_CONFIG_HOME"), env::var_os("HOME"))
+            .ok_or("neither XDG_CONFIG_HOME nor HOME is an absolute path")?;
+        set_dpi_per_scale(&file, dpi)?;
+        response.message = format!(
+            "{}; windows get {dpi} dpi per unit of output scale ({})",
+            response.message,
+            file.display()
+        );
+    }
     if cli.json {
         println!("{}", serde_json::to_string_pretty(&response)?);
     } else if response.ok {
@@ -467,6 +484,45 @@ fn storage(
     } else {
         Err(response.message.into())
     }
+}
+
+/// The presenter's density file, as `droidloom-wayland` finds it.
+fn density_file(
+    config_home: Option<std::ffi::OsString>,
+    home: Option<std::ffi::OsString>,
+) -> Option<PathBuf> {
+    config_home
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .or_else(|| {
+            home.map(PathBuf::from)
+                .filter(|path| path.is_absolute())
+                .map(|home| home.join(".config"))
+        })
+        .map(|config| config.join("droidloom/density-v1.json"))
+}
+
+/// Every window is laid out at the density the presenter gives it, which
+/// overrides Android's display density, so `dpi` sets the presenter's
+/// density for every screen too, per unit of output scale. A size set for
+/// one screen (`outputs`) stays. The presenter watches the file.
+fn set_dpi_per_scale(file: &std::path::Path, dpi: u32) -> Result<(), Box<dyn std::error::Error>> {
+    let mut densities = match fs::read(file) {
+        Ok(bytes) => serde_json::from_slice::<serde_json::Value>(&bytes)
+            .ok()
+            .filter(serde_json::Value::is_object)
+            .ok_or_else(|| format!("{} is not a JSON object; fix or remove it", file.display()))?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => serde_json::json!({}),
+        Err(error) => return Err(format!("read {}: {error}", file.display()).into()),
+    };
+    densities["dpiPerScale"] = serde_json::json!(dpi);
+    if let Some(folder) = file.parent() {
+        fs::create_dir_all(folder)?;
+    }
+    let temporary = file.with_extension("tmp");
+    fs::write(&temporary, serde_json::to_vec_pretty(&densities)?)?;
+    fs::rename(&temporary, file)?;
+    Ok(())
 }
 
 /// GPU choice is package setup's: it rewrites the root-owned configuration.
@@ -635,4 +691,47 @@ fn session_lifecycle(
         println!("{message}");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn density_file_follows_xdg_config_home_then_home() {
+        assert_eq!(
+            density_file(Some("/x".into()), Some("/h".into())),
+            Some(PathBuf::from("/x/droidloom/density-v1.json"))
+        );
+        assert_eq!(
+            density_file(Some("relative".into()), Some("/h".into())),
+            Some(PathBuf::from("/h/.config/droidloom/density-v1.json"))
+        );
+        assert_eq!(density_file(None, Some("relative".into())), None);
+    }
+
+    #[test]
+    fn dpi_creates_the_file_and_keeps_screens_of_their_own() {
+        let folder = env::temp_dir().join(format!("droidloomctl-density-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&folder);
+        let file = folder.join("droidloom/density-v1.json");
+
+        set_dpi_per_scale(&file, 176).unwrap();
+        let written: serde_json::Value = serde_json::from_slice(&fs::read(&file).unwrap()).unwrap();
+        assert_eq!(written, serde_json::json!({"dpiPerScale": 176}));
+
+        fs::write(&file, r#"{"dpiPerScale": 230, "outputs": {"DP-1": 200}}"#).unwrap();
+        set_dpi_per_scale(&file, 160).unwrap();
+        let written: serde_json::Value = serde_json::from_slice(&fs::read(&file).unwrap()).unwrap();
+        assert_eq!(
+            written,
+            serde_json::json!({"dpiPerScale": 160, "outputs": {"DP-1": 200}})
+        );
+
+        fs::write(&file, "not json").unwrap();
+        assert!(set_dpi_per_scale(&file, 160).is_err());
+        assert_eq!(fs::read(&file).unwrap(), b"not json");
+
+        fs::remove_dir_all(&folder).unwrap();
+    }
 }

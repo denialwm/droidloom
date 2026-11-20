@@ -387,7 +387,9 @@ carries it as `Density` (minor 11, capability `TASK_DENSITY`), sent before the
 configure it belongs to; the framework sets it as the task's requested
 `densityDpi` override, or drops the override for 0 or the display's own
 density. The file is watched, so a change reaches open windows at once.
-Without it, a task gets 230 per unit of scale.
+Without it, a task gets 230 per unit of scale. Since a task's density
+overrides the display's, `droidloomctl dpi` writes `dpiPerScale` along with
+the display density, creating the file when missing.
 
 A window's density is known only once the window exists, after its activity
 started, and a density that arrives then is a configuration change: Android

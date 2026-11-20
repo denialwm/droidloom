@@ -141,12 +141,15 @@ droidloomctl applications
 droidloomctl launch com.android.settings
 ```
 
-A separate Settings window should appear. Optionally set Android's display
-density; 160 DPI was used for the desktop preview tests:
+A separate Settings window should appear. Optionally set Android's density;
+160 DPI was used for the desktop preview tests:
 
 ```console
 droidloomctl dpi 160
 ```
+
+DPI is the density at output scale 1: a window on an output of scale 1.25
+gets 1.25 × DPI. Without it, windows get 230 per unit of scale.
 
 The density persists. Desktop tiling determines the window's available size.
 

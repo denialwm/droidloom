@@ -77,9 +77,13 @@ only root-owned, non-group/world-writable specifications below
 `droidloomctl dpi DPI` applies Android's standard built-in-display density
 override. WindowManager persists the
 value in the per-user Android data directory, which the installer retains across
-Droidloom upgrades and host restarts. The display's pixel canvas remains the
-host output's oriented physical resolution; DPI changes UI sizing, not render
-resolution.
+Droidloom upgrades and host restarts. Each window is laid out at the density
+the presenter gives it, which overrides the display's, so the command also sets
+`dpiPerScale` to DPI in `$XDG_CONFIG_HOME/droidloom/density-v1.json`, creating
+it when missing: a window on an output of scale 1.25 gets 1.25 × DPI. A size set
+for one output (`outputs`) stays. Open windows follow at once. The display's
+pixel canvas remains the host output's oriented physical resolution; DPI changes
+UI sizing, not render resolution.
 
 `droidloomctl window-mode fit-output` is the default mobile policy. For a
 size-less initial XDG configure, the presenter waits for the standard
