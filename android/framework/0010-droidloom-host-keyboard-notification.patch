@@ -1,0 +1,54 @@
+From: Droidloom <droidloom@localhost>
+Subject: [PATCH] input: never ask about the Droidloom host keyboard's layout
+
+Baseline: frameworks/base 94b4c163b7dfe5ce3607f7bb8456f9573f7de57d.
+
+The host keyboard is configured on the host. Droidloom's input method gives
+Android its layout as the physical keyboard hint of its subtype, so Android
+picks the matching layout itself. Keep the keyboard out of the layout
+notification, which otherwise asks to configure it and then reports each
+layout Android chose. The read-only Droidloom product marker confines this
+to Droidloom cells.
+
+diff --git a/services/core/java/com/android/server/input/KeyboardLayoutManager.java b/services/core/java/com/android/server/input/KeyboardLayoutManager.java
+--- a/services/core/java/com/android/server/input/KeyboardLayoutManager.java
++++ b/services/core/java/com/android/server/input/KeyboardLayoutManager.java
+@@ -55,6 +55,7 @@ import android.os.Handler;
+ import android.os.LocaleList;
+ import android.os.Looper;
+ import android.os.Message;
++import android.os.SystemProperties;
+ import android.os.UserHandle;
+ import android.os.UserManager;
+ import android.provider.Settings;
+@@ -854,7 +855,7 @@ class KeyboardLayoutManager implements InputManager.InputDeviceListener {
+         for (int i = 0; i < mConfiguredKeyboards.size(); i++) {
+             int deviceId = mConfiguredKeyboards.keyAt(i);
+             KeyboardConfiguration config = mConfiguredKeyboards.valueAt(i);
+-            if (isVirtualDevice(deviceId)) {
++            if (isVirtualDevice(deviceId) || isDroidloomHostKeyboard(deviceId)) {
+                 continue;
+             }
+             // If we have a keyboard with no selected layouts, we should always show missing
+@@ -1128,6 +1129,21 @@ class KeyboardLayoutManager implements InputManager.InputDeviceListener {
+         return false;
+     }
+ 
++    // The read-only product marker of Droidloom cells.
++    private static final boolean DROIDLOOM = SystemProperties.getBoolean(
++            "ro.vendor.droidloom.surfaceflinger_tasks", false);
++
++    /**
++     * Droidloom's host keyboard is configured on the host, which picks its
++     * layout through the input method's physical keyboard hint. Android never
++     * asks about it, nor reports the layout it chose.
++     */
++    private boolean isDroidloomHostKeyboard(int deviceId) {
++        if (!DROIDLOOM) return false;
++        final InputDevice device = getInputDevice(deviceId);
++        return device != null && "Droidloom Host Keyboard".equals(device.getName());
++    }
++
+     @VisibleForTesting
+     public boolean isVirtualDevice(int deviceId) {
+         VirtualDeviceManagerInternal vdm = LocalServices.getService(

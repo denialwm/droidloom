@@ -35,7 +35,7 @@ index 66a8481..598a49c 100644
 +#if !defined(__ANDROID_HOST__)
 +    if (base::GetBoolProperty("ro.vendor.droidloom.surfaceflinger_tasks", false)) {
 +        DroidloomInput::registerManager(this,
-+                *static_cast<inputdispatcher::InputDispatcher*>(mDispatcher.get()), vm);
++                *static_cast<inputdispatcher::InputDispatcher*>(mDispatcher.get()), *mReader, vm);
 +    }
 +#endif
  }

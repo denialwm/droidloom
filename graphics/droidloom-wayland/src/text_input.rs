@@ -13,6 +13,7 @@ use wayland_protocols::wp::text_input::zv3::client::{
     zwp_text_input_v3::{self, ZwpTextInputV3},
 };
 
+use super::keyboard_layout::Hint;
 use super::{App, TaskObjectId};
 
 const MAX_RECORD: usize = 16_384;
@@ -68,6 +69,9 @@ pub(super) struct TextInput {
     panel_manager: Option<panel::DenialTextInputPanelManagerV1>,
     panel: Option<panel::DenialTextInputPanelV1>,
     dismissed: Option<Editor>,
+    /// The host keyboard's layout, given to the input method on each
+    /// connection and whenever it changes.
+    keyboard_layout: Option<Hint>,
 }
 
 impl TextInput {
@@ -113,6 +117,7 @@ impl TextInput {
             panel_manager: None,
             panel: None,
             dismissed: None,
+            keyboard_layout: None,
         })
     }
 
@@ -180,6 +185,7 @@ impl TextInput {
                 self.disconnect();
                 client.set_nonblocking(true)?;
                 self.client = Some(client);
+                self.queue_keyboard_layout();
             }
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
             Err(error) => return Err(error),
@@ -284,8 +290,31 @@ impl TextInput {
         self.queue_edit(&edit);
     }
 
+    /// Android types the host keyboard in the layout Android names for it.
+    pub fn set_keyboard_layout(&mut self, layout: Option<Hint>) {
+        if layout.is_none() || layout == self.keyboard_layout {
+            return;
+        }
+        self.keyboard_layout = layout;
+        if self.client.is_some() {
+            self.queue_keyboard_layout();
+        }
+    }
+
+    fn queue_keyboard_layout(&mut self) {
+        if let Some(layout) = self.keyboard_layout {
+            self.queue(&serde_json::json!({
+                "keyboard_layout": { "language": layout.language, "type": layout.kind }
+            }));
+        }
+    }
+
     fn queue_edit(&mut self, edit: &Edit) {
-        if let Ok(mut bytes) = serde_json::to_vec(edit) {
+        self.queue(edit);
+    }
+
+    fn queue(&mut self, record: &impl Serialize) {
+        if let Ok(mut bytes) = serde_json::to_vec(record) {
             bytes.push(b'\n');
             if self.outgoing.len() + bytes.len() <= MAX_RECORD {
                 self.outgoing.extend(bytes);

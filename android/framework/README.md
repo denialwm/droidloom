@@ -108,6 +108,12 @@ replaces `generation` in `/data/vendor/droidloom-authentication` when the
 enrollment or its authenticator ID changes; the provider then enumerates again
 and reloads the authenticator IDs.
 
+`0010-droidloom-host-keyboard-notification.patch` keeps the Droidloom host
+keyboard out of Android's keyboard layout notification. Its layout comes from
+the host through the input method's subtype
+([text input](../../docs/contracts/text-input-v1.md#host-keyboard-layout)), so
+Android neither asks to configure it nor reports the layout it chose.
+
 `DroidloomCredential` gives Android user 0 a random 32-character password that
 nobody types. The lifecycle daemon keeps it beside the cell's storage on the
 host, readable by root alone, and gives it to system_server at each start

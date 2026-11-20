@@ -45,6 +45,25 @@ not export surrounding text, cursor rectangles, selection, or editor-action
 metadata; full prediction/context and precise IME candidate placement remain
 future work. Physical key delivery remains on the existing routed-key path.
 
+## Host keyboard layout
+
+The same connection carries the host keyboard's layout to the input method as
+`{"keyboard_layout":{"language":TAG,"type":TYPE}}`, once when the IME connects
+and whenever the host keymap or its active group changes. The presenter reads
+each group's layout from the keymap's `xkb_symbols` name, the RMLVO symbols the
+compositor compiled it from, and names the Android layout of the same keys as
+a BCP 47 language tag and one of Android's layout types (`qwerty`, `azerty`,
+`qwertz`, `dvorak`, `colemak`, `workman`, `turkish_q`, `turkish_f`, `extended`,
+`undefined`). A layout Android has none for types as US English.
+
+The IME replaces its additional subtype with one whose physical keyboard hint
+is that tag and type, and switches to it. Android's `KeyboardLayoutManager`
+picks the host keyboard's layout from the current subtype's hint, as it does
+for any input method, and key events are injected as that keyboard: apps read
+characters from that layout, and its key map moves keys where the layout does
+(AZERTY, QWERTZ). `0010-droidloom-host-keyboard-notification.patch` keeps the
+keyboard out of Android's keyboard layout notification.
+
 The [Rust package builder](../../packaging/arch/README.md) builds the IME,
 framework services, IME, SystemUI, task launcher and Composer endpoint together. Task registration
 is idempotent for restored and newly created activities.

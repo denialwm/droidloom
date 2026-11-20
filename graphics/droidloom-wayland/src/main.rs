@@ -13,6 +13,7 @@ mod imports;
 mod input;
 mod input_time;
 mod insets;
+mod keyboard_layout;
 mod layers;
 mod notifications;
 mod presentation_audit;
@@ -375,6 +376,9 @@ struct App {
     clipboard: clipboard::Clipboard,
     clipboard_inputs: VecDeque<(TaskObjectId, InputEvent, u64)>,
     text_input: text_input::TextInput,
+    /// Android's hint for each group of the host keymap, and the active group.
+    keyboard_groups: Vec<keyboard_layout::Hint>,
+    keyboard_group: u32,
     registry_state: RegistryState,
     output_state: OutputState,
     output_power_manager: Option<ZwlrOutputPowerManagerV1>,
@@ -3270,8 +3274,27 @@ impl KeyboardHandler for App {
         _serial: u32,
         _modifiers: Modifiers,
         _raw_modifiers: RawModifiers,
-        _layout: u32,
+        layout: u32,
     ) {
+        // The active group: switching layouts on the host switches Android's.
+        self.keyboard_group = layout;
+        let hint = self.keyboard_groups.get(layout as usize).copied();
+        self.text_input.set_keyboard_layout(hint);
+    }
+
+    fn update_keymap(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _keyboard: &wl_keyboard::WlKeyboard,
+        keymap: smithay_client_toolkit::seat::keyboard::Keymap<'_>,
+    ) {
+        self.keyboard_groups = keyboard_layout::groups(&keymap.as_string());
+        let hint = self
+            .keyboard_groups
+            .get(self.keyboard_group as usize)
+            .copied();
+        self.text_input.set_keyboard_layout(hint);
     }
 
     fn update_repeat_info(
@@ -3678,6 +3701,8 @@ fn run() -> Result<(), PresenterError> {
             socket_path.with_file_name("text-input.sock"),
             globals.bind(&qh, 1..=1, ()).ok(),
         )?,
+        keyboard_groups: Vec::new(),
+        keyboard_group: 0,
         registry_state: RegistryState::new(&globals),
         output_state: OutputState::new(&globals, &qh),
         output_power_manager,

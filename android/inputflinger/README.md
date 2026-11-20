@@ -35,6 +35,12 @@ path. The builder permits only its existing Binder virtual override in
 creation, permissions, shutdown and stale-socket cleanup in a system-private
 directory. A restarted system_server starts its own listener again.
 
+Keys are injected as the `Droidloom Host Keyboard` device that
+`0002-droidloom-targeted-injection-binder.patch` registers, so apps read their
+characters from the layout Android selected for it. Its character map also
+remaps the scan code where that layout moves keys; otherwise the receiver's
+US-position key code stands.
+
 The receiver validates input ABI 7 and rejects stale incarnations. It sleeps in
 socket polling at idle, cancels keys/gestures on disconnect or route retirement,
 and retains Binder tokens through cancellation dispatch. Native input ABI 2
