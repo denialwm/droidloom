@@ -401,6 +401,23 @@ keeps it for a restarted framework; the framework creates application tasks
 with it (`Task.Builder` hunk of `0005-droidloom-authoritative-tasks.patch`). A
 window that opens on an output of another density still relaunches once.
 
+### On-screen keyboard
+
+Where the compositor offers `denial_insets_manager_v1` version 2 and Android
+negotiated `TASK_KEYBOARD_INSET`, the presenter asks for a keyboard inset
+object for each task window. The compositor then stops moving the window clear
+of its on-screen keyboard and reports the height the keyboard covers instead.
+The presenter converts it to the task's buffer pixels and sends it as
+`KeyboardInset` (protocol minor 14) after the window's first configure and
+whenever the height or the window's scale changes. Composer queues it as task
+command 8, latest value only. The framework keeps the height per task and gives
+the task's windows an IME inset source of that height, attached to their
+bottom edge (`0001-droidloom-bottom-navigation-insets.patch`), then dispatches
+their insets again. Apps react as to Android's own keyboard: `adjustResize`
+shrinks the content above it, `adjustPan` pans the focused field into view, and
+edge-to-edge apps read `WindowInsets.Type.ime()`. Android's own IME source is
+untouched; Droidloom's headless input method never shows a window.
+
 ### Vsync
 
 With Denial's frame timeline, Android has no clock of its own. The presenter

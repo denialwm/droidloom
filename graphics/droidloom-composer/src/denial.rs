@@ -104,6 +104,11 @@ pub enum AppliedDenialEvent {
         /// Dots per inch; 0 follows Android's display density.
         dpi: u32,
     },
+    /// The host's on-screen keyboard covers this much of the task.
+    KeyboardInset {
+        /// Covered height in Android buffer pixels; 0 when hidden.
+        height: u32,
+    },
     /// Denial-owned system-bar and cutout insets changed.
     Insets {
         /// Left logical inset.
@@ -448,6 +453,9 @@ impl DenialTaskBinding {
                 bottom: *bottom,
             }),
             DenialMessage::Density { dpi, .. } => Ok(AppliedDenialEvent::Density { dpi: *dpi }),
+            DenialMessage::KeyboardInset { height, .. } => {
+                Ok(AppliedDenialEvent::KeyboardInset { height: *height })
+            }
             DenialMessage::Visibility {
                 visibility,
                 focused,
@@ -520,6 +528,7 @@ fn message_object(message: &DenialMessage) -> Option<TaskObjectId> {
         | DenialMessage::Configure { object, .. }
         | DenialMessage::Insets { object, .. }
         | DenialMessage::Density { object, .. }
+        | DenialMessage::KeyboardInset { object, .. }
         | DenialMessage::Visibility { object, .. }
         | DenialMessage::Close { object }
         | DenialMessage::BufferReleased { object, .. }

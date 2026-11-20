@@ -1168,6 +1168,7 @@ fn task_object(message: &DenialMessage) -> Option<TaskObjectId> {
         | DenialMessage::Configure { object, .. }
         | DenialMessage::Insets { object, .. }
         | DenialMessage::Density { object, .. }
+        | DenialMessage::KeyboardInset { object, .. }
         | DenialMessage::Visibility { object, .. }
         | DenialMessage::Close { object }
         | DenialMessage::BufferReleased { object, .. }

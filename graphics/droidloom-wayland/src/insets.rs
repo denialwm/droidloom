@@ -1,4 +1,5 @@
-//! Optional declaration that Android already supplies application insets.
+//! Optional declaration that Android already supplies application insets,
+//! and the on-screen keyboard's height for each Android window.
 
 mod protocol {
     #![allow(
@@ -24,4 +25,5 @@ mod protocol {
 }
 
 pub(super) use protocol::denial_insets_manager_v1::DenialInsetsManagerV1;
+pub(super) use protocol::denial_keyboard_inset_v1::{self, DenialKeyboardInsetV1};
 wayland_client::delegate_noop!(super::App: ignore DenialInsetsManagerV1);

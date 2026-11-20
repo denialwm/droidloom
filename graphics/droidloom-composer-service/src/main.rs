@@ -179,7 +179,8 @@ fn handshake(socket: &ProtocolSocket) -> Result<u64, String> {
                     | capability::KEEP_SCREEN_ON
                     | capability::TASK_DENSITY
                     | capability::TASK_PARENTS
-                    | capability::TASK_FULLSCREEN,
+                    | capability::TASK_FULLSCREEN
+                    | capability::TASK_KEYBOARD_INSET,
             },
             &[],
         )
@@ -390,6 +391,19 @@ fn dispatch_event(
                 eprintln!("Droidloom deferred the density of new tasks: {error}");
             }
         }
+        AppliedDenialEvent::KeyboardInset { height } => {
+            if coordinator.is_direct_task(object) {
+                if let Err(error) = coordinator.queue_window_command(
+                    object,
+                    droidloom_task_control::TaskAction::KeyboardInset { height },
+                ) {
+                    eprintln!(
+                        "Droidloom deferred Android object {} keyboard inset: {error}",
+                        object.0
+                    );
+                }
+            }
+        }
         AppliedDenialEvent::Visibility {
             visibility,
             focused,
@@ -446,6 +460,7 @@ fn task_object(message: &DenialMessage) -> Option<TaskObjectId> {
         | DenialMessage::Configure { object, .. }
         | DenialMessage::Insets { object, .. }
         | DenialMessage::Density { object, .. }
+        | DenialMessage::KeyboardInset { object, .. }
         | DenialMessage::Visibility { object, .. }
         | DenialMessage::Close { object }
         | DenialMessage::BufferReleased { object, .. }

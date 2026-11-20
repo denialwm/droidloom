@@ -50,6 +50,8 @@ final class DroidloomTaskBackend {
     // Tasks with a shown FLAG_KEEP_SCREEN_ON window, as of the last surface placement.
     private final IdentityHashMap<Task, Boolean> mKeepScreenOn = new IdentityHashMap<>();
     private final IdentityHashMap<Task, Boolean> mPlacedKeepScreenOn = new IdentityHashMap<>();
+    // Pixels of each task the host's on-screen keyboard covers, under mService.mGlobalLock.
+    private final IdentityHashMap<Task, Integer> mKeyboardInsets = new IdentityHashMap<>();
     // Accessed only on mWorker. Background tasks retain their existing host window.
     private final IdentityHashMap<Task, Snapshot> mPublished = new IdentityHashMap<>();
     private final IdentityHashMap<Task, Snapshot> mInputPublished = new IdentityHashMap<>();
@@ -183,6 +185,7 @@ final class DroidloomTaskBackend {
             }, true);
             mIncarnations.keySet().retainAll(live.keySet());
             mCreatedOver.keySet().retainAll(live.keySet());
+            mKeyboardInsets.keySet().retainAll(live.keySet());
         }
         return tasks;
     }
@@ -318,6 +321,10 @@ final class DroidloomTaskBackend {
                     if (command[5] != 0 && (command[5] < 72 || command[5] > 1280)) return;
                     setHostDensity(task, (int) command[5]);
                     break;
+                case 8:
+                    if (command[5] < 0 || command[5] > 16384) return;
+                    setHostKeyboardInset(task, (int) command[5]);
+                    break;
                 default:
                     throw new IllegalArgumentException("Unknown host window command");
             }
@@ -363,6 +370,30 @@ final class DroidloomTaskBackend {
             if (r.isVisibleRequested()) r.ensureActivityConfiguration(true /* ignoreVisibility */);
         });
         mService.mWindowManager.mWindowPlacerLocked.requestTraversal();
+    }
+
+    /**
+     * How much of the task's bottom edge the host's on-screen keyboard covers,
+     * in pixels. InsetsPolicy gives the task's windows an IME source of that
+     * height. Under mService.mGlobalLock.
+     */
+    int keyboardInset(Task task) {
+        final Integer height = mKeyboardInsets.get(task);
+        return height == null ? 0 : height;
+    }
+
+    /**
+     * The host's on-screen keyboard moved: the task's windows get their insets
+     * again, as when Android's own keyboard shows or hides. The host no longer
+     * moves the window, so the app makes room above the keyboard itself.
+     */
+    private void setHostKeyboardInset(Task task, int height) {
+        if (keyboardInset(task) == height) return;
+        if (height == 0) mKeyboardInsets.remove(task);
+        else mKeyboardInsets.put(task, height);
+        task.forAllWindows(w -> {
+            if (w.isReadyToDispatchInsetsState()) w.notifyInsetsChanged();
+        }, true /* traverseTopToBottom */);
     }
 
     /**

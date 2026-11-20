@@ -20,7 +20,7 @@ pub const MAGIC: [u8; 4] = *b"DLOM";
 /// Protocol major implemented by this crate.
 pub const PROTOCOL_MAJOR: u16 = 1;
 /// Protocol minor implemented by this crate.
-pub const PROTOCOL_MINOR: u16 = 13;
+pub const PROTOCOL_MINOR: u16 = 14;
 /// Wire version retained by existing records, including initial negotiation.
 pub const BASE_PROTOCOL_MINOR: u16 = 3;
 /// Wire version introducing task activation.
@@ -82,6 +82,8 @@ pub mod capability {
     pub const TASK_PARENTS: u64 = 1 << 16;
     /// Android tells the host when a task's window hides the status bar.
     pub const TASK_FULLSCREEN: u64 = 1 << 17;
+    /// The host tells each task how much of it the on-screen keyboard covers.
+    pub const TASK_KEYBOARD_INSET: u64 = 1 << 18;
 
     /// Capabilities required for every protocol-v1 session.
     pub const REQUIRED_V1: u64 = TASK_WINDOWS
@@ -387,6 +389,13 @@ pub enum DenialMessage {
         object: TaskObjectId,
         /// Dots per inch; 0 follows Android's display density.
         dpi: u32,
+    },
+    /// How much of the task's bottom edge the host's on-screen keyboard covers.
+    KeyboardInset {
+        /// Task the keyboard covers.
+        object: TaskObjectId,
+        /// Covered height in Android buffer pixels; 0 when the keyboard is hidden.
+        height: u32,
     },
     /// Update Denial-owned system-bar and cutout insets.
     Insets {
@@ -1284,6 +1293,7 @@ const OP_REQUEST_INPUT_CHANNEL: u16 = 0x800f;
 const OP_SCENE_PRESENTED: u16 = 0x8010;
 const OP_FRAME_GRANT: u16 = 0x8011;
 const OP_DENSITY: u16 = 0x8012;
+const OP_KEYBOARD_INSET: u16 = 0x8013;
 
 /// Encode one Android-to-Denial message.
 ///
@@ -1899,6 +1909,15 @@ pub fn encode_denial(message: &DenialMessage) -> Result<EncodedPacket, WireError
             payload.u32(*dpi);
             (OP_DENSITY, valid_object(*object)?)
         }
+        DenialMessage::KeyboardInset { object, height } => {
+            if *height > 16384 {
+                return Err(WireError::Limit {
+                    field: "keyboard inset",
+                });
+            }
+            payload.u32(*height);
+            (OP_KEYBOARD_INSET, valid_object(*object)?)
+        }
         DenialMessage::Insets {
             object,
             left,
@@ -2164,6 +2183,16 @@ pub fn decode_denial(
                 object,
                 dpi: payload.u32()?,
             }
+        }
+        OP_KEYBOARD_INSET => {
+            valid_object(object)?;
+            let height = payload.u32()?;
+            if height > 16384 {
+                return Err(WireError::Limit {
+                    field: "keyboard inset",
+                });
+            }
+            DenialMessage::KeyboardInset { object, height }
         }
         OP_INSETS => {
             valid_object(object)?;
@@ -2431,6 +2460,7 @@ fn finish_packet(
         OP_DENSITY => 11,
         OP_SET_PARENT => 12,
         OP_SET_FULLSCREEN => 13,
+        OP_KEYBOARD_INSET => 14,
         _ => BASE_PROTOCOL_MINOR,
     };
     bytes.extend_from_slice(&minor.to_le_bytes());
@@ -3131,6 +3161,10 @@ mod tests {
             DenialMessage::Density {
                 object: OBJECT,
                 dpi: 230,
+            },
+            DenialMessage::KeyboardInset {
+                object: OBJECT,
+                height: 780,
             },
             DenialMessage::Insets {
                 object: OBJECT,

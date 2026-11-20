@@ -1,16 +1,18 @@
 From: Droidloom <droidloom@localhost>
-Subject: [PATCH] wm: always expose host system bars in Droidloom app windows
+Subject: [PATCH] wm: always expose host system bars and keyboard in Droidloom app windows
 
 Baseline: frameworks/base 94b4c163b7dfe5ce3607f7bb8456f9573f7de57d.
 
 Freeform policy strips system bar sources and Android apps cannot otherwise
 observe the host bars. Add per-app sources after policy and to WindowMetrics,
-without Android bar windows or control leashes. The read-only Droidloom
-product marker confines this to Droidloom cells.
+without Android bar windows or control leashes. The host's on-screen keyboard
+is an IME source of the window's task, at the height the host reports for it,
+so apps lay out around it as around Android's own keyboard. The read-only
+Droidloom product marker confines this to Droidloom cells.
 
 --- a/services/core/java/com/android/server/wm/InsetsPolicy.java
 +++ b/services/core/java/com/android/server/wm/InsetsPolicy.java
-@@ -44,6 +44,7 @@
+@@ -44,6 +44,7 @@ import android.content.ComponentName;
  import android.content.res.Resources;
  import android.os.Handler;
  import android.os.IBinder;
@@ -18,20 +20,20 @@ product marker confines this to Droidloom cells.
  import android.util.SparseArray;
  import android.view.DisplayCutout;
  import android.util.proto.ProtoOutputStream;
-@@ -75,6 +76,12 @@
-  * Policy that implements who gets control over the windows generating insets.
+@@ -76,6 +77,12 @@ import java.util.List;
   */
  class InsetsPolicy {
-+
+ 
 +    // This existing read-only product marker identifies Droidloom's task windows.
 +    // Keep ordinary Android products on their stock system-bar policy.
 +    @VisibleForTesting
 +    boolean mDroidloomSystemBars = SystemProperties.getBoolean(
 +            "ro.vendor.droidloom.surfaceflinger_tasks", false);
- 
++
      public static final int CONTROLLABLE_TYPES = WindowInsets.Type.statusBars()
              | WindowInsets.Type.navigationBars()
-@@ -352,7 +359,13 @@
+             | WindowInsets.Type.ime();
+@@ -352,7 +359,20 @@ class InsetsPolicy {
          }
          state = adjustVisibilityForIme(target, state, state == originalState);
          state = mPolicy.replaceInsetsSourcesIfNeeded(state, state == originalState);
@@ -40,13 +42,20 @@ product marker confines this to Droidloom cells.
 +        // Apply after freeform filtering, transient visibility and IME adjustments.
 +        // Host system bars are always present and has no Android control leash.
 +        if (mDroidloomSystemBars && target.mActivityRecord != null) {
-+            state = DroidloomSystemBarInsets.apply(state, target.getConfiguration().densityDpi);
++            state = DroidloomSystemBarInsets.apply(state, target.getConfiguration().densityDpi,
++                    droidloomKeyboardInset(target.getTask()));
 +        }
 +        return state;
++    }
++
++    /** How much of the task the host's on-screen keyboard covers, in pixels. */
++    private int droidloomKeyboardInset(Task task) {
++        final DroidloomTaskBackend tasks = mDisplayContent.mWmService.mAtmService.mDroidloomTasks;
++        return tasks == null || task == null ? 0 : tasks.keyboardInset(task);
      }
  
      @NonNull
-@@ -377,6 +390,10 @@
+@@ -377,6 +397,10 @@ class InsetsPolicy {
              }
          }
          adjustInsetsForRoundedCorners(token, outInsetsState, false /* copyState */);
@@ -61,7 +70,7 @@ diff --git a/services/core/java/com/android/server/wm/DroidloomSystemBarInsets.j
 new file mode 100644
 --- /dev/null
 +++ b/services/core/java/com/android/server/wm/DroidloomSystemBarInsets.java
-@@ -0,0 +1,59 @@
+@@ -0,0 +1,83 @@
 +/*
 + * Copyright (C) 2026 Droidloom
 + * SPDX-License-Identifier: GPL-3.0-or-later
@@ -74,7 +83,10 @@ new file mode 100644
 +import android.view.InsetsState;
 +import android.view.WindowInsets.Type;
 +
-+/** Insets for the host's status bar and gesture navigation indicator, independent of Android SystemUI. */
++/**
++ * Insets for the host's status bar, gesture navigation indicator and on-screen
++ * keyboard, independent of Android SystemUI and of any Android keyboard window.
++ */
 +final class DroidloomSystemBarInsets {
 +    private static final float NAVIGATION_HEIGHT_DP = 24 * 0.7f;
 +    private static final float STATUS_HEIGHT_DP = 33.6f;
@@ -85,11 +97,24 @@ new file mode 100644
 +            SOURCE_OWNER, 0, Type.navigationBars());
 +    private static final int GESTURE_ID = InsetsSource.createId(
 +            SOURCE_OWNER, 0, Type.mandatorySystemGestures());
++    // Not InsetsSource.ID_IME: that source belongs to Android's own input method
++    // window, which Droidloom's headless input method never shows.
++    private static final int KEYBOARD_ID = InsetsSource.createId(
++            SOURCE_OWNER, 0, Type.ime());
 +
 +    private DroidloomSystemBarInsets() {}
 +
 +    static InsetsState apply(InsetsState original, int densityDpi) {
++        return apply(original, densityDpi, 0);
++    }
++
++    /**
++     * @param keyboardHeight pixels of the window's task the host's on-screen
++     *     keyboard covers, from its bottom edge; 0 when the keyboard is hidden.
++     */
++    static InsetsState apply(InsetsState original, int densityDpi, int keyboardHeight) {
 +        final InsetsState state = new InsetsState(original);
++        state.removeSource(KEYBOARD_ID);
 +        // A stale/hidden Android source of the same type could overwrite the public
 +        // visibility bit. Replace host bar sources only in this app's copy.
 +        for (int i = state.sourceSize() - 1; i >= 0; --i) {
@@ -118,6 +143,14 @@ new file mode 100644
 +        // No tappable-element inset: this represents gesture navigation.
 +        state.addSource(new InsetsSource(GESTURE_ID, Type.mandatorySystemGestures())
 +                .setAttachedInsets(bottom).setVisible(true));
++        // Like the bars, attached to the recipient's bottom edge. Its window is
++        // never moved by the host: an adjustResize app shrinks above the
++        // keyboard, an adjustPan app pans its focused field into view, and an
++        // edge-to-edge app reads Type.ime().
++        if (keyboardHeight > 0) {
++            state.addSource(new InsetsSource(KEYBOARD_ID, Type.ime())
++                    .setAttachedInsets(Insets.of(0, 0, 0, keyboardHeight)).setVisible(true));
++        }
 +        return state;
 +    }
 +}
@@ -125,7 +158,7 @@ diff --git a/services/tests/wmtests/src/com/android/server/wm/DroidloomSystemBar
 new file mode 100644
 --- /dev/null
 +++ b/services/tests/wmtests/src/com/android/server/wm/DroidloomSystemBarInsetsTest.java
-@@ -0,0 +1,159 @@
+@@ -0,0 +1,175 @@
 +/*
 + * Copyright (C) 2026 Droidloom
 + * SPDX-License-Identifier: GPL-3.0-or-later
@@ -143,6 +176,7 @@ new file mode 100644
 +import static android.view.WindowManager.LayoutParams.TYPE_APPLICATION;
 +import static android.view.WindowManager.LayoutParams.TYPE_INPUT_METHOD;
 +import static android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING;
++import static android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_PAN;
 +import static org.junit.Assert.assertEquals;
 +import static org.junit.Assert.assertNull;
 +import static org.junit.Assert.assertTrue;
@@ -226,6 +260,21 @@ new file mode 100644
 +        assertEquals(300, insets.getInsets(ime()).bottom);
 +        assertEquals(before, original);
 +        assertEquals(state, DroidloomSystemBarInsets.apply(state, 160));
++    }
++
++    @Test
++    public void hostKeyboardCoversTheBottomUntilHidden() {
++        final InsetsState shown = DroidloomSystemBarInsets.apply(new InsetsState(), 160, 600);
++        final Rect frame = new Rect(80, 40, 480, 840);
++        final WindowInsets insets = calculate(shown, frame);
++        assertTrue(insets.isVisible(ime()));
++        assertEquals(Insets.of(0, 0, 0, 600), insets.getInsets(ime()));
++        assertIndicator(insets, 17, 34);
++        assertEquals(Insets.of(0, 0, 0, 600), shown.calculateVisibleInsets(frame, frame,
++                TYPE_APPLICATION, ACTIVITY_TYPE_STANDARD, SOFT_INPUT_ADJUST_PAN, 0, 0));
++        final InsetsState hidden = DroidloomSystemBarInsets.apply(shown, 160, 0);
++        assertEquals(Insets.NONE, calculate(hidden, frame).getInsets(ime()));
++        assertEquals(DroidloomSystemBarInsets.apply(new InsetsState(), 160), hidden);
 +    }
 +
 +    @Test

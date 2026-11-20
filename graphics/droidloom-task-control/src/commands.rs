@@ -39,6 +39,12 @@ pub enum TaskAction {
         /// Dots per inch; 0 creates tasks at the display's density.
         dpi: u32,
     },
+    /// The host's on-screen keyboard covers this much of the task's bottom
+    /// edge, so the task lays its content out above it.
+    KeyboardInset {
+        /// Covered height in Android buffer pixels; 0 when hidden.
+        height: u32,
+    },
 }
 
 /// The densities a task may be given, besides 0.
@@ -84,6 +90,11 @@ impl TaskCommand {
         if let TaskAction::Density { dpi } | TaskAction::NewTaskDensity { dpi } = self.action {
             if dpi != 0 && !TASK_DENSITY_DPI.contains(&dpi) {
                 return Err(CodecError::InvalidValue("task command density"));
+            }
+        }
+        if let TaskAction::KeyboardInset { height } = self.action {
+            if height > 16384 {
+                return Err(CodecError::InvalidValue("task command keyboard inset"));
             }
         }
         Ok(())
@@ -145,6 +156,10 @@ impl CommandQueue {
             }
             TaskAction::NewTaskDensity { .. } => {
                 !matches!(entry.command.action, TaskAction::NewTaskDensity { .. })
+            }
+            TaskAction::KeyboardInset { .. } => {
+                !(entry.command.object == command.object
+                    && matches!(entry.command.action, TaskAction::KeyboardInset { .. }))
             }
         });
         if self.pending.len() >= MAX_PENDING {
@@ -281,6 +296,29 @@ mod tests {
             }
             .validate()
             .is_err()
+        );
+    }
+
+    #[test]
+    fn a_keyboard_inset_replaces_the_last() {
+        let mut queue = CommandQueue::default();
+        let now = Instant::now();
+        for height in [780, 0, 640] {
+            queue
+                .push(command(7, TaskAction::KeyboardInset { height }), now)
+                .unwrap();
+        }
+        let inset = queue.ready(now).unwrap();
+        assert_eq!(
+            inset.command.action,
+            TaskAction::KeyboardInset { height: 640 }
+        );
+        queue.acknowledge(inset.serial);
+        assert!(queue.ready(now).is_none());
+        assert!(
+            command(7, TaskAction::KeyboardInset { height: 20_000 })
+                .validate()
+                .is_err()
         );
     }
 

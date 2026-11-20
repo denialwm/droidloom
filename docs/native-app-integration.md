@@ -557,7 +557,10 @@ are no duplicate bars or inaccessible content edges.
 Reflect output changes, available work area, scale and orientation through
 Android configuration and real layout. Each task gets the density of the output
 it is on as a task configuration override (see the architecture's refresh and
-density section). Use host-provided insets where supported
+density section). Where the compositor reports its on-screen keyboard's height
+per window, Android lays the task out around it as around its own keyboard
+(see the architecture's on-screen keyboard section); elsewhere the compositor
+moves the window. Use host-provided insets where supported
 and keep an explicit fallback elsewhere. The current
 [fixed inset policy](contracts/navigation-insets.md) is a baseline, not the final
 desktop geometry contract.

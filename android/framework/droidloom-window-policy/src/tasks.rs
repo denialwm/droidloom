@@ -252,6 +252,7 @@ impl Backend {
             TaskAction::Hide => (4, 0, 0),
             TaskAction::Show => (5, 0, 0),
             TaskAction::Density { dpi } => (6, u64::from(dpi), 0),
+            TaskAction::KeyboardInset { height } => (8, u64::from(height), 0),
             TaskAction::NewTaskDensity { .. } => unreachable!("resolved above"),
         };
         Some(CommandBinding {

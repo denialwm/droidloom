@@ -545,6 +545,7 @@ pub fn encode_response(response: &ControlResponse) -> Result<Vec<u8>, CodecError
                 TaskAction::Show => (5, 0, 0),
                 TaskAction::Density { dpi } => (6, dpi, 0),
                 TaskAction::NewTaskDensity { dpi } => (7, dpi, 0),
+                TaskAction::KeyboardInset { height } => (8, height, 0),
             };
             payload.u32(kind);
             payload.u32(width);
@@ -636,6 +637,7 @@ pub fn decode_response(record: &[u8]) -> Result<ControlResponse, CodecError> {
                 (5, 0, 0) => TaskAction::Show,
                 (6, dpi, 0) => TaskAction::Density { dpi },
                 (7, dpi, 0) => TaskAction::NewTaskDensity { dpi },
+                (8, height, 0) => TaskAction::KeyboardInset { height },
                 _ => return Err(CodecError::InvalidValue("task command action")),
             };
             let command = TaskCommand {
@@ -919,6 +921,7 @@ mod tests {
             TaskAction::Hide,
             TaskAction::Show,
             TaskAction::Density { dpi: 230 },
+            TaskAction::KeyboardInset { height: 780 },
         ] {
             let response = ControlResponse::TaskCommand {
                 request_id: 9,
@@ -932,7 +935,7 @@ mod tests {
             };
             let mut bytes = encode_response(&response).unwrap();
             assert_eq!(decode_response(&bytes).unwrap(), response);
-            bytes[HEADER_BYTES + 28..HEADER_BYTES + 32].copy_from_slice(&8_u32.to_le_bytes());
+            bytes[HEADER_BYTES + 28..HEADER_BYTES + 32].copy_from_slice(&9_u32.to_le_bytes());
             assert!(decode_response(&bytes).is_err());
         }
         let new_tasks = ControlResponse::TaskCommand {

@@ -355,6 +355,7 @@ pub struct DenialEndpoint {
     task_density: bool,
     task_parents: bool,
     task_fullscreen: bool,
+    task_keyboard_inset: bool,
     tasks: BTreeMap<TaskObjectId, TaskEndpoint>,
 }
 
@@ -382,6 +383,7 @@ impl DenialEndpoint {
             task_density: false,
             task_parents: false,
             task_fullscreen: false,
+            task_keyboard_inset: false,
             tasks: BTreeMap::new(),
         }
     }
@@ -925,6 +927,38 @@ impl DenialEndpoint {
         self
     }
 
+    /// Opt in when the host reports how much of each task the on-screen
+    /// keyboard covers.
+    pub fn with_task_keyboard_inset(mut self) -> Self {
+        self.task_keyboard_inset = true;
+        self
+    }
+
+    /// Whether Android lays tasks out around the host's on-screen keyboard.
+    pub fn keyboard_inset(&self) -> bool {
+        self.ready && self.task_keyboard_inset
+    }
+
+    /// Tells Android the on-screen keyboard covers `height` buffer pixels of
+    /// the bottom of `object`, 0 when it is hidden. Without a negotiated
+    /// keyboard inset this is a no-op.
+    ///
+    /// # Errors
+    ///
+    /// Rejects unknown tasks and propagates codec or socket failure.
+    pub fn send_keyboard_inset(
+        &self,
+        object: TaskObjectId,
+        height: u32,
+    ) -> Result<(), EndpointError> {
+        if self.ready && self.task_keyboard_inset {
+            self.task(object)?;
+            self.socket
+                .send_denial(&DenialMessage::KeyboardInset { object, height })?;
+        }
+        Ok(())
+    }
+
     /// Opt in when the host gives each task its output's density.
     pub fn with_task_density(mut self) -> Self {
         self.task_density = true;
@@ -1097,10 +1131,13 @@ impl DenialEndpoint {
         self.task_density &= capabilities & capability::TASK_DENSITY != 0;
         self.task_parents &= capabilities & capability::TASK_PARENTS != 0;
         self.task_fullscreen &= capabilities & capability::TASK_FULLSCREEN != 0;
+        self.task_keyboard_inset &= capabilities & capability::TASK_KEYBOARD_INSET != 0;
         self.socket.send_denial(&DenialMessage::ServerHello {
             major: PROTOCOL_MAJOR,
-            minor: if self.task_fullscreen {
+            minor: if self.task_keyboard_inset {
                 PROTOCOL_MINOR
+            } else if self.task_fullscreen {
+                13
             } else if self.task_parents {
                 12
             } else if self.task_density {
@@ -1154,6 +1191,11 @@ impl DenialEndpoint {
                 }
                 | if self.task_fullscreen {
                     capability::TASK_FULLSCREEN
+                } else {
+                    0
+                }
+                | if self.task_keyboard_inset {
+                    capability::TASK_KEYBOARD_INSET
                 } else {
                     0
                 }
@@ -1977,6 +2019,74 @@ mod tests {
     }
 
     #[test]
+    fn keyboard_inset_flows_only_when_negotiated() {
+        for host in [false, true] {
+            for client in [false, true] {
+                let (android, mut endpoint) = pair();
+                if host {
+                    endpoint = endpoint.with_task_keyboard_inset();
+                }
+                android
+                    .send_android(
+                        &AndroidMessage::ClientHello {
+                            min_major: 1,
+                            max_major: 1,
+                            capabilities: capability::REQUIRED_V1
+                                | if client {
+                                    capability::TASK_KEYBOARD_INSET
+                                } else {
+                                    0
+                                },
+                        },
+                        &[],
+                    )
+                    .unwrap();
+                endpoint.receive_action().unwrap();
+                let DenialMessage::ServerHello {
+                    minor,
+                    capabilities,
+                    ..
+                } = android.receive_denial().unwrap().message
+                else {
+                    panic!("hello");
+                };
+                let supported = host && client;
+                assert_eq!(
+                    capabilities & capability::TASK_KEYBOARD_INSET != 0,
+                    supported
+                );
+                assert_eq!(minor, if supported { PROTOCOL_MINOR } else { 6 });
+                let object = TaskObjectId(1);
+                android
+                    .send_android(
+                        &AndroidMessage::CreateTask {
+                            object,
+                            display: AndroidDisplayId(1),
+                            package: "org.example.app".into(),
+                        },
+                        &[],
+                    )
+                    .unwrap();
+                endpoint.receive_action().unwrap();
+                endpoint.send_keyboard_inset(object, 780).unwrap();
+                endpoint.send_display_power(true).unwrap();
+                let first = android.receive_denial().unwrap().message;
+                if supported {
+                    assert_eq!(
+                        first,
+                        DenialMessage::KeyboardInset {
+                            object,
+                            height: 780
+                        }
+                    );
+                } else {
+                    assert_eq!(first, DenialMessage::DisplayPower { powered: true });
+                }
+            }
+        }
+    }
+
+    #[test]
     fn parents_flow_only_when_negotiated() {
         for host in [false, true] {
             for client in [false, true] {
@@ -2089,7 +2199,7 @@ mod tests {
                 };
                 let supported = host && client;
                 assert_eq!(capabilities & capability::TASK_FULLSCREEN != 0, supported);
-                assert_eq!(minor, if supported { PROTOCOL_MINOR } else { 6 });
+                assert_eq!(minor, if supported { 13 } else { 6 });
                 let object = TaskObjectId(1);
                 android
                     .send_android(
