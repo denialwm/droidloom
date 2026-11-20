@@ -19,12 +19,14 @@ here.
   `droidloomctl gpu` lists them and chooses another.
 - A working systemd user session and administrator access through sudo or polkit.
 - At least 20 GiB free for packages, installed files and Android app data.
-  The package pair is about 975 MiB to download and 2.5 GiB installed, before apps.
+  The packages are about 975 MiB to download and 2.5 GiB installed, before apps.
+  Most of that is `droidloom-base`, which an update downloads again only when
+  Android's base partitions change.
 
 Run the desktop commands below in a terminal **inside your Wayland session**, as
 your ordinary user. Do not run `droidloomctl start` or app launches with sudo.
 
-## 2. Install both packages
+## 2. Install the packages
 
 Install or update from the published pacman repository:
 
@@ -45,14 +47,18 @@ On Arch Linux ARM (aarch64) the same script points pacman at the aarch64
 repository.
 Google apps are not included.
 
-For locally built packages, put one matching pair in a directory and run:
+`droidloom-base` comes with them as a dependency.
+
+For locally built packages, put one matching set in a directory and run:
 
 ```console
-sudo pacman -U ./droidloom-runtime-*.pkg.tar.zst ./droidloom-image-*.pkg.tar.zst
+sudo pacman -U ./droidloom-runtime-*.pkg.tar.zst ./droidloom-image-*.pkg.tar.zst ./droidloom-base-*.pkg.tar.zst
 ```
 
 Sudo allows pacman to install system files and dependencies and update its package
-database. Both packages are required and must have the same version and release.
+database. Runtime and image must have the same version and release; the image
+names the base version it needs. A build that reused the published base packs
+none: install that base from the repository.
 Installation leaves Droidloom stopped. No compilation runs on the recipient's
 machine when installing prebuilt packages.
 
@@ -315,14 +321,14 @@ droidloomctl start
 Startup is manual: app launch does not currently start a stopped runtime.
 Stopping releases the runtime's resources and closes its Android windows.
 
-To upgrade, install the new matching package pair with the same `pacman -U`
+To upgrade, install the new matching packages with the same `pacman -U`
 command, then run `droidloomctl start`. The transaction stops Droidloom and retains
 Android data. Installing an older pair restores software, not changes to app data.
 
 To uninstall:
 
 ```console
-sudo pacman -R droidloom-runtime droidloom-image
+sudo pacman -R droidloom-runtime droidloom-image droidloom-base
 ```
 
 Sudo lets pacman stop the system service, remove package-owned files and update

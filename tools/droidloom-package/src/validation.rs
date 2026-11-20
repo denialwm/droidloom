@@ -1,5 +1,9 @@
 //! Exercise real pacman transactions without exposing host devices or services.
-use super::{Result, podman, repository, require_user, run};
+use super::{
+    Result,
+    base::{self, Decision},
+    podman, repository, require_user, run,
+};
 use std::{
     fs,
     io::Read,
@@ -24,9 +28,10 @@ fn output(work: &Path, name: &str, args: &[&str]) -> Result<String> {
     Ok(String::from_utf8(result.stdout)?)
 }
 
+/// Runtime and image, then the base when the directory holds one.
 fn archives(packages: &Path, mount: &str) -> Result<Vec<String>> {
     let mut archives = Vec::new();
-    for prefix in ["droidloom-runtime-", "droidloom-image-"] {
+    for prefix in ["droidloom-runtime-", "droidloom-image-", "droidloom-base-"] {
         let matches = fs::read_dir(&packages)?
             .collect::<std::io::Result<Vec<_>>>()?
             .into_iter()
@@ -36,6 +41,9 @@ fn archives(packages: &Path, mount: &str) -> Result<Vec<String>> {
                 name.starts_with(prefix) && name.ends_with(".pkg.tar.zst")
             })
             .collect::<Vec<_>>();
+        if matches.is_empty() && prefix == "droidloom-base-" {
+            continue;
+        }
         if matches.len() != 1 {
             return Err(format!(
                 "expected exactly one {prefix} package in {}",
@@ -157,7 +165,7 @@ pub fn check(packages: &Path, previous: Option<&Path>) -> Result<()> {
     let repo = repository(None)?;
     let work = super::build_workspace(&repo)?;
     fs::create_dir_all(&work)?;
-    let current = archives(&packages, "/packages")?;
+    let mut current = archives(&packages, "/packages")?;
     let previous = previous.map(Path::canonicalize).transpose()?;
     let old = previous
         .as_ref()
@@ -174,6 +182,18 @@ pub fn check(packages: &Path, previous: Option<&Path>) -> Result<()> {
     fs::create_dir_all(drm.join("drivers/amdgpu"))?;
     symlink("../devices/0000:0a:00.0", drm.join("renderD129/device"))?;
     symlink("../../drivers/amdgpu", drm.join("devices/0000:0a:00.0/driver"))?;
+    // A release that reuses the published base is checked with a stand-in of
+    // that base: same name, version and paths, empty images.
+    let stand_in = fixture.path().join("base");
+    if current.len() == 2 {
+        fs::create_dir(&stand_in)?;
+        let decision = Decision::read(&packages.join("base.json"))?;
+        let archive = base::stand_in(&decision.base, &stand_in)?;
+        current.push(format!(
+            "/base/{}",
+            archive.file_name().unwrap().to_string_lossy()
+        ));
+    }
     let name = format!("droidloom-package-check-{}", std::process::id());
     eprintln!(
         "Testing actual pacman transactions in disposable rootless Arch. No host sudo, devices or graphical services are used."
@@ -185,6 +205,11 @@ pub fn check(packages: &Path, previous: Option<&Path>) -> Result<()> {
         .arg(format!("{}:/packages:ro", packages.display()))
         .arg("--volume")
         .arg(format!("{}:/sys/class/drm:ro", drm.display()));
+    if stand_in.is_dir() {
+        container
+            .arg("--volume")
+            .arg(format!("{}:/base:ro", stand_in.display()));
+    }
     if let Some(previous) = previous {
         container
             .arg("--volume")
@@ -238,7 +263,10 @@ fn transactions(
             return Err("--previous must contain an older package revision to exercise upgrade and downgrade".into());
         }
     }
-    let install = ["pacman", "-U", "--noconfirm", &archives[0], &archives[1]];
+    let install: Vec<&str> = ["pacman", "-U", "--noconfirm"]
+        .into_iter()
+        .chain(archives.iter().map(String::as_str))
+        .collect();
     exec(work, name, &install)?;
     for path in [
         "/usr/bin/droidloomctl",
@@ -283,11 +311,11 @@ fn transactions(
         return Err("repeated setup or package reinstall replaced existing Android data".into());
     }
     if let Some(previous) = previous {
-        exec(
-            work,
-            name,
-            &["pacman", "-U", "--noconfirm", &previous[0], &previous[1]],
-        )?;
+        let downgrade: Vec<&str> = ["pacman", "-U", "--noconfirm"]
+            .into_iter()
+            .chain(previous.iter().map(String::as_str))
+            .collect();
+        exec(work, name, &downgrade)?;
         exec(
             work,
             name,

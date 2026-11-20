@@ -133,6 +133,45 @@ pub(crate) fn inventory(root: &Path) -> Result<BTreeMap<PathBuf, Entry>> {
     Ok(entries)
 }
 
+/// The time every derived image gives the files it adds: the same as each
+/// image's creation time.
+pub(crate) const FIXED_TIME: (i64, i64) = (1_230_768_000, 0);
+
+/// Modification time of `path` itself, not of a symlink's target.
+pub(crate) fn modified(path: &Path) -> Option<(i64, i64)> {
+    fs::symlink_metadata(path)
+        .ok()
+        .map(|meta| (meta.mtime(), meta.mtime_nsec()))
+}
+
+/// Sets the modification time of `path` itself, not of a symlink's target.
+pub(crate) fn set_modified(path: &Path, (seconds, nanoseconds): (i64, i64)) -> Result<()> {
+    use std::os::unix::ffi::OsStrExt;
+    let name = std::ffi::CString::new(path.as_os_str().as_bytes())?;
+    let times = [
+        libc::timespec {
+            tv_sec: 0,
+            tv_nsec: libc::UTIME_OMIT,
+        },
+        libc::timespec {
+            tv_sec: seconds,
+            tv_nsec: nanoseconds,
+        },
+    ];
+    if unsafe {
+        libc::utimensat(
+            libc::AT_FDCWD,
+            name.as_ptr(),
+            times.as_ptr(),
+            libc::AT_SYMLINK_NOFOLLOW,
+        )
+    } != 0
+    {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    Ok(())
+}
+
 pub(crate) fn extract(image: &Path, destination: &Path) -> Result<()> {
     fs::create_dir(destination)?;
     run(Command::new("fsck.erofs")
@@ -175,6 +214,9 @@ pub fn prune(image: &Path, destination: &Path, vendor_properties: &Path) -> Resu
     )?;
     let rebuilt = work.path().join("system_ext.img");
     run(Command::new("mkfs.erofs")
+        // makepkg exports SOURCE_DATE_EPOCH, which mkfs.erofs takes over -T as
+        // the creation time: the image would differ in every build.
+        .env_remove("SOURCE_DATE_EPOCH")
         .args([
             "-zlz4hc,level=9",
             "--workers=2",

@@ -104,7 +104,8 @@ then checks that the new odex records the same boot image checksums and
 context. The release's `framework/oat/<isa>` replaces the base directory in the
 cell; see the [runtime layout](../../docs/contracts/runtime-layout-v1.md).
 
-On the phone, install both packages with `pacman -U` as root; their hooks stop
+On the phone, install the packages with `pacman -U` as root, with
+`droidloom-base` when the candidate packed one; their hooks stop
 Droidloom first and keep its data and setup. Google apps are the
 `droidloom-gapps` package, packed for the candidate (`AGENTS.md`).
 After a capability change, clear the Play Store cache, as described in

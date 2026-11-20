@@ -3,6 +3,7 @@ Operation = Upgrade
 Type = Package
 Target = droidloom-runtime
 Target = droidloom-image
+Target = droidloom-base
 
 [Action]
 Description = Stopping Droidloom before replacing its runtime and Android images...

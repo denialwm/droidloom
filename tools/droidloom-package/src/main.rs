@@ -1,4 +1,5 @@
 //! Rust orchestration around makepkg's standard package interface.
+mod base;
 mod components;
 mod runner;
 mod shipping;
@@ -117,6 +118,20 @@ enum Action {
     InstallTree {
         #[arg(long)]
         source: PathBuf,
+        #[arg(long)]
+        destination: PathBuf,
+    },
+    /// Print the droidloom-base version a staged payload's image depends on.
+    #[command(hide = true)]
+    BaseVersion {
+        #[arg(long)]
+        payload: PathBuf,
+    },
+    /// Install a staged payload's base tree when this build packs it.
+    #[command(hide = true)]
+    InstallBase {
+        #[arg(long)]
+        payload: PathBuf,
         #[arg(long)]
         destination: PathBuf,
     },
@@ -473,6 +488,8 @@ fn build(
     // This storage belongs only to this checkout's package workflow. Drop
     // superseded builder layers so dependency fixes do not fill the host disk.
     run(podman(&work).args(["image", "prune", "--force"]))?;
+    let published = format!("published-base-{}.json", architecture.name());
+    base::fetch_published(architecture.name(), &cache.join(&published))?;
     let uid = unsafe { libc::getuid() };
     let gid = unsafe { libc::getgid() };
     let mut container = podman(&work);
@@ -503,7 +520,9 @@ fn build(
             },
             "--env",
             "CARGO_TARGET_DIR=/build/driver",
+            "--env",
         ])
+        .arg(format!("DROIDLOOM_PUBLISHED_BASE=/build/{published}"))
         .arg("--volume")
         .arg(format!("{}:/source:rw", snapshot.display()))
         .arg("--volume")
@@ -563,8 +582,9 @@ fn build(
         .collect::<std::io::Result<Vec<_>>>()?;
     packages.retain(|p| p.extension() == Some(OsStr::new("zst")));
     packages.sort();
-    if packages.len() != 2 {
-        return Err("build did not produce both runtime and image packages".into());
+    let decision = base::Decision::read(&output.join("base.json"))?;
+    if packages.len() != 2 + usize::from(decision.packed) {
+        return Err("build did not produce the runtime and image packages, with the base it decided to pack".into());
     }
     fs::write(
         output.join("build-summary.json"),
@@ -642,6 +662,8 @@ fn candidate(
             .arg(repo.join("packaging/arch")))?,
         _ => return Err("cannot access rootless Podman package storage".into()),
     }
+    let published = format!("published-base-{}.json", architecture.name());
+    base::fetch_published(architecture.name(), &work.join("build").join(&published))?;
     let uid = unsafe { libc::getuid() };
     let gid = unsafe { libc::getgid() };
     run(podman(&work)
@@ -654,6 +676,8 @@ fn candidate(
             "DROIDLOOM_PREBUILT_PAYLOAD=/payload",
             "--env",
         ])
+        .arg(format!("DROIDLOOM_PUBLISHED_BASE=/build/{published}"))
+        .arg("--env")
         .arg(format!("DROIDLOOM_CANDIDATE={number}"))
         .arg("--volume")
         .arg(format!("{}:/source:ro", repo.display()))
@@ -774,18 +798,30 @@ fn in_container(
         cleanup_package_staging(&packaging);
         return Err(error);
     }
+    let decision = base::Decision::read(&packaging.join("src/payload/base.json"));
+    cleanup_package_staging(&packaging);
+    let decision = decision?;
     let packages = fs::read_dir(temporary.path())?
         .collect::<std::io::Result<Vec<_>>>()?
         .into_iter()
         .filter(|entry| entry.path().extension() == Some(OsStr::new("zst")))
         .collect::<Vec<_>>();
-    if packages.len() != 2 {
-        return Err("makepkg did not produce the complete package pair".into());
+    if packages.len() != 3 {
+        return Err("makepkg did not produce the runtime, image and base packages".into());
     }
     for entry in packages {
-        fs::rename(entry.path(), Path::new("/output").join(entry.file_name()))?;
+        let name = entry.file_name();
+        let base = name.to_string_lossy().starts_with("droidloom-base-");
+        if base && !decision.packed {
+            // An empty stand-in: the image depends on the published base.
+            fs::remove_file(entry.path())?;
+        } else if base && name.to_string_lossy() != decision.file() {
+            return Err("the packed base does not carry its decided version".into());
+        } else {
+            fs::rename(entry.path(), Path::new("/output").join(&name))?;
+        }
     }
-    cleanup_package_staging(&packaging);
+    fs::write("/output/base.json", serde_json::to_vec_pretty(&decision)?)?;
     Ok(())
 }
 
@@ -822,7 +858,20 @@ fn remove_staging(path: &Path) -> Result<()> {
     fs::remove_dir(path)?;
     Ok(())
 }
+/// Stages the payload makepkg packs, then decides whether its base is packed.
 fn compile(source: &Path, work: &Path, destination: &Path, jobs: usize) -> Result<()> {
+    stage_payload(source, work, destination, jobs)?;
+    let published = std::env::var_os("DROIDLOOM_PUBLISHED_BASE").map(PathBuf::from);
+    // A component build's baseline records the base its images came from.
+    let reused = Path::new("/baseline/base.json");
+    base::decide(
+        destination,
+        published.as_deref(),
+        reused.is_file().then_some(reused),
+    )
+}
+
+fn stage_payload(source: &Path, work: &Path, destination: &Path, jobs: usize) -> Result<()> {
     require_user()?;
     if let Some(payload) = std::env::var_os("DROIDLOOM_PREBUILT_PAYLOAD") {
         return install_tree(Path::new(&payload), destination);
@@ -945,6 +994,11 @@ fn execute() -> Result<()> {
             source,
             destination,
         } => install_tree(&source, &destination),
+        Action::BaseVersion { payload } => base::version(&payload),
+        Action::InstallBase {
+            payload,
+            destination,
+        } => base::install(&payload, &destination),
     }
 }
 fn main() {

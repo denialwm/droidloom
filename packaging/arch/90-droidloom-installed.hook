@@ -4,6 +4,7 @@ Operation = Upgrade
 Type = Package
 Target = droidloom-runtime
 Target = droidloom-image
+Target = droidloom-base
 
 [Action]
 Description = Updating Droidloom package configuration...

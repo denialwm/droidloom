@@ -1,6 +1,6 @@
 # All build and filesystem work is implemented by the Rust package command.
 pkgbase=droidloom
-pkgname=(droidloom-runtime droidloom-image)
+pkgname=(droidloom-runtime droidloom-image droidloom-base)
 pkgver=@VERSION@
 pkgrel=@RELEASE@
 arch=(x86_64 aarch64)
@@ -26,7 +26,18 @@ package_droidloom-runtime() {
 }
 
 package_droidloom-image() {
-  pkgdesc='Android system and Droidloom Android components'
+  pkgdesc='Droidloom Android components'
   license=(GPL-3.0-or-later LicenseRef-Android LicenseRef-Mesa)
+  local base
+  base=$("$DROIDLOOM_PACKAGE_TOOL" base-version --payload "$srcdir/payload") || return 1
+  depends=("droidloom-base=$base")
   "$DROIDLOOM_PACKAGE_TOOL" install-tree --source "$srcdir/payload/image" --destination "$pkgdir"
+}
+
+# Packed only when the images changed; otherwise empty and discarded, and the
+# image depends on the published base.
+package_droidloom-base() {
+  pkgdesc='Android system partitions for Droidloom'
+  license=(GPL-3.0-or-later LicenseRef-Android Apache-2.0)
+  "$DROIDLOOM_PACKAGE_TOOL" install-base --payload "$srcdir/payload" --destination "$pkgdir"
 }

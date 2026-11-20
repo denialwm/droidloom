@@ -297,7 +297,23 @@ pub fn derive_image(
         .tempdir_in(destination.parent().ok_or("image has no parent")?)?;
     let tree = work.path().join("tree");
     crate::image_policy::extract(image, &tree)?;
+    // --preserve-mtime keeps every time in the tree, so whatever this writes
+    // would carry the build's clock and change the image in every build.
+    // Remember each path before it changes: those from the base get their
+    // times back, new ones the fixed time.
+    let mut touched = BTreeMap::new();
+    let mut remember = |path: &Path| {
+        for ancestor in path.ancestors() {
+            if ancestor == tree || !ancestor.starts_with(&tree) {
+                break;
+            }
+            touched
+                .entry(ancestor.to_owned())
+                .or_insert_with(|| crate::image_policy::modified(ancestor));
+        }
+    };
     let properties = tree.join("system/build.prop");
+    remember(&properties);
     let updated = bridge_properties(&fs::read_to_string(&properties)?)?;
     fs::write(&properties, updated)?;
 
@@ -337,6 +353,7 @@ pub fn derive_image(
     for path in paths {
         let relative = path.strip_prefix(product)?;
         let destination = tree.join(relative);
+        remember(&destination);
         let metadata = fs::symlink_metadata(&path)?;
         fs::create_dir_all(destination.parent().unwrap())?;
         for parent in relative.ancestors().skip(1) {
@@ -422,11 +439,18 @@ pub fn derive_image(
         "native_executables": false, "files": inventory,
     });
     let manifest_path = tree.join("system/etc/droidloom-native-bridge.json");
+    remember(&manifest_path);
     fs::write(&manifest_path, serde_json::to_vec_pretty(&manifest)?)?;
     run(Command::new("chown").arg("0:0").arg(&manifest_path))?;
     run(Command::new("setfattr")
         .args(["-n", "security.selinux", "-v", "u:object_r:system_file:s0"])
         .arg(&manifest_path))?;
+    for (path, original) in touched {
+        crate::image_policy::set_modified(
+            &path,
+            original.unwrap_or(crate::image_policy::FIXED_TIME),
+        )?;
+    }
     let expected = crate::image_policy::inventory(&tree)?;
     let rebuilt = work.path().join("system.img");
     run(Command::new("mkfs.erofs")

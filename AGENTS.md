@@ -67,8 +67,9 @@ and the output folder, `/mnt/development/denial-os/builds/DEVICE/droidloom/lates
 
 A candidate is pkgrel `R.N`: N commits after release R of
 `packaging/arch/version.json`, after the published R and before R + 1.
-Install both with `pacman -U`; the package hooks stop Droidloom and keep its
-data and setup. Copy them with `cat FILE | ssh HOST 'cat > /tmp/NAME'`.
+Install them with `pacman -U`, with `droidloom-base` when the candidate packed
+one (its Android partitions changed); the package hooks stop Droidloom and keep
+its data and setup. Copy them with `cat FILE | ssh HOST 'cat > /tmp/NAME'`.
 `pacman -Syu` goes back to the published release.
 
 Google apps are bound to the pinned Android base images, not to a Droidloom

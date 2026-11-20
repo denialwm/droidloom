@@ -2,8 +2,10 @@
 
 For installation and source builds, use the [Arch Linux guide](arch/README.md).
 
-The native package split is `droidloom-runtime` and `droidloom-image`, with
-optional hardware-service packages. `droidloom-runtime` owns the supervisor,
+The native package split is `droidloom-runtime`, `droidloom-image` and
+`droidloom-base`, with optional hardware-service packages. `droidloom-base`
+holds the Android partitions that rarely change and is published only when
+they do ([build guide](../docs/BUILDING.md#shipping-with-github-actions)). `droidloom-runtime` owns the supervisor,
 CLI, user lifecycle service, private Android endpoint, and ordinary Wayland
 presenter. Denial has no Droidloom package dependency, plugin, service drop-in,
 or product-specific environment.
@@ -103,7 +105,8 @@ sizes live at `$XDG_STATE_HOME/droidloom/window-sizes-v1.json`.
 
 ## Build and installation ownership
 
-The Rust package builder produces `droidloom-runtime` and `droidloom-image`.
+The Rust package builder produces `droidloom-runtime` and `droidloom-image`,
+and `droidloom-base` when its partitions changed.
 Pacman owns their system files. Rust package support handles first-user setup,
 service permissions and transaction hooks. Upgrades stop Droidloom and leave it
 stopped; removal retains application data. See the [package guide](arch/README.md)
@@ -126,7 +129,7 @@ The Rust builder checks required components, executable permissions, architectur
 and compiled input ABI metadata, including alternate input-bridge copies. It
 accepts compatible byte differences and extra files; pinned upstream inputs
 retain their integrity checks. The pacman workflow uses this builder to produce
-a matched runtime/image pair.
+matched runtime, image and base packages.
 
 The retained ARM64 installer uses a sealed manifest with file hashes, modes,
 symlinks and input ABI checks. This is specific to that installer, not an added

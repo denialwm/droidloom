@@ -9,6 +9,9 @@ use std::{
 };
 
 /// Pacman architecture and cell recipe of each Android product.
+/// The partitions droidloom-base carries.
+pub const BASE_IMAGES: [&str; 3] = ["product.img", "system.img", "system_ext.img"];
+
 fn product_target(product: &str) -> Result<(&'static str, &'static str)> {
     match product {
         "droidloom_x86_64" => Ok(("x86_64", "cell-spec-x86_64-u1000.json")),
@@ -228,6 +231,16 @@ fn package_layout(
         stage.join("usr/lib/droidloom/storage"),
         image.join("usr/lib/droidloom/storage"),
     )?;
+    // The Android partitions that change only with the pinned base, the
+    // translator or the image policy are droidloom-base, a package of their
+    // own that a release publishes only when they change. vendor.raw.img is
+    // built from this source and stays in droidloom-image.
+    let images = stage.join("var/lib/droidloom/images/images");
+    let base = stage.join("base/usr/lib/droidloom/images/images");
+    fs::create_dir_all(&base)?;
+    for name in BASE_IMAGES {
+        fs::rename(images.join(name), base.join(name))?;
+    }
     fs::rename(
         stage.join("var/lib/droidloom/images"),
         image.join("usr/lib/droidloom/images"),
@@ -320,6 +333,12 @@ fn package_notices(repo: &Path, work: &Path, stage: &Path) -> Result<()> {
     let runtime_notices = stage.join("runtime/usr/share/licenses/droidloom-runtime");
     licenses::project(repo, &runtime_notices)?;
     licenses::rust(repo, &runtime_notices.join("rust"))?;
+    let base_notices = stage.join("base/usr/share/licenses/droidloom-base");
+    licenses::project(repo, &base_notices)?;
+    copy(
+        &work.join("base-system/system/etc/NOTICE.xml.gz"),
+        &base_notices.join("Android-NOTICE.xml.gz"),
+    )?;
     let notices = stage.join("image/usr/share/licenses/droidloom-image");
     licenses::project(repo, &notices)?;
     copy(

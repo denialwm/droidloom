@@ -1,8 +1,9 @@
 # Build the pacman packages
 
 The Rust package builder compiles Droidloom's host programs and modified Android
-components, assembles the Android image, and produces a matching runtime/image
-pacman package pair. It uses pinned upstream Android base and toolchain inputs;
+components, assembles the Android image, and produces matching
+`droidloom-runtime` and `droidloom-image` pacman packages, with `droidloom-base`
+when its Android partitions changed. It uses pinned upstream Android base and toolchain inputs;
 it does not rebuild every upstream Android component from source.
 
 ## Shipping with GitHub Actions
@@ -20,6 +21,17 @@ bytes match. If a rebuilt package differs, increment the release. Old archives
 stay available for users with cached pacman databases. Each package release also
 includes a matching Git source snapshot; pinned upstream sources and licenses
 are documented in that snapshot. Optional Google apps are not published.
+
+`droidloom-base` holds the Android partitions that change only with the pinned
+base, Teto or the image policy: `system.img`, `system_ext.img` and
+`product.img`, about 850 MiB of each architecture's download. Their derivation
+is reproducible, so a build compares their SHA-256 with the published
+`<architecture>/base.json` on Pages. When they match, the build packs no base
+and `droidloom-image` depends on the published `droidloom-base` version; the
+pacman database keeps that entry, and the package checks install a stand-in of
+the same name and version with empty images. When they differ, or no record is
+published, the build packs `droidloom-base` with the release's own version. A
+build records its decision in `base.json` beside the packages.
 
 ### Manually controlled local worker
 
@@ -396,8 +408,10 @@ dist/arch/0.1.0-7/aarch64/droidloom-runtime-0.1.0-7-aarch64.pkg.tar.zst
 dist/arch/0.1.0-7/aarch64/droidloom-image-0.1.0-7-aarch64.pkg.tar.zst
 ```
 
-The command prints the exact installation command when finished. Install both
-packages by following [INSTALL.md](INSTALL.md).
+Each architecture's folder also holds `base.json`, and
+`droidloom-base-0.1.0-7-<architecture>.pkg.tar.zst` when the build packed the
+base. The command prints the exact installation command when finished. Install
+the packages by following [INSTALL.md](INSTALL.md).
 
 Normal builds fetch [Teto](https://github.com/denialwm/teto), the Translation
 Engine with Target Optimization, at exact commit

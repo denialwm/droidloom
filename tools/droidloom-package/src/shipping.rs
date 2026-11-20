@@ -1,7 +1,15 @@
 //! Small release interface shared by local runs and GitHub Actions.
-use super::{Architecture, Result, Version, repository, run};
+use super::{
+    Architecture, Result, Version,
+    base::{Decision, PAGES},
+    repository, run,
+};
 use clap::Subcommand;
-use std::{fs, path::Path, process::Command};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    process::Command,
+};
 
 const REPOSITORY: &str = "denialwm/droidloom";
 const RELEASE: &str = "packages";
@@ -14,24 +22,72 @@ pub enum Action {
     Publish,
 }
 
-fn packages(repo: &Path, version: &Version) -> Result<Vec<std::path::PathBuf>> {
-    ["runtime", "image"]
+/// One architecture's packages: runtime and image, then the base when this
+/// release packed one, with the build's base decision.
+struct Release {
+    packages: Vec<PathBuf>,
+    decision: Decision,
+}
+
+fn checked(path: PathBuf) -> Result<PathBuf> {
+    if !path.is_file() {
+        return Err(format!("missing {}", path.display()).into());
+    }
+    if fs::metadata(&path)?.len() >= 2 * 1024 * 1024 * 1024 {
+        return Err("GitHub Release assets must be smaller than 2 GiB".into());
+    }
+    Ok(path)
+}
+
+fn packages(repo: &Path, version: &Version) -> Result<Release> {
+    let output = version.output(repo);
+    let mut packages = ["runtime", "image"]
         .iter()
         .map(|component| {
-            let path = version.output(repo).join(format!(
+            checked(output.join(format!(
                 "droidloom-{component}-{}-{}.pkg.tar.zst",
                 version.directory(),
                 version.architecture
-            ));
-            if !path.is_file() {
-                return Err(format!("missing {}", path.display()).into());
-            }
-            if fs::metadata(&path)?.len() >= 2 * 1024 * 1024 * 1024 {
-                return Err("GitHub Release assets must be smaller than 2 GiB".into());
-            }
-            Ok(path)
+            )))
         })
-        .collect()
+        .collect::<Result<Vec<_>>>()?;
+    let decision = Decision::read(&output.join("base.json"))?;
+    if decision.base.architecture != version.architecture {
+        return Err("the base decision names another architecture".into());
+    }
+    if decision.packed {
+        packages.push(checked(output.join(decision.file()))?);
+    }
+    Ok(Release { packages, decision })
+}
+
+/// Starts a database from the published one when this release reuses the
+/// published base: its entry stays, and repo-add replaces runtime and image.
+fn published_database(database: &Path, decision: &Decision) -> Result<()> {
+    for name in ["droidloom.db.tar.gz", "droidloom.files.tar.gz"] {
+        run(Command::new("curl")
+            .args(["--fail", "--silent", "--show-error", "--location"])
+            .args(["--max-time", "60", "--output"])
+            .arg(database.join(name))
+            .arg(format!("{PAGES}/{}/{name}", decision.base.architecture)))?;
+    }
+    let entries = Command::new("bsdtar")
+        .arg("-tf")
+        .arg(database.join("droidloom.db.tar.gz"))
+        .output()?;
+    let entry = format!("droidloom-base-{}/", decision.base.version);
+    if !entries.status.success()
+        || !String::from_utf8(entries.stdout)?
+            .lines()
+            .any(|line| line == entry)
+    {
+        return Err(format!(
+            "the published {} database does not list droidloom-base {}",
+            decision.base.architecture, decision.base.version
+        )
+        .into());
+    }
+    Ok(())
 }
 
 fn gh() -> Command {
@@ -43,25 +99,36 @@ fn gh() -> Command {
 pub fn execute(action: Action) -> Result<()> {
     let repo = repository(None)?;
     // Every architecture ships the same release, or none does.
-    let mut pairs = Vec::new();
+    let mut releases = Vec::new();
     for architecture in Architecture::ALL {
         let version = Version::read(&repo, architecture)?;
-        pairs.push((packages(&repo, &version)?, version));
+        releases.push((packages(&repo, &version)?, version));
     }
-    let version = &pairs[0].1;
-    let packages: Vec<_> = pairs.iter().flat_map(|(pair, _)| pair).collect();
+    let version = &releases[0].1;
+    let packages: Vec<_> = releases
+        .iter()
+        .flat_map(|(release, _)| &release.packages)
+        .collect();
     let site = repo.join("dist/pages");
     match action {
         Action::Prepare => {
             if site.exists() {
                 fs::remove_dir_all(&site)?;
             }
-            for (pair, version) in &pairs {
+            for (release, version) in &releases {
                 let database = site.join(&version.architecture);
                 fs::create_dir_all(&database)?;
+                if !release.decision.packed {
+                    published_database(&database, &release.decision)?;
+                }
                 run(Command::new("repo-add")
                     .arg(database.join("droidloom.db.tar.gz"))
-                    .args(pair))?;
+                    .args(&release.packages))?;
+                // The next release compares its base images with this record.
+                fs::write(
+                    database.join("base.json"),
+                    serde_json::to_vec_pretty(&release.decision.base)?,
+                )?;
                 // Pages artifacts cannot contain symlinks. Publish the actual bytes.
                 for name in ["droidloom.db", "droidloom.files"] {
                     fs::remove_file(database.join(name))?;
@@ -139,7 +206,7 @@ pub fn execute(action: Action) -> Result<()> {
 mod tests {
     use super::*;
     #[test]
-    fn publication_requires_exact_pair_and_excludes_addons() {
+    fn publication_requires_runtime_image_and_a_packed_base_and_excludes_addons() {
         let temp = tempfile::tempdir().unwrap();
         let version = Version {
             version: "1.2.3".into(),
@@ -148,6 +215,19 @@ mod tests {
         };
         let output = temp.path().join("dist/arch/1.2.3-4/x86_64");
         fs::create_dir_all(&output).unwrap();
+        let decision = |packed: bool| Decision {
+            base: crate::base::Base {
+                version: if packed { "1.2.3-4" } else { "1.2.3-2" }.into(),
+                architecture: "x86_64".into(),
+                images: Default::default(),
+            },
+            packed,
+        };
+        fs::write(
+            output.join("base.json"),
+            serde_json::to_vec(&decision(false)).unwrap(),
+        )
+        .unwrap();
         fs::write(
             output.join("droidloom-runtime-1.2.3-4-x86_64.pkg.tar.zst"),
             "runtime",
@@ -160,6 +240,18 @@ mod tests {
         )
         .unwrap();
         fs::write(output.join("droidloom-gapps-1-x86_64.pkg.tar.zst"), "addon").unwrap();
-        assert_eq!(packages(temp.path(), &version).unwrap().len(), 2);
+        assert_eq!(packages(temp.path(), &version).unwrap().packages.len(), 2);
+        fs::write(
+            output.join("base.json"),
+            serde_json::to_vec(&decision(true)).unwrap(),
+        )
+        .unwrap();
+        assert!(packages(temp.path(), &version).is_err());
+        fs::write(
+            output.join("droidloom-base-1.2.3-4-x86_64.pkg.tar.zst"),
+            "base",
+        )
+        .unwrap();
+        assert_eq!(packages(temp.path(), &version).unwrap().packages.len(), 3);
     }
 }
