@@ -155,7 +155,7 @@ diff --git a/services/inputflinger/reader/EventHub.cpp b/services/inputflinger/r
 index 2ac37b6..cb56f03 100644
 --- a/services/inputflinger/reader/EventHub.cpp
 +++ b/services/inputflinger/reader/EventHub.cpp
-@@ -2967,6 +2967,25 @@ void EventHub::createVirtualKeyboardLocked() {
+@@ -2967,6 +2967,27 @@ void EventHub::createVirtualKeyboardLocked() {
              InputDeviceClass::DPAD | InputDeviceClass::VIRTUAL;
      device->loadKeyMapLocked();
      addDeviceLocked(std::move(device));
@@ -174,8 +174,10 @@ index 2ac37b6..cb56f03 100644
 +    auto hostKeyboard = std::make_unique<Device>(
 +            -1, mNextDeviceId++, "<droidloom-host-keyboard>", hostKeyboardIdentifier,
 +            /*associatedDevice=*/nullptr);
++    // Not VIRTUAL: the reader lays the selected keyboard layout over a
++    // virtual device's key map never, and the host's keys follow that layout.
 +    hostKeyboard->classes = InputDeviceClass::KEYBOARD | InputDeviceClass::ALPHAKEY |
-+            InputDeviceClass::DPAD | InputDeviceClass::VIRTUAL;
++            InputDeviceClass::DPAD;
 +    hostKeyboard->loadKeyMapLocked();
 +    addDeviceLocked(std::move(hostKeyboard));
  }

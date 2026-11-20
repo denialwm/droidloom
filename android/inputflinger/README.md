@@ -37,7 +37,9 @@ directory. A restarted system_server starts its own listener again.
 
 Keys are injected as the `Droidloom Host Keyboard` device that
 `0002-droidloom-targeted-injection-binder.patch` registers, so apps read their
-characters from the layout Android selected for it. Its character map also
+characters from the layout Android selected for it. The device has no
+`VIRTUAL` class, which would keep InputReader from laying that layout over
+its key map. Its character map also
 remaps the scan code where that layout moves keys; otherwise the receiver's
 US-position key code stands.
 
