@@ -13,8 +13,9 @@ import java.io.PrintWriter;
 
 /**
  * Android's media volume is the host's default output volume. Android's
- * volume curve plays music on the host output at full scale at every step
- * (`audio_policy_volumes.xml`), so the music volume only moves the host's:
+ * volume curves play every stream on the host output at full scale at every
+ * step but 0 (`audio_policy_volumes.xml`), so the music volume only moves the
+ * host's:
  * each change goes to the host, and the host's changes become Android's music
  * volume, so apps see the level the host shows. Index 0 is silence in Android
  * whatever the curve says, so a quiet host level stays on step 1 at least.
