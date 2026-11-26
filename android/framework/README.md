@@ -29,9 +29,9 @@ root/system. Regenerate them with `python3 tools/droidloom-systemui-stubs` when
 advancing the pinned framework interfaces; `--check` verifies the checked-in
 adapters. The updater also checks their source hashes against the build inputs.
 
-Android's music volume and screen brightness follow the host. SystemUI's
-`HostVolume` makes Android's output an absolute-volume device while the host
-has a default output, and `HostBrightness` passes Android's brightness setting
+Android's music volume and screen brightness follow the host. Android's volume curve plays music
+at full scale, SystemUI's `HostVolume` passes the music volume to the host's
+default output and back, and `HostBrightness` passes Android's brightness setting
 and any window's brightness to the backlight, both over host channels to the
 user's brokers; the host's own changes come back. See the runtime layout
 contract, "Media volume and screen brightness".

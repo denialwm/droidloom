@@ -22,7 +22,10 @@ licenses; applying a patch does not give Droidloom ownership of that code.
   their individual licenses, predominantly Apache-2.0 and BSD/MIT variants.
   The copied
   `android/device/droidloom_arm64/android.software.activities_on_secondary_displays.xml`
-  retains its Android Open Source Project copyright and Apache-2.0 notice.
+  retains its Android Open Source Project copyright and Apache-2.0 notice,
+  as does `android/device/droidloom_arm64/audio_policy_volumes.xml`, copied
+  from AOSP's audio policy configuration with full-scale music on the speaker
+  category.
   The audio APEX recipe preserves the upstream Apache license alongside
   Droidloom's GPL-covered changes.
   The Java WindowManager policy adapter follows the pinned PhoneWindowManager

@@ -252,18 +252,19 @@ binds them at `/dev/socket/droidloom-framework-host/volume` and
 SystemUI as host channels 4 and 5, connecting as itself, so each broker
 authenticates system (1000). Records are DLDEV001; a level is 0 to 1.
 
-Volume: while the host has a default output, SystemUI makes Android's output
-(`droidloom-host-output`) an absolute-volume device. Android then plays music
-at full scale and passes each change of its music volume, with mute, to the
-broker, which sets the default output's volume as pipewire-pulse does: on the
-card's active route when the sink has one, else on the node. Levels are what
-host mixers show, the cube root of the linear gain; the balance between
-channels stays. The broker sends the output's level when SystemUI connects
-and on each change made on the host, except the levels Android set in the
-last two seconds; SystemUI hands them to Android as the device's volume,
-which does not come back. Without a default output, or when PipeWire goes,
-Android scales its music itself again. Other streams (ring, alarms,
-notifications) stay inside Android.
+Volume: Android's volume curve plays music on its host output at full scale
+at every step (`audio_policy_volumes.xml`, speaker category, which the BUS
+output falls in), so Android's music volume only moves the host's. SystemUI
+sends each change of the music volume, with mute, to the broker, which sets
+the default output's volume as pipewire-pulse does: on the card's active
+route when the sink has one, else on the node. Levels are what host mixers
+show, the cube root of the linear gain; the balance between channels stays.
+The broker sends the output's level when SystemUI connects and on each change
+made on the host, except the levels Android set in the last two seconds;
+SystemUI makes it Android's music volume, at least step 1 for any level above
+0, since step 0 is silence in Android. Android's own mute at step 0 is not
+sent as the host's mute. Other streams (ring, alarms, notifications) keep
+Android's own curves.
 
 Brightness: the broker drives the backlight Denial does (a panel's own
 before a platform or firmware one), writing sysfs when the user may and
