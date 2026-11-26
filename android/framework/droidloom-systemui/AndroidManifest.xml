@@ -13,6 +13,7 @@
     <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
     <uses-permission android:name="android.permission.NETWORK_SETTINGS" />
     <uses-permission android:name="android.permission.CONTROL_DISPLAY_BRIGHTNESS" />
+    <uses-permission android:name="android.permission.QUERY_AUDIO_STATE" />
     <application android:label="Droidloom SystemUI" android:persistent="true"
         android:allowBackup="false" android:allowClearUserData="false"
         android:hardwareAccelerated="false" android:directBootAware="true"
