@@ -16,7 +16,9 @@ HAL. Its PCM16, 48 kHz BUS streams use four dedicated size-sealed memfds; output
 FMQ transactions copy directly into the acquired pool slot, and input copies
 directly from that slot into FMQ. Capture grants use read-only descriptors.
 The broker registers those same allocations with PipeWire's application-buffer
-API and performs no PCM copy. Mute and master volume affect only Droidloom PCM.
+API and performs no PCM copy. Android's master volume and mute affect only
+Droidloom PCM; its media volume is the host's output volume (see the runtime
+layout contract).
 
 Playback remains clocked when no host sink exists: PipeWire's dummy driver
 paces the stream, while WirePlumber's `node.linger` policy waits for an output

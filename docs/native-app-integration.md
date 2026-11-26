@@ -425,8 +425,10 @@ fallback can remain useful where the direct path is unavailable.
 
 The existing [audio bridge](audio-integration-proposal.md) remains the baseline
 for comparison. Physical routing stays with PipeWire and its session manager.
-An Android volume or mute operation must not silently change unrelated Linux
-applications. See [AOSP audio architecture](https://source.android.com/docs/core/audio).
+Android's media volume is the host's default output volume, as a native
+player's volume control is: an app that changes it changes the host's
+([runtime layout](contracts/runtime-layout-v1.md), "Media volume and screen
+brightness"). Android's master volume and mute stay on Droidloom's own PCM. See [AOSP audio architecture](https://source.android.com/docs/core/audio).
 
 ## Shared identity and independent service lifetimes
 
