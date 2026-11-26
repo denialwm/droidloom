@@ -1,0 +1,40 @@
+From: Droidloom <droidloom@localhost>
+Subject: [PATCH] power: no boot brightness override in Droidloom cells
+
+Baseline: frameworks/base 94b4c163b7dfe5ce3607f7bb8456f9573f7de57d.
+
+Until boot completes, PowerManagerService overrides the screen brightness
+with the default one, to keep the bootloader's brightness steady. Display
+brightness reports every override as a window's, and Droidloom's SystemUI
+gives a window's level to the host's backlight: the host's screen flashed
+to Android's default level for the last 100 ms of each start. A cell has
+no bootloader picture, so its display takes the user's setting from the
+start. The read-only Droidloom product marker confines this to Droidloom
+cells.
+diff --git a/services/core/java/com/android/server/power/PowerManagerService.java b/services/core/java/com/android/server/power/PowerManagerService.java
+index 505530cc2..9da9bd64c 100644
+--- a/services/core/java/com/android/server/power/PowerManagerService.java
++++ b/services/core/java/com/android/server/power/PowerManagerService.java
+@@ -643,6 +643,13 @@ public final class PowerManagerService extends SystemService
+     public final float mScreenBrightnessDefault;
+     public final float mScreenBrightnessDim;
+ 
++    // The read-only product marker of Droidloom cells. A cell has no
++    // bootloader picture to keep steady during boot: its display takes the
++    // user's setting from the start, so only a window overrides it, and
++    // Droidloom's SystemUI gives a window's level to the host's backlight.
++    private static final boolean DROIDLOOM = SystemProperties.getBoolean(
++            "ro.vendor.droidloom.surfaceflinger_tasks", false);
++
+     // Value we store for tracking face down behavior.
+     @VisibleForTesting
+     boolean mIsFaceDown = false;
+@@ -4037,7 +4044,7 @@ public final class PowerManagerService extends SystemService
+                 // Determine appropriate screen brightness.
+                 final float screenBrightnessOverride;
+                 CharSequence overrideTag = null;
+-                if (!mBootCompleted) {
++                if (!mBootCompleted && !DROIDLOOM) {
+                     // Keep the brightness steady during boot. This requires the
+                     // bootloader brightness and the default brightness to be identical.
+                     screenBrightnessOverride = mScreenBrightnessDefault;

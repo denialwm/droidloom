@@ -121,6 +121,12 @@ the host through the input method's subtype
 ([text input](../../docs/contracts/text-input-v1.md#host-keyboard-layout)), so
 Android neither asks to configure it nor reports the layout it chose.
 
+`0011-droidloom-no-boot-brightness-override.patch` drops PowerManagerService's
+boot brightness override, which holds Android's default brightness until boot
+completes to match a bootloader picture a cell does not have. Android reports
+every override as a window's, and SystemUI gives a window's level to the host's
+backlight, so the host's screen flashed to that default at each start.
+
 `DroidloomCredential` gives Android user 0 a random 32-character password that
 nobody types. The lifecycle daemon keeps it beside the cell's storage on the
 host, readable by root alone, and gives it to system_server at each start
