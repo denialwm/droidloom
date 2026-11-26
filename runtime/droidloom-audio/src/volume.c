@@ -25,8 +25,7 @@ typedef void (*dl_volume_report)(void *user, int available, float linear, int mu
 
 struct dl_node {
     struct spa_list link;
-    uint32_t id, device;
-    int32_t profile_device;
+    uint32_t id;
     bool sink;
     char name[NAME];
 };
@@ -70,7 +69,7 @@ static void unbind(struct dl_volume *v) {
         v->device = NULL;
     }
     v->target = SPA_ID_INVALID;
-    v->route_index = v->route_device = -1;
+    v->route_index = v->route_device = v->profile_device = -1;
     v->known = false;
 }
 
@@ -100,8 +99,37 @@ static void node_param(void *data, int seq SPA_UNUSED, uint32_t id, uint32_t ind
     if (changed && v->channels > 0) { v->known = true; tell(v); }
 }
 
+static void device_param(void *data, int seq, uint32_t id, uint32_t index, uint32_t next,
+        const struct spa_pod *param);
+
+static const struct pw_device_events device_events = {
+    PW_VERSION_DEVICE_EVENTS,
+    .param = device_param,
+};
+
+// The registry leaves out a sink's card: its own info names it.
+static void node_info(void *data, const struct pw_node_info *info) {
+    struct dl_volume *v = data;
+    if (v->device || !(info->change_mask & PW_NODE_CHANGE_MASK_PROPS) || !info->props) return;
+    const char *device = spa_dict_lookup(info->props, PW_KEY_DEVICE_ID);
+    const char *profile_device = spa_dict_lookup(info->props, "card.profile.device");
+    uint32_t device_id;
+    int32_t profile;
+    if (!device || !profile_device || !spa_atou32(device, &device_id, 10)
+            || !spa_atoi32(profile_device, &profile, 10))
+        return;
+    v->profile_device = profile;
+    v->device = pw_registry_bind(v->registry, device_id, PW_TYPE_INTERFACE_Device,
+        PW_VERSION_DEVICE, 0);
+    if (!v->device) return;
+    pw_device_add_listener(v->device, &v->device_listener, &device_events, v);
+    uint32_t ids[] = { SPA_PARAM_Route };
+    pw_device_subscribe_params(v->device, ids, 1);
+}
+
 static const struct pw_node_events node_events = {
     PW_VERSION_NODE_EVENTS,
+    .info = node_info,
     .param = node_param,
 };
 
@@ -122,11 +150,6 @@ static void device_param(void *data, int seq SPA_UNUSED, uint32_t id, uint32_t i
     }
 }
 
-static const struct pw_device_events device_events = {
-    PW_VERSION_DEVICE_EVENTS,
-    .param = device_param,
-};
-
 static void resolve(struct dl_volume *v) {
     struct dl_node *found = NULL, *node;
     spa_list_for_each(node, &v->nodes, link)
@@ -135,21 +158,11 @@ static void resolve(struct dl_volume *v) {
     unbind(v);
     if (!found) { if (v->syncs == 2) v->report(v->user, 0, 0, 0); return; }
     v->target = found->id;
-    v->profile_device = found->profile_device;
     v->node = pw_registry_bind(v->registry, found->id, PW_TYPE_INTERFACE_Node, PW_VERSION_NODE, 0);
     if (v->node) {
         pw_node_add_listener(v->node, &v->node_listener, &node_events, v);
         uint32_t ids[] = { SPA_PARAM_Props };
         pw_node_subscribe_params(v->node, ids, 1);
-    }
-    if (found->device != SPA_ID_INVALID && found->profile_device >= 0) {
-        v->device = pw_registry_bind(v->registry, found->device, PW_TYPE_INTERFACE_Device,
-            PW_VERSION_DEVICE, 0);
-        if (v->device) {
-            pw_device_add_listener(v->device, &v->device_listener, &device_events, v);
-            uint32_t ids[] = { SPA_PARAM_Route };
-            pw_device_subscribe_params(v->device, ids, 1);
-        }
     }
 }
 
@@ -193,11 +206,6 @@ static void registry_global(void *data, uint32_t id, uint32_t permissions SPA_UN
     node->id = id;
     node->sink = class && strcmp(class, "Audio/Sink") == 0;
     strcpy(node->name, name);
-    const char *device = spa_dict_lookup(props, PW_KEY_DEVICE_ID);
-    const char *profile_device = spa_dict_lookup(props, "card.profile.device");
-    if (!device || !spa_atou32(device, &node->device, 10)) node->device = SPA_ID_INVALID;
-    if (!profile_device || !spa_atoi32(profile_device, &node->profile_device, 10))
-        node->profile_device = -1;
     spa_list_append(&v->nodes, &node->link);
     if (node->sink) resolve(v);
 }
