@@ -33,9 +33,7 @@ pub(crate) struct Identity {
 
 pub(crate) fn host() -> Identity {
     let read = |path| fs::read_to_string(path).ok();
-    let tree_model = read(DEVICE_TREE_MODEL)
-        .and_then(|model| value(&model))
-        .filter(|_| false);
+    let tree_model = read(DEVICE_TREE_MODEL).and_then(|model| value(&model));
     let maker = tree_model.as_deref().zip(read(DEVICE_TREE_COMPATIBLE)).and_then(
         |(model, compatible)| maker(model, &compatible),
     );
