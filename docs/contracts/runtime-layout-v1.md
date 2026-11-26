@@ -243,6 +243,41 @@ The broker only runs the reader: the authentication service counts a match
 once the supervisor, as root, has seen fprintd announce it on the system bus,
 and passes it through `/dev/socket/droidloom-authentication` (root, 0600).
 
+## Media volume and screen brightness
+
+`droidloom-audio.socket` also owns `%t/droidloom/volume.sock`, and
+`droidloom-devices.socket` `%t/droidloom/brightness.sock`. The supervisor
+binds them at `/dev/socket/droidloom-framework-host/volume` and
+`.../brightness`, where only `system_server` reaches them. It hands them to
+SystemUI as host channels 4 and 5, connecting as itself, so each broker
+authenticates system (1000). Records are DLDEV001; a level is 0 to 1.
+
+Volume: while the host has a default output, SystemUI makes Android's output
+(`droidloom-host-output`) an absolute-volume device. Android then plays music
+at full scale and passes each change of its music volume, with mute, to the
+broker, which sets the default output's volume as pipewire-pulse does: on the
+card's active route when the sink has one, else on the node. Levels are what
+host mixers show, the cube root of the linear gain; the balance between
+channels stays. The broker sends the output's level when SystemUI connects
+and on each change made on the host, except the levels Android set in the
+last two seconds; SystemUI hands them to Android as the device's volume,
+which does not come back. Without a default output, or when PipeWire goes,
+Android scales its music itself again. Other streams (ring, alarms,
+notifications) stay inside Android.
+
+Brightness: the broker drives the backlight Denial does (a panel's own
+before a platform or firmware one), writing sysfs when the user may and
+otherwise logind's `SetBrightness` on the user's display session; it never
+writes 0. It sends the backlight's level when SystemUI connects and after
+each write it did not make (the kernel wakes a poll on `actual_brightness`);
+SystemUI makes it Android's brightness setting. While Android's display is
+on, SystemUI sends Android's setting when an app changes it, and the level a
+window asks for while it shows (`screenBrightness`, as video players set it).
+When no window asks any more, or SystemUI goes, the broker puts back the
+level before the first window's, unless something else wrote the backlight
+meanwhile. Without a backlight the broker says so and Android's brightness
+stays inside it.
+
 ## Credential prompts
 
 An Android app that asks to confirm the device credential gets the host

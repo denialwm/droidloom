@@ -85,9 +85,13 @@ final class DroidloomHostChannels {
                 if (channel == 1 && uid == ime) name = "text-input";
                 else if (channel == 2 && uid == systemui) name = "clipboard";
                 else if (channel == 3 && uid == systemui) name = "notifications";
+                else if (channel == 4 && uid == systemui) name = "volume";
+                else if (channel == 5 && uid == systemui) name = "brightness";
                 else continue;
                 String path = "/dev/socket/droidloom-framework-host/" + name;
-                try (LocalSocket host = new LocalSocket()) {
+                // The device brokers keep record boundaries; the presenter streams.
+                int type = channel >= 4 ? LocalSocket.SOCKET_SEQPACKET : LocalSocket.SOCKET_STREAM;
+                try (LocalSocket host = new LocalSocket(type)) {
                     host.connect(new LocalSocketAddress(path, LocalSocketAddress.Namespace.FILESYSTEM));
                     if (host.getPeerCredentials().getUid() != Os.stat(path).st_uid)
                         throw new SecurityException("Untrusted host channel owner");

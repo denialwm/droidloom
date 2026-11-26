@@ -1,6 +1,6 @@
 [package]
 name = "droidloom-audio"
-description = "Per-user PipeWire backend for private Android audio streams"
+description = "Per-user PipeWire backend for private Android audio streams and media volume"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -10,6 +10,7 @@ repository.workspace = true
 [dependencies]
 clap.workspace = true
 droidloom-audio-protocol = { path = "../droidloom-audio-protocol" }
+droidloom-device-protocol = { path = "../droidloom-device-protocol" }
 libc.workspace = true
 
 [build-dependencies]

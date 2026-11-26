@@ -18,6 +18,8 @@ public class SystemUIService extends Service {
     private com.android.systemui.notifications.NotificationBridge notifications;
     private com.android.systemui.clipboard.ClipboardBridge clipboard;
     private com.android.systemui.wifi.WifiProvisioning wifi;
+    private com.android.systemui.levels.HostVolume volume;
+    private com.android.systemui.levels.HostBrightness brightness;
     @Override public void onCreate() {
         super.onCreate();
         if (UserHandle.myUserId() != 0) return;
@@ -34,6 +36,10 @@ public class SystemUIService extends Service {
         notifications.start();
         wifi = new com.android.systemui.wifi.WifiProvisioning(this);
         wifi.start();
+        volume = new com.android.systemui.levels.HostVolume(this);
+        volume.start();
+        brightness = new com.android.systemui.levels.HostBrightness(this);
+        brightness.start();
         Log.i("DroidloomSystemUI", "DROIDLOOM_SYSTEMUI_ABI=1; status bar registered; no windows");
     }
     @Override public int onStartCommand(Intent intent, int flags, int startId) {
@@ -43,6 +49,8 @@ public class SystemUIService extends Service {
         if (clipboard != null) clipboard.close();
         if (notifications != null) notifications.close();
         if (wifi != null) wifi.close();
+        if (volume != null) volume.close();
+        if (brightness != null) brightness.close();
         super.onDestroy();
     }
     @Override public IBinder onBind(Intent intent) { return null; }
@@ -52,5 +60,7 @@ public class SystemUIService extends Service {
         out.println("windows=0 timers=0 notificationRenderer=desktop-dbus");
         if (clipboard != null) clipboard.dump(out);
         if (notifications != null) notifications.dump(out);
+        if (volume != null) volume.dump(out);
+        if (brightness != null) brightness.dump(out);
     }
 }

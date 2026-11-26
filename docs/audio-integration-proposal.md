@@ -327,9 +327,11 @@ target; general app-to-speaker zero-copy is not an established capability.
   bus outside the cell. Microphone grants must be revocable on the host; stop
   capture and invalidate the old pool on revocation. Disabling an endpoint
   cannot erase samples Android already received.
-- Map Android volume/mute to its own streams. Let host session policy choose
+- Android's music volume and mute are the host's default output volume
+  (see the runtime layout contract, "Media volume and screen brightness");
+  other Android streams keep their own volume. Let host session policy choose
   devices and reflect route loss, headset/Bluetooth transitions and capture
-  availability back into Android. Avoid changing global host mute/volume.
+  availability back into Android.
   HAL mix streams do not automatically provide per-Android-app controls or
   trustworthy microphone attribution; that requires framework identity work.
   [PipeWire session policy](https://docs.pipewire.org/page_session_manager.html),

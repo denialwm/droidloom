@@ -1,6 +1,6 @@
 [package]
 name = "droidloom-devices"
-description = "Host user's broker for Android's haptics, cameras, fingerprints and location"
+description = "Host user's broker for Android's haptics, cameras, fingerprints, location and brightness"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

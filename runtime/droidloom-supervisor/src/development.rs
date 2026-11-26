@@ -2029,7 +2029,9 @@ fn create_private_dev(spec: &CellSpec, root: &Path) -> Result<(), DevelopmentErr
         bind_mount(&text_socket, &target, false)?;
     }
     // Audio, the GPU server and the device broker (haptics, camera,
-    // fingerprint, location) are separate user brokers. Their systemd-owned sockets
+    // fingerprint, location) are separate user brokers. The audio broker's
+    // media volume and the device broker's brightness are framework-only
+    // host channels. Their systemd-owned sockets
     // survive broker restarts, preserving the inodes bind-mounted into the
     // Android cell.
     for name in [
@@ -2041,6 +2043,8 @@ fn create_private_dev(spec: &CellSpec, root: &Path) -> Result<(), DevelopmentErr
         "camera",
         "fingerprint",
         "location",
+        "volume",
+        "brightness",
     ] {
         let socket = spec.denial_socket.with_file_name(format!("{name}.sock"));
         if socket.exists() {
@@ -2521,7 +2525,10 @@ mod tests {
         let service = root_servicemanager(original).unwrap();
         assert!(service.contains("\n    user root\n    group system readproc\n"));
         assert!(!service.contains("user system"));
-        assert_eq!(root_servicemanager("service servicemanager x\n    user root\n"), None);
+        assert_eq!(
+            root_servicemanager("service servicemanager x\n    user root\n"),
+            None
+        );
     }
 
     #[test]

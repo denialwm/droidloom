@@ -1,5 +1,5 @@
 [Unit]
-Description=Droidloom host haptics, camera, fingerprint and location broker
+Description=Droidloom host haptics, camera, fingerprint, location and brightness broker
 PartOf=droidloom.service
 Requires=droidloom-devices.socket
 

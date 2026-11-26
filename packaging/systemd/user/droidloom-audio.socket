@@ -1,9 +1,10 @@
 [Unit]
-Description=Droidloom private Android audio endpoint
+Description=Droidloom private Android audio and media volume endpoints
 PartOf=droidloom.service
 
 [Socket]
 ListenSequentialPacket=%t/droidloom/audio.sock
+ListenSequentialPacket=%t/droidloom/volume.sock
 SocketMode=0666
 DirectoryMode=0700
 RemoveOnStop=true

@@ -17,6 +17,13 @@
 //! supervisor closes it, or [`Message::CredentialCancelled`] when the user
 //! closed it. [`Message::CredentialOpened`] says the user turned from the
 //! fingerprint to the sheet.
+//!
+//! Volume and brightness come from Droidloom's `SystemUI` through
+//! `system_server`'s host channels, on one socket each. The broker sends the
+//! host's level when Android connects and on every change made on the host;
+//! Android sends its own changes. A level is 0 to 1: the volume as the host's
+//! mixers show it (the cube root of the linear gain), the brightness as a
+//! share of the backlight's range.
 
 use std::fmt;
 
@@ -64,6 +71,13 @@ const LOCATION_STOP: u32 = 65;
 const LOCATION_STATE: u32 = 66;
 const LOCATION_FIX: u32 = 67;
 const LOCATION_SATELLITES: u32 = 68;
+const VOLUME_SET: u32 = 80;
+const VOLUME_STATE: u32 = 81;
+const VOLUME_UNAVAILABLE: u32 = 82;
+const BRIGHTNESS_SET: u32 = 96;
+const BRIGHTNESS_RELEASE: u32 = 97;
+const BRIGHTNESS_STATE: u32 = 98;
+const BRIGHTNESS_UNAVAILABLE: u32 = 99;
 
 /// One step of a haptic pattern: `intensity` from 0 to 1 for `ms`; 0 is a pause.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -339,6 +353,40 @@ pub enum Message {
     LocationFix(Fix),
     /// Every satellite signal the engine lists, sent on each change.
     LocationSatellites(Vec<Satellite>),
+    /// Android changed its media volume: set the host's default output.
+    VolumeSet {
+        /// 0 to 1, as the host's mixers show it.
+        level: f32,
+        /// Muted.
+        muted: bool,
+    },
+    /// The host's default output, at the start and on each change.
+    VolumeState {
+        /// 0 to 1, as the host's mixers show it.
+        level: f32,
+        /// Muted.
+        muted: bool,
+    },
+    /// The host has no default output.
+    VolumeUnavailable,
+    /// Android changed the screen's brightness: set the host's backlight.
+    BrightnessSet {
+        /// 0 to 1 of the backlight's range.
+        level: f32,
+        /// An app's window asks for it while it shows, as a video player
+        /// does; [`Message::BrightnessRelease`] ends it.
+        window: bool,
+    },
+    /// No window asks for a brightness any more: the host goes back to the
+    /// level before the first window's, unless the user changed it meanwhile.
+    BrightnessRelease,
+    /// The host's backlight, at the start and on each change.
+    BrightnessState {
+        /// 0 to 1 of the backlight's range.
+        level: f32,
+    },
+    /// The host has no backlight.
+    BrightnessUnavailable,
 }
 
 /// A record that does not decode.
@@ -452,6 +500,14 @@ impl Reader<'_> {
             .is_finite()
             .then_some(value)
             .ok_or(Invalid("not a number"))
+    }
+    /// A level from 0 to 1.
+    fn level(&mut self) -> Result<f32, Invalid> {
+        let value = self.f32()?;
+        (0.0..=1.0)
+            .contains(&value)
+            .then_some(value)
+            .ok_or(Invalid("level outside 0 to 1"))
     }
     fn f64(&mut self) -> Result<f64, Invalid> {
         let value = f64::from_le_bytes(self.take()?);
@@ -728,6 +784,30 @@ impl Message {
                 writer.satellites(satellites);
                 writer
             }
+            Message::VolumeSet { level, muted } | Message::VolumeState { level, muted } => {
+                let mut writer = Writer::new(if matches!(self, Message::VolumeSet { .. }) {
+                    VOLUME_SET
+                } else {
+                    VOLUME_STATE
+                });
+                writer.f32(*level);
+                writer.u8(u8::from(*muted));
+                writer
+            }
+            Message::VolumeUnavailable => Writer::new(VOLUME_UNAVAILABLE),
+            Message::BrightnessSet { level, window } => {
+                let mut writer = Writer::new(BRIGHTNESS_SET);
+                writer.f32(*level);
+                writer.u8(u8::from(*window));
+                writer
+            }
+            Message::BrightnessRelease => Writer::new(BRIGHTNESS_RELEASE),
+            Message::BrightnessState { level } => {
+                let mut writer = Writer::new(BRIGHTNESS_STATE);
+                writer.f32(*level);
+                writer
+            }
+            Message::BrightnessUnavailable => Writer::new(BRIGHTNESS_UNAVAILABLE),
         };
         writer.0
     }
@@ -836,6 +916,24 @@ impl Message {
             },
             LOCATION_FIX => Message::LocationFix(reader.fix()?),
             LOCATION_SATELLITES => Message::LocationSatellites(reader.satellites()?),
+            VOLUME_SET => Message::VolumeSet {
+                level: reader.level()?,
+                muted: reader.u8()? != 0,
+            },
+            VOLUME_STATE => Message::VolumeState {
+                level: reader.level()?,
+                muted: reader.u8()? != 0,
+            },
+            VOLUME_UNAVAILABLE => Message::VolumeUnavailable,
+            BRIGHTNESS_SET => Message::BrightnessSet {
+                level: reader.level()?,
+                window: reader.u8()? != 0,
+            },
+            BRIGHTNESS_RELEASE => Message::BrightnessRelease,
+            BRIGHTNESS_STATE => Message::BrightnessState {
+                level: reader.level()?,
+            },
+            BRIGHTNESS_UNAVAILABLE => Message::BrightnessUnavailable,
             _ => return Err(Invalid("unknown kind")),
         };
         reader.end()?;
@@ -848,6 +946,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[allow(clippy::too_many_lines)] // One record of each kind.
     fn records_round_trip() {
         for message in [
             Message::HapticsQuery,
@@ -929,6 +1028,22 @@ mod tests {
                 ephemeris: true,
                 almanac: false,
             }]),
+            Message::VolumeSet {
+                level: 0.4,
+                muted: false,
+            },
+            Message::VolumeState {
+                level: 1.0,
+                muted: true,
+            },
+            Message::VolumeUnavailable,
+            Message::BrightnessSet {
+                level: 0.25,
+                window: true,
+            },
+            Message::BrightnessRelease,
+            Message::BrightnessState { level: 0.0 },
+            Message::BrightnessUnavailable,
         ]
         .into_iter()
         .chain(SCANS.map(Message::FingerprintScan))
@@ -982,6 +1097,17 @@ mod tests {
             ..fix
         };
         assert!(Message::decode(&Message::LocationFix(infinite).encode()).is_err());
+    }
+
+    #[test]
+    fn levels_outside_their_range_do_not_decode() {
+        for level in [-0.1, 1.5, f32::NAN] {
+            let set = Message::BrightnessSet {
+                level,
+                window: false,
+            };
+            assert!(Message::decode(&set.encode()).is_err());
+        }
     }
 
     #[test]

@@ -1,5 +1,5 @@
-//! The host user's broker for Android's haptics, cameras, fingerprints and
-//! location.
+//! The host user's broker for Android's haptics, cameras, fingerprints,
+//! location and screen brightness.
 //!
 //! Android's vibrator service sends patterns on one socket; they go to
 //! hapticd on the system bus, over one connection kept for the broker's life
@@ -12,8 +12,10 @@
 //! hears there is no vibrator, camera or fingerprint reader. Root's
 //! supervisor asks on a fourth for the host's screen lock when an Android app
 //! wants the device credential ([`credential`]). Android's GNSS service gets
-//! dmail's positions on a fifth ([`location`]).
+//! dmail's positions on a fifth ([`location`]). Droidloom's SystemUI sets
+//! the host's backlight on a sixth ([`brightness`]).
 
+mod brightness;
 mod credential;
 mod fingerprint;
 mod location;
@@ -45,7 +47,9 @@ const PROPERTIES: &str = "org.freedesktop.DBus.Properties";
 const MAX_CLIENTS: usize = 8;
 
 #[derive(Parser)]
-#[command(about = "Host user's broker for Android's haptics, cameras, fingerprints and location")]
+#[command(
+    about = "Host user's broker for Android's haptics, cameras, fingerprints, location and brightness"
+)]
 struct Arguments {
     /// Haptics socket, when not started by its socket unit.
     #[arg(long)]
@@ -62,6 +66,9 @@ struct Arguments {
     /// Location socket, when not started by its socket unit.
     #[arg(long)]
     location_socket: Option<PathBuf>,
+    /// Brightness socket, when not started by its socket unit.
+    #[arg(long)]
+    brightness_socket: Option<PathBuf>,
     /// Host-mapped UID of Android's vibrator service (system).
     #[arg(long, default_value_t = 1000)]
     haptics_uid: u32,
@@ -77,6 +84,9 @@ struct Arguments {
     /// Host-mapped UID of Android's GNSS service (gps).
     #[arg(long, default_value_t = 1021)]
     location_uid: u32,
+    /// Host-mapped UID of system_server, which hands SystemUI the brightness socket.
+    #[arg(long, default_value_t = 1000)]
+    brightness_uid: u32,
 }
 
 #[derive(Clone, Copy)]
@@ -86,6 +96,7 @@ enum Endpoint {
     Fingerprint,
     Credential,
     Location,
+    Brightness,
 }
 
 /// The system bus, connected when first needed and again after a failure.
@@ -350,6 +361,7 @@ fn endpoint_of(path: &Path) -> Option<Endpoint> {
         "fingerprint.sock" => Some(Endpoint::Fingerprint),
         "credential.sock" => Some(Endpoint::Credential),
         "location.sock" => Some(Endpoint::Location),
+        "brightness.sock" => Some(Endpoint::Brightness),
         _ => None,
     }
 }
@@ -400,13 +412,16 @@ fn listeners(arguments: &Arguments) -> io::Result<Vec<(Endpoint, SeqPacketListen
         if let Some(path) = &arguments.location_socket {
             listeners.push((Endpoint::Location, bind(path)?));
         }
+        if let Some(path) = &arguments.brightness_socket {
+            listeners.push((Endpoint::Brightness, bind(path)?));
+        }
         return Ok(listeners);
     }
     let count: i32 = std::env::var("LISTEN_FDS")
         .ok()
         .and_then(|value| value.parse().ok())
-        .filter(|count| (1..=5).contains(count))
-        .ok_or_else(|| io::Error::other("devices needs one to five activation sockets"))?;
+        .filter(|count| (1..=6).contains(count))
+        .ok_or_else(|| io::Error::other("devices needs one to six activation sockets"))?;
     let mut listeners = Vec::new();
     for raw in 3..3 + count {
         // SAFETY: fcntl validates the inherited descriptor before we own it.
@@ -459,6 +474,7 @@ fn run(arguments: &Arguments) -> io::Result<()> {
     check_peer_uid_mapping(&mapping, arguments.fingerprint_uid)?;
     check_peer_uid_mapping(&mapping, arguments.credential_uid)?;
     check_peer_uid_mapping(&mapping, arguments.location_uid)?;
+    check_peer_uid_mapping(&mapping, arguments.brightness_uid)?;
     let listeners = listeners(arguments)?;
     if listeners.is_empty() {
         return Err(io::Error::other("no device socket to serve"));
@@ -479,6 +495,7 @@ fn run(arguments: &Arguments) -> io::Result<()> {
             Endpoint::Fingerprint => arguments.fingerprint_uid,
             Endpoint::Credential => arguments.credential_uid,
             Endpoint::Location => arguments.location_uid,
+            Endpoint::Brightness => arguments.brightness_uid,
         };
         accepting.push(std::thread::spawn(move || -> io::Result<()> {
             loop {
@@ -514,6 +531,7 @@ fn run(arguments: &Arguments) -> io::Result<()> {
                         Endpoint::Fingerprint => fingerprint::serve(&Arc::new(socket)),
                         Endpoint::Credential => credential::serve(&socket),
                         Endpoint::Location => location::serve(&Arc::new(socket)),
+                        Endpoint::Brightness => brightness::serve(&Arc::new(socket), &bus),
                         _ => serve(&socket, endpoint, &haptics, &bus),
                     };
                     if let Err(error) = served {
@@ -602,6 +620,10 @@ mod tests {
         assert!(matches!(
             endpoint_of(Path::new("/run/user/1000/droidloom/location.sock")),
             Some(Endpoint::Location)
+        ));
+        assert!(matches!(
+            endpoint_of(Path::new("/run/user/1000/droidloom/brightness.sock")),
+            Some(Endpoint::Brightness)
         ));
         assert!(endpoint_of(Path::new("/run/user/1000/droidloom/audio.sock")).is_none());
     }

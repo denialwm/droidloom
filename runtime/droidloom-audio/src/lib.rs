@@ -8,6 +8,15 @@ use std::os::fd::{AsFd, AsRawFd};
 use std::ptr::NonNull;
 use std::sync::Once;
 
+pub mod volume;
+
+/// Initializes PipeWire for this process, once.
+fn init_pipewire() {
+    static INITIALIZE: Once = Once::new();
+    // SAFETY: PipeWire initialization is process-global and performed once.
+    INITIALIZE.call_once(|| unsafe { dl_pw_init() });
+}
+
 /// Host-side authority and routing. Capture defaults to denied in the CLI.
 #[derive(Clone, Debug)]
 pub struct Options {
@@ -69,9 +78,7 @@ struct Stream {
 
 impl Stream {
     fn open(format: Format, options: &Options, generation: u64) -> io::Result<Self> {
-        static INITIALIZE: Once = Once::new();
-        // SAFETY: PipeWire initialization is process-global and performed once.
-        INITIALIZE.call_once(|| unsafe { dl_pw_init() });
+        init_pipewire();
         let buffers = (0..BUFFERS)
             .map(|_| SampleBuffer::allocate(format))
             .collect::<io::Result<Vec<_>>>()?;

@@ -29,6 +29,13 @@ root/system. Regenerate them with `python3 tools/droidloom-systemui-stubs` when
 advancing the pinned framework interfaces; `--check` verifies the checked-in
 adapters. The updater also checks their source hashes against the build inputs.
 
+Android's music volume and screen brightness follow the host. SystemUI's
+`HostVolume` makes Android's output an absolute-volume device while the host
+has a default output, and `HostBrightness` passes Android's brightness setting
+and any window's brightness to the backlight, both over host channels to the
+user's brokers; the host's own changes come back. See the runtime layout
+contract, "Media volume and screen brightness".
+
 Biometric prompts open no window: the host marks the sensor and runs the reader
 (under Denial, through `denial-fingerprint-verify-v1`), so the asking app stays
 in front. SystemUI starts the sensor at once, answers a match as confirmed and
