@@ -1,35 +1,55 @@
 //! Android names the device after its host.
 //!
 //! The model comes from the device tree, as the host's own About page shows
-//! it. The device name is the host's pretty hostname, else its hostname;
+//! it. The maker is the model's first word when the device tree's first
+//! compatible names the same vendor, as in `oneplus,iceland` for "OnePlus Pad
+//! 4"; Android reports it as manufacturer and brand. The device name is the host's pretty hostname, else its hostname;
 //! Android's system server copies it into `Settings.Global.DEVICE_NAME`.
 
 use std::fs;
 
 const DEVICE_TREE_MODEL: &str = "/sys/firmware/devicetree/base/model";
+const DEVICE_TREE_COMPATIBLE: &str = "/sys/firmware/devicetree/base/compatible";
 const MACHINE_INFO: &str = "/etc/machine-info";
 const HOSTNAME: &str = "/proc/sys/kernel/hostname";
 const DEFAULT_MODEL: &str = "Droidloom";
 /// Android's limit for a property value, without the terminating NUL.
 const VALUE_BYTES: usize = 91;
 const MODEL_PROPERTIES: [&str; 2] = ["ro.product.model", "ro.product.product.model"];
+const MAKER_PROPERTIES: [&str; 4] = [
+    "ro.product.manufacturer",
+    "ro.product.product.manufacturer",
+    "ro.product.brand",
+    "ro.product.product.brand",
+];
 pub(crate) const DEVICE_NAME_PROPERTY: &str = "ro.droidloom.device_name";
 
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct Identity {
     pub model: String,
+    pub maker: Option<String>,
     pub name: Option<String>,
 }
 
 pub(crate) fn host() -> Identity {
     let read = |path| fs::read_to_string(path).ok();
-    let model = read(DEVICE_TREE_MODEL)
-        .and_then(|model| value(&model))
-        .unwrap_or_else(|| DEFAULT_MODEL.to_owned());
+    let tree_model = read(DEVICE_TREE_MODEL).and_then(|model| value(&model));
+    let maker = tree_model.as_deref().zip(read(DEVICE_TREE_COMPATIBLE)).and_then(
+        |(model, compatible)| maker(model, &compatible),
+    );
+    let model = tree_model.unwrap_or_else(|| DEFAULT_MODEL.to_owned());
     let name = read(MACHINE_INFO)
         .and_then(|info| pretty_hostname(&info))
         .or_else(|| read(HOSTNAME).and_then(|name| value(&name)));
-    Identity { model, name }
+    Identity { model, maker, name }
+}
+
+/// The model's first word, when the first compatible's vendor prefix is that
+/// word in lower case.
+fn maker(model: &str, compatible: &str) -> Option<String> {
+    let word = model.split_whitespace().next()?;
+    let (vendor, _) = compatible.split('\0').next()?.split_once(',')?;
+    (vendor == word.to_lowercase()).then(|| word.to_owned())
 }
 
 /// Replaces the image's model and device name in product properties, which
@@ -39,7 +59,9 @@ pub(crate) fn product_properties(original: &str, identity: &Identity) -> String 
     for line in original.lines() {
         if line.split_once('=').is_some_and(|(key, _)| {
             let key = key.trim();
-            MODEL_PROPERTIES.contains(&key) || key == DEVICE_NAME_PROPERTY
+            MODEL_PROPERTIES.contains(&key)
+                || (identity.maker.is_some() && MAKER_PROPERTIES.contains(&key))
+                || key == DEVICE_NAME_PROPERTY
         }) {
             continue;
         }
@@ -48,6 +70,11 @@ pub(crate) fn product_properties(original: &str, identity: &Identity) -> String 
     }
     for key in MODEL_PROPERTIES {
         output.push_str(&format!("{key}={}\n", identity.model));
+    }
+    if let Some(maker) = &identity.maker {
+        for key in MAKER_PROPERTIES {
+            output.push_str(&format!("{key}={maker}\n"));
+        }
     }
     if let Some(name) = &identity.name {
         output.push_str(&format!("{DEVICE_NAME_PROPERTY}={name}\n"));
@@ -126,19 +153,32 @@ mod tests {
     fn replaces_the_image_identity_and_keeps_everything_else() {
         let identity = Identity {
             model: "OnePlus 12R".into(),
+            maker: Some("OnePlus".into()),
             name: Some("AstonDenial".into()),
         };
-        let input = "# image\nro.product.product.model=Cuttlefish arm64 phone\nro.product.product.name=aosp_cf\n";
+        let input = "# image\nro.product.product.model=Cuttlefish arm64 phone\nro.product.product.brand=generic\nro.product.product.name=aosp_cf\n";
         let result = product_properties(input, &identity);
         assert_eq!(
             result,
-            "# image\nro.product.product.name=aosp_cf\nro.product.model=OnePlus 12R\nro.product.product.model=OnePlus 12R\nro.droidloom.device_name=AstonDenial\n"
+            "# image\nro.product.product.name=aosp_cf\nro.product.model=OnePlus 12R\nro.product.product.model=OnePlus 12R\nro.product.manufacturer=OnePlus\nro.product.product.manufacturer=OnePlus\nro.product.brand=OnePlus\nro.product.product.brand=OnePlus\nro.droidloom.device_name=AstonDenial\n"
         );
         assert_eq!(product_properties(&result, &identity), result);
         let unnamed = Identity {
             model: DEFAULT_MODEL.into(),
+            maker: None,
             name: None,
         };
-        assert!(!product_properties(input, &unnamed).contains(DEVICE_NAME_PROPERTY));
+        let result = product_properties(input, &unnamed);
+        assert!(!result.contains(DEVICE_NAME_PROPERTY));
+        assert!(result.contains("ro.product.product.brand=generic\n"));
+    }
+
+    #[test]
+    fn maker_needs_the_compatible_vendor() {
+        let compatible = "oneplus,iceland\0qcom,kaanapali\0";
+        assert_eq!(maker("OnePlus Pad 4", compatible).as_deref(), Some("OnePlus"));
+        assert_eq!(maker("Pad 4", compatible), None);
+        assert_eq!(maker("OnePlus Pad 4", "qcom,kaanapali\0"), None);
+        assert_eq!(maker("OnePlus Pad 4", "oneplus\0"), None);
     }
 }
