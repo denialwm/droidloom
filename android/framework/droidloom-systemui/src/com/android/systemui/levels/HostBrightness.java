@@ -125,10 +125,13 @@ public final class HostBrightness implements DisplayManager.DisplayListener, Aut
         BrightnessInfo info = display == null ? null : display.getBrightnessInfo();
         if (info == null) return false;
         if (info.isBrightnessOverrideByWindow) {
-            if (!window || Math.abs(info.brightness - windowLevel) > SAME) {
+            // `brightness` stays the user's setting; the window's level is what
+            // the display controller applies.
+            float level = info.adjustedBrightness;
+            if (!window || Math.abs(level - windowLevel) > SAME) {
                 window = true;
-                windowLevel = info.brightness;
-                Records.send(current, Records.level(Records.BRIGHTNESS_SET, info.brightness, true));
+                windowLevel = level;
+                Records.send(current, Records.level(Records.BRIGHTNESS_SET, level, true));
             }
             return false;
         }
