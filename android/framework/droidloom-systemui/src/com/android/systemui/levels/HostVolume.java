@@ -44,6 +44,10 @@ public final class HostVolume implements AutoCloseable {
                         AudioDeviceAttributes device, VolumeInfo volume) {
                     fromAndroid(volume);
                 }
+                // Adjustments arrive as changes: the behavior is registered without
+                // handling them separately.
+                @Override public void onAudioDeviceVolumeAdjusted(AudioDeviceAttributes device,
+                        VolumeInfo volume, int direction, int mode) { }
             };
 
     public HostVolume(Context context) {
