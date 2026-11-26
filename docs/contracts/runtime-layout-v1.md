@@ -394,10 +394,7 @@ an incoming VM relay listener. This avoids a `traced` restart loop on hosts
 without AF_VSOCK while preserving normal tracing and its enable setting.
 
 It names Android after the host as well. `ro.product.model` is the host's
-device-tree model, or `Droidloom` without one. When the model's first word is
-the vendor of the device tree's first compatible (`oneplus,iceland` for
-"OnePlus Pad 4"), that word becomes `ro.product.manufacturer` and
-`ro.product.brand`. `ro.droidloom.device_name` is
+device-tree model, or `Droidloom` without one. `ro.droidloom.device_name` is
 the host's pretty hostname from `/etc/machine-info`, else its hostname, and
 system_server writes it to `Settings.Global.DEVICE_NAME` at every start.
 
