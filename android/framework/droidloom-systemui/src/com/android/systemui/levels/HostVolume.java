@@ -87,7 +87,7 @@ public final class HostVolume implements AutoCloseable {
         known = true;
         agreedIndex = index;
         agreedMuted = muted;
-        if (audio.getStreamVolume(AudioManager.STREAM_MUSIC) != index)
+        if (audio.getLastAudibleStreamVolume(AudioManager.STREAM_MUSIC) != index)
             audio.setStreamVolume(AudioManager.STREAM_MUSIC, index, 0);
         if (index > min && audio.isStreamMute(AudioManager.STREAM_MUSIC) != muted)
             audio.adjustStreamVolume(AudioManager.STREAM_MUSIC,
@@ -97,10 +97,13 @@ public final class HostVolume implements AutoCloseable {
     private void fromAndroid() {
         HostChannel current = channel;
         if (current == null || !known) return;
-        int index = audio.getStreamVolume(AudioManager.STREAM_MUSIC);
+        // A muted stream reads as index 0: its level is the last audible one.
+        boolean streamMuted = audio.isStreamMute(AudioManager.STREAM_MUSIC);
+        int index = streamMuted ? audio.getLastAudibleStreamVolume(AudioManager.STREAM_MUSIC)
+                : audio.getStreamVolume(AudioManager.STREAM_MUSIC);
         // Android mutes the stream by itself at index 0; that is the level, not
         // the host's mute.
-        boolean muted = index > min ? audio.isStreamMute(AudioManager.STREAM_MUSIC) : agreedMuted;
+        boolean muted = index > min ? streamMuted : agreedMuted;
         if (index == agreedIndex && muted == agreedMuted) return;
         agreedIndex = index;
         agreedMuted = muted;
