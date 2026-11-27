@@ -29,6 +29,7 @@ public final class HostInputMethod extends InputMethodService {
     private boolean composing;
     private JSONObject state;
     private final EditorVisibility visibility = new EditorVisibility();
+    private final EditorTask task = new EditorTask();
     // The host's layout, kept until Android has attached this method: a
     // subtype switch before that is ignored.
     private String layoutLanguage, layoutType;
@@ -50,6 +51,11 @@ public final class HostInputMethod extends InputMethodService {
         visibility.show(getCurrentInputEditorInfo() != null
                 && getCurrentInputEditorInfo().inputType != InputType.TYPE_NULL);
         publish(visibility.isVisible());
+        if (visibility.isVisible() && task.get() == 0) {
+            // Android now takes the keyboard for shown, and the host cannot
+            // be asked to show one.
+            android.util.Log.w("DroidloomIME", "show request for an editor without a task");
+        }
         return false;
     }
 
@@ -71,6 +77,8 @@ public final class HostInputMethod extends InputMethodService {
         followHostLayout();
         session++;
         composing = false;
+        task.start(editor.extras == null ? 0
+                : editor.extras.getInt("com.android.droidloom.ime.task", 0), restarting);
         visibility.start(editor.inputType != InputType.TYPE_NULL, restarting);
         publish(visibility.isVisible());
     }
@@ -86,8 +94,7 @@ public final class HostInputMethod extends InputMethodService {
     private void publish(boolean active) {
         try {
             EditorInfo editor = getCurrentInputEditorInfo();
-            int task = editor == null || editor.extras == null ? 0
-                    : editor.extras.getInt("com.android.droidloom.ime.task", 0);
+            int task = this.task.get();
             state = new JSONObject().put("session", session).put("active", active && task > 0)
                     .put("show_request", showRequest)
                     .put("task", active ? task : 0)

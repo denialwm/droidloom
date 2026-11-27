@@ -19,6 +19,10 @@ covers hide-then-restart behavior on the host JVM.
 
 IMMS annotates EditorInfo with the task ID of its validated editor window;
 WMS checks that window's owner UID and resolves the exact task without enumeration.
+An app that restarts its own editor (`invalidateInput`, as a text field does when
+its text is replaced) hands the IME its own copy of EditorInfo, without that
+annotation: the IME keeps the task of the editor being restarted (`EditorTaskTest`).
+A show request for an editor without a task cannot reach the host and is logged.
 The IME authenticates system_server's setup socket, and system_server checks the
 IME's installed PackageManager UID before delegating a connected host descriptor.
 Bounded JSON records then travel directly between the IME and presenter.
