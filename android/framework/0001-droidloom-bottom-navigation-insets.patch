@@ -70,7 +70,7 @@ diff --git a/services/core/java/com/android/server/wm/DroidloomSystemBarInsets.j
 new file mode 100644
 --- /dev/null
 +++ b/services/core/java/com/android/server/wm/DroidloomSystemBarInsets.java
-@@ -0,0 +1,83 @@
+@@ -0,0 +1,90 @@
 +/*
 + * Copyright (C) 2026 Droidloom
 + * SPDX-License-Identifier: GPL-3.0-or-later
@@ -98,7 +98,8 @@ new file mode 100644
 +    private static final int GESTURE_ID = InsetsSource.createId(
 +            SOURCE_OWNER, 0, Type.mandatorySystemGestures());
 +    // Not InsetsSource.ID_IME: that source belongs to Android's own input method
-+    // window, which Droidloom's headless input method never shows.
++    // window, which Droidloom's headless input method never shows. An app holds
++    // its control without a leash, and so keeps a source of that id hidden.
 +    private static final int KEYBOARD_ID = InsetsSource.createId(
 +            SOURCE_OWNER, 0, Type.ime());
 +
@@ -115,12 +116,18 @@ new file mode 100644
 +    static InsetsState apply(InsetsState original, int densityDpi, int keyboardHeight) {
 +        final InsetsState state = new InsetsState(original);
 +        state.removeSource(KEYBOARD_ID);
-+        // A stale/hidden Android source of the same type could overwrite the public
-+        // visibility bit. Replace host bar sources only in this app's copy.
++        // WindowInsets takes a type's visibility from the last source of that type
++        // it reads, in the order of their ids, and a source made here has a
++        // different id in every boot. A stale or hidden Android source of the same
++        // type could therefore overwrite the public visibility bit. Replace host
++        // bar sources only in this app's copy, and Android's own keyboard source
++        // while the host's keyboard shows: it is hidden, as its window never is
++        // shown, and would report a keyboard of the host's height as not visible.
++        final int replaced = Type.statusBars() | Type.navigationBars()
++                | Type.mandatorySystemGestures() | (keyboardHeight > 0 ? Type.ime() : 0);
 +        for (int i = state.sourceSize() - 1; i >= 0; --i) {
 +            final InsetsSource source = state.sourceAt(i);
-+            if ((source.getType() & (Type.statusBars() | Type.navigationBars()
-+                    | Type.mandatorySystemGestures())) != 0) {
++            if ((source.getType() & replaced) != 0) {
 +                state.removeSource(source.getId());
 +            }
 +        }
@@ -158,7 +165,7 @@ diff --git a/services/tests/wmtests/src/com/android/server/wm/DroidloomSystemBar
 new file mode 100644
 --- /dev/null
 +++ b/services/tests/wmtests/src/com/android/server/wm/DroidloomSystemBarInsetsTest.java
-@@ -0,0 +1,175 @@
+@@ -0,0 +1,201 @@
 +/*
 + * Copyright (C) 2026 Droidloom
 + * SPDX-License-Identifier: GPL-3.0-or-later
@@ -275,6 +282,32 @@ new file mode 100644
 +        final InsetsState hidden = DroidloomSystemBarInsets.apply(shown, 160, 0);
 +        assertEquals(Insets.NONE, calculate(hidden, frame).getInsets(ime()));
 +        assertEquals(DroidloomSystemBarInsets.apply(new InsetsState(), 160), hidden);
++    }
++
++    @Test
++    public void hostKeyboardIsVisibleBesideAndroidsHiddenOne() {
++        // As every app window's state: the source of Android's own input method
++        // window, hidden since that window is never shown.
++        final InsetsState android = new InsetsState();
++        android.getOrCreateSource(InsetsSource.ID_IME, ime()).setVisible(false);
++        final Rect frame = new Rect(0, 0, 400, 800);
++        final InsetsState shown = DroidloomSystemBarInsets.apply(android, 160, 600);
++        // The only keyboard source, whatever id this boot gave the host's.
++        int keyboards = 0;
++        for (int i = 0; i < shown.sourceSize(); ++i) {
++            if (shown.sourceAt(i).getType() == ime()) keyboards++;
++        }
++        assertEquals(1, keyboards);
++        assertNull(shown.peekSource(InsetsSource.ID_IME));
++        final WindowInsets insets = calculate(shown, frame);
++        assertTrue(insets.isVisible(ime()));
++        assertEquals(Insets.of(0, 0, 0, 600), insets.getInsets(ime()));
++        // Hidden again, the window has Android's source back from its own state.
++        final InsetsState hidden = DroidloomSystemBarInsets.apply(android, 160, 0);
++        assertEquals(android.peekSource(InsetsSource.ID_IME),
++                hidden.peekSource(InsetsSource.ID_IME));
++        assertEquals(Insets.NONE, calculate(hidden, frame).getInsets(ime()));
++        assertTrue(!calculate(hidden, frame).isVisible(ime()));
 +    }
 +
 +    @Test

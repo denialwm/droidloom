@@ -44,7 +44,8 @@ status bar is shown with `xdg_toplevel` fullscreen
 may hide its own bar over it.
 Android's own keyboard and cutout sources retain their own policy. The host's
 on-screen keyboard is a separate IME source with its own id, added only while
-the host reports a height for the window's task
+the host reports a height for the window's task, and then in place of
+Android's own, hidden one
 ([architecture](../architecture.md#on-screen-keyboard)); `WindowMetrics` never
 include it. No tappable
 inset or Android system-bar window is created. Drawing the bars and
@@ -113,7 +114,8 @@ authorized installation; rebuilding alone does not change a running cell.
 The patch adds `WmTests:DroidloomSystemBarInsetsTest`. Run that target from a
 framework-capable Android build with the patch applied. It checks actual
 WindowInsets calculations, density, moved/resized/maximum bounds, replacement
-of hidden status/navigation sources, preservation of IME sources, idempotence,
+of hidden status/navigation sources, preservation of IME sources, the host
+keyboard's visibility beside Android's hidden keyboard source, idempotence,
 freeform immersive windows, metrics, lack of hide/show control, and confinement
 to Droidloom app windows.
 

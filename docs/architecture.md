@@ -415,8 +415,12 @@ the task's windows an IME inset source of that height, attached to their
 bottom edge (`0001-droidloom-bottom-navigation-insets.patch`), then dispatches
 their insets again. Apps react as to Android's own keyboard: `adjustResize`
 shrinks the content above it, `adjustPan` pans the focused field into view, and
-edge-to-edge apps read `WindowInsets.Type.ime()`. Android's own IME source is
-untouched; Droidloom's headless input method never shows a window.
+edge-to-edge apps read `WindowInsets.Type.ime()`. Droidloom's headless input
+method never shows a window, so Android's own IME source stays hidden. While
+the host keyboard shows, a window's copy of the insets holds the host's source
+in its place: `WindowInsets` takes a type's visibility from one source only,
+chosen by id, and would otherwise report the keyboard as hidden in the boots
+where that source is Android's.
 
 ### Vsync
 
