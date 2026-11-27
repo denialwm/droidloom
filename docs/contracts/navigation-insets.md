@@ -63,6 +63,13 @@ into a synchronized resize transition so its configuration and surface crop
 update together. The resize path supports unorganized tasks in the minimal
 SystemUI configuration as well as organized tasks.
 
+The host owns a task's bounds once it has sized it. Android lays a task out
+again whenever an activity is started into it, as when its app is opened while
+it runs, and would give it the bounds the app's manifest asks for; a launch
+params modifier of the task backend, asked before Android's own, answers with
+the host's bounds for such a task, so its window and the host's stay the same
+size.
+
 ## Build and packaging
 
 The [Rust package build](../../packaging/arch/README.md) requests framework
